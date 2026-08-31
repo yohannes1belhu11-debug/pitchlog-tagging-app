@@ -1647,3 +1647,246 @@ button {
   color: var(--text-dim);
   margin-top: 8px;
 }
+
+/* ---------- Spatial section (SPATIAL & HEAT-MAP ENGINE V1) ---------- */
+/* Tagged Event Density (3×3): grid-based counts only — cell fills are the */
+/* fixed 4-step deterministic scale; no gradients, blur or interpolation.  */
+
+.an-sp-summary {
+  font-size: 12px;
+  margin: 4px 0 6px;
+}
+
+.an-sp-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 10px 0 4px;
+  align-items: center;
+}
+
+.an-sp-filters label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.an-sp-filters select {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 11px;
+  padding: 2px 4px;
+  max-width: 130px;
+}
+
+.an-sp-filters select:disabled {
+  opacity: 0.5;
+}
+
+.pitchmap-zones-toggle {
+  padding: 3px 8px;
+  font-size: 10.5px;
+}
+
+.pitchmap-zones-toggle.zones-on {
+  border-color: var(--accent-bright);
+  color: var(--accent-bright);
+}
+
+.an-grid-wrap {
+  margin: 12px 0 6px;
+}
+
+.an-grid-head {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.an-grid-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: #14301b;
+  border-radius: 4px;
+}
+
+.an-zoneline {
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-width: 1;
+}
+
+.an-zcell {
+  cursor: pointer;
+}
+
+.an-zcell:focus {
+  outline: none;
+  stroke: #fff;
+  stroke-width: 2.5;
+}
+
+.an-zcount {
+  fill: #fff;
+  font-size: 30px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-family: var(--font-ui);
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.5);
+  stroke-width: 4px;
+}
+
+.an-dcount {
+  fill: #fff;
+  font-size: 24px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  font-family: var(--font-ui);
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.5);
+  stroke-width: 4px;
+}
+
+.an-dot {
+  stroke: rgba(0, 0, 0, 0.4);
+  stroke-width: 1;
+}
+
+.an-dot-goal {
+  stroke: #fff;
+  stroke-width: 2.5;
+}
+
+.an-grid-insufficient {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  padding: 5px 0;
+  font-style: italic;
+}
+
+.an-sp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  align-items: center;
+}
+
+.an-sp-legend-max {
+  color: var(--text);
+}
+
+.an-unloc-strip {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+.an-trace {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-top: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.an-trace-title {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 8px 3px;
+  border-bottom: 1px solid var(--border);
+}
+
+.an-trace-hint {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  padding: 5px 8px;
+}
+
+.an-trace-row {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.an-trace-row:last-child {
+  border-bottom: none;
+}
+
+.an-trace-bin {
+  color: var(--text-dim);
+  min-width: 70px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.an-trace-label {
+  flex: 1;
+}
+
+.an-trace-player {
+  min-width: 90px;
+}
+
+.an-trace-team {
+  min-width: 60px;
+  color: var(--text-dim);
+}
+
+.an-trace-id {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.an-player-grids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.an-player-grid {
+  flex: 1 1 46%;
+  min-width: 170px;
+}
+
+.an-player-head {
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+
+.an-table-scroll {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+.an-table-scroll .an-table th,
+.an-table-scroll .an-table td {
+  font-size: 10.5px;
+  padding: 3px 5px;
+}
+
+.an-fullmatrix {
+  margin: 8px 0;
+}
+
+.an-fullmatrix summary {
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin: 6px 0;
+}

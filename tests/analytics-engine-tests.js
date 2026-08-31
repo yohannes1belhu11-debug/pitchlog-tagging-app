@@ -202,8 +202,10 @@ console.log('== A. determinism & input purity (§12.1/§12.6) ==');
   eq('A3 engine deterministic flag', A1.engine.deterministic, true);
   eq('A4 spec id', A1.spec, 'PitchLog-METRIC-SPEC-v1.0');
   // key-order stability (JSON.stringify already covers this, but double-check top level)
+  // Spatial engine V1 (PitchLog-SPATIAL-SPEC-v1.0) adds the `spatial` section
+  // between level2 and sequences — the expected order is updated accordingly.
   eq('A5 stable top-level key order', Object.keys(A1).join(','),
-    'spec,engine,input,validation,matchSummary,gates,level1,level3CountsNote,level3,level2,sequences,players,protocol');
+    'spec,engine,input,validation,matchSummary,gates,level1,level3CountsNote,level3,level2,spatial,sequences,players,protocol');
 }
 
 // ---------------------------------------------------------------------------

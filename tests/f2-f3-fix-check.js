@@ -123,6 +123,17 @@ function boot(initial) {
   else win.Element.prototype.getBoundingClientRect = function () { return { ...RECT }; };
   const stub = makeStub(initial);
   win.matchtag = stub;
+  // The current index.html replaced the legacy pitch-map Side filter with
+  // the v3 Team filter (spatial-engine task, SP-V6). When an OLD renderer
+  // source (git 0732b35) is eval'd here for the F2-2 old-vs-new interval
+  // comparison, inject a hidden inert legacy select so the old code can
+  // bind its listener; it never affects the NEW renderer.
+  if (initial.rendererSrc && !win.document.getElementById('pitchMapSideFilter')) {
+    const legacy = win.document.createElement('select');
+    legacy.id = 'pitchMapSideFilter';
+    legacy.setAttribute('style', 'display:none;');
+    win.document.body.appendChild(legacy);
+  }
   win.eval(initial.integritySrc || integritySrc);
   win.eval(initial.rendererSrc || rendererSrcNew);
   return { dom, win, doc: win.document, stub };

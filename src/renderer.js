@@ -281,7 +281,11 @@
   const pitchMapModal = document.getElementById('pitchMapModal');
   const pitchMapTagFilter = document.getElementById('pitchMapTagFilter');
   const pitchMapPlayerFilter = document.getElementById('pitchMapPlayerFilter');
-  const pitchMapSideFilter = document.getElementById('pitchMapSideFilter');
+  // SP-V6: the modal's team filter uses the v3 team semantics ('our' /
+  // 'opponent' / unattributed) — the legacy `side` field stays untouched in
+  // the data model; only the filter source field changed.
+  const pitchMapTeamFilter = document.getElementById('pitchMapTeamFilter');
+  const pitchMapZonesToggle = document.getElementById('pitchMapZonesToggle');
   const pitchMapSvg = document.getElementById('pitchMapSvg');
   const pitchMapLegend = document.getElementById('pitchMapLegend');
   const pitchMapCount = document.getElementById('pitchMapCount');
@@ -1279,9 +1283,14 @@
   function renderPitchMap() {
     const tagFilterValue = pitchMapTagFilter.value || '__all__';
     const playerFilterValue = pitchMapPlayerFilter.value || '__all__';
-    const sideFilterValue = pitchMapSideFilter.value || '__all__';
+    const teamFilterValue = pitchMapTeamFilter.value || '__all__';
 
-    let filtered = events.filter((ev) => ev.location);
+    // Only events with a USABLE location are drawn (finite numeric x/y —
+    // the same rule the analytics engine's validation applies: malformed
+    // locations are dropped, out-of-range ones are kept).
+    let filtered = events.filter((ev) => ev.location &&
+      typeof ev.location.x === 'number' && isFinite(ev.location.x) &&
+      typeof ev.location.y === 'number' && isFinite(ev.location.y));
     if (tagFilterValue !== '__all__') {
       filtered = filtered.filter((ev) => ev.label === tagFilterValue);
     }
@@ -1290,8 +1299,9 @@
     } else if (playerFilterValue !== '__all__') {
       filtered = filtered.filter((ev) => ev.playerId === playerFilterValue);
     }
-    if (sideFilterValue !== '__all__') {
-      filtered = filtered.filter((ev) => ev.side === sideFilterValue);
+    if (teamFilterValue !== '__all__') {
+      // v3 team semantics — matches the analytics layer's vocabulary.
+      filtered = filtered.filter((ev) => teamFilterValue === 'unattributed' ? !ev.team : ev.team === teamFilterValue);
     }
 
     const dots = filtered.map((ev) => {
@@ -1301,7 +1311,9 @@
       return `<circle class="pitch-map-dot" cx="${cx}" cy="${cy}" r="7" style="fill:${color};" />`;
     }).join('');
 
-    pitchMapSvg.innerHTML = pitchMarkingsSvg() + dots;
+    // SP-V6: optional 3×3 zone overlay — grid LINES only (no shading, no
+    // counts); reuses the spatial section's fixed zone-line markup.
+    pitchMapSvg.innerHTML = pitchMarkingsSvg() + (pitchMapShowZones ? ZONE_LINES_SVG : '') + dots;
 
     const seen = new Map();
     filtered.forEach((ev) => {
@@ -1329,7 +1341,7 @@
     populatePitchMapFilters();
     pitchMapTagFilter.value = '__all__';
     pitchMapPlayerFilter.value = '__all__';
-    pitchMapSideFilter.value = '__all__';
+    pitchMapTeamFilter.value = '__all__';
     renderPitchMap();
     pitchMapModal.style.display = 'flex';
   }
@@ -1342,7 +1354,18 @@
   btnClosePitchMap.addEventListener('click', closePitchMapModal);
   pitchMapTagFilter.addEventListener('change', renderPitchMap);
   pitchMapPlayerFilter.addEventListener('change', renderPitchMap);
-  pitchMapSideFilter.addEventListener('change', renderPitchMap);
+  pitchMapTeamFilter.addEventListener('change', renderPitchMap);
+
+  // SP-V6 zone overlay toggle (lines only — never shading or counts).
+  let pitchMapShowZones = false;
+  if (pitchMapZonesToggle) {
+    pitchMapZonesToggle.addEventListener('click', () => {
+      pitchMapShowZones = !pitchMapShowZones;
+      pitchMapZonesToggle.textContent = pitchMapShowZones ? '3×3 zones: on' : '3×3 zones: off';
+      pitchMapZonesToggle.classList.toggle('zones-on', pitchMapShowZones);
+      renderPitchMap();
+    });
+  }
 
   function renderDetailPanel() {
     const tag = activeDetailTag;
@@ -1891,6 +1914,455 @@
   // mutates events, matchInfo, matchClock or squad, and it is recomputed
   // from scratch on every render (spec §12.6 idempotence).
 
+  // ---------- Spatial section (SPATIAL & HEAT-MAP ENGINE V1) ----------
+  //
+  // Renders the spatial contract (A.spatial, src/analytics.js) through the
+  // PURE view transform window.AnalyticsEngine.computeSpatialView(A, filters).
+  // This layer ONLY renders — every count, share and duration comes from the
+  // engine; no spatial statistic is computed in DOM code. Deterministic:
+  // same session + same filters → byte-identical markup (no randomness, no
+  // clock reads, fixed color steps). The section re-renders through the
+  // existing renderStatsPanel → renderAnalyticsPanel live-refresh hook.
+  //
+  // Visualization rules (spec §5, SP-H): grid-based 3×3 counts only — NO
+  // KDE, blur, interpolation, gradients, contours or smoothing. Color is
+  // supplemental: the integer count is printed in every non-empty cell, full
+  // numeric tables always accompany the visuals, and event dots mark the
+  // ACTUAL recorded points. Below the minimum sample (6 located events,
+  // display threshold only) no density surface is drawn at all.
+
+  const spatialFilters = {
+    scope: '__all__', team: '__all__', period: '__all__',
+    state: '__all__', sequence: '__all__', player: '__all__'
+  };
+  let lastAnalytics = null;      // cached MATCH ANALYTICS OBJECT (spatial source)
+  let lastSpatialView = null;    // cached view (cell traceability reads grid.events)
+  const spatialTrace = { gridId: null, zoneKey: null };
+
+  // Fixed deterministic density scale (spec §5.3): four crimson steps keyed
+  // to the share of the grid's OWN maximum cell (comparability across grids
+  // is via the printed numbers, not the colors — stated in the legend).
+  const DENSITY_FILLS = [
+    null,
+    'rgba(216, 30, 46, 0.22)',
+    'rgba(216, 30, 46, 0.42)',
+    'rgba(216, 30, 46, 0.62)',
+    'rgba(216, 30, 46, 0.82)'
+  ];
+  const DENSITY_LEGEND = ['≤ 25% of max', '26–50% of max', '51–75% of max', '76–100% of max'];
+
+  function densityStep(count, maxCount) {
+    if (!(count > 0) || !(maxCount > 0)) return 0;
+    const s = count / maxCount;
+    if (s <= 0.25) return 1;
+    if (s <= 0.50) return 2;
+    if (s <= 0.75) return 3;
+    return 4;
+  }
+
+  // Display-only rounding (half-up, 1 decimal) — the engine keeps full
+  // precision everywhere internally (spec §12.3).
+  function anRound1(x) {
+    return Math.round((x + Number.EPSILON) * 10) / 10;
+  }
+
+  // 3×3 zone grid lines at the exact third boundaries of the 0..700 × 0..450
+  // viewBox (aligned with floor(x*3) / floor(y*3) binning and with the dot
+  // coordinates, which use the same full-viewBox mapping as the pitch-map
+  // modal and the detail-panel marker).
+  const ZONE_LINES_SVG = ''
+    + '<line x1="233.33" y1="0" x2="233.33" y2="450" class="an-zoneline"/>'
+    + '<line x1="466.67" y1="0" x2="466.67" y2="450" class="an-zoneline"/>'
+    + '<line x1="0" y1="150" x2="700" y2="150" class="an-zoneline"/>'
+    + '<line x1="0" y1="300" x2="700" y2="300" class="an-zoneline"/>';
+
+  const SHORT_ZONE_KEYS = ['Def·L', 'Def·C', 'Def·R', 'Mid·L', 'Mid·C', 'Mid·R', 'Att·L', 'Att·C', 'Att·R'];
+
+  function spatialSquadNameMap() {
+    const m = new Map();
+    squad.forEach((p) => { m.set(p.id, p); });
+    return m;
+  }
+
+  function spatialPlayerName(resolver, pid) {
+    const p = resolver.get(pid);
+    if (!p) return 'Unknown player';
+    return p.number ? `${p.number} ${p.name}` : p.name;
+  }
+
+  // One located-event dot: the ACTUAL recorded point (full display
+  // precision, no aggregation). Team-coloured; goals get a white ring.
+  function spatialDotMarkup(rec, resolver) {
+    const color = rec.team === 'our' ? '#d81e2e' : (rec.team === 'opponent' ? '#c8cdd2' : '#e8b93b');
+    const cx = (rec.x * 700).toFixed(1);
+    const cy = (rec.y * 450).toFixed(1);
+    const pname = rec.playerId ? spatialPlayerName(resolver, rec.playerId) : null;
+    const title = rec.label + (rec.subtype ? ' · ' + rec.subtype : '')
+      + ' · ' + rec.minuteBin
+      + (pname ? ' · ' + pname : '')
+      + (rec.sequenceId ? ' · ' + rec.sequenceId : '');
+    return `<circle class="an-dot${rec.isGoal ? ' an-dot-goal' : ''}" cx="${cx}" cy="${cy}" r="5.5" fill="${color}"><title>${escapeHtml(title)}</title></circle>`;
+  }
+
+  // Density grid SVG (spec §5.2 draw order): cell rects (fills; clickable
+  // for traceability) → zone lines → pitch markings → event dots → cell
+  // counts. Cells with 0 events get no fill and no count. When
+  // `opts.insufficient` is true (fewer than minSampleForDensity located
+  // events) NO fills and NO counts are drawn — only markings, lines and the
+  // actual dots; a message states the reason (never a manufactured surface).
+  function buildSpatialGridSvg(g, opts) {
+    const cells = g.cells;
+    const resolver = opts.resolver;
+    let maxCount = 0;
+    cells.forEach((c) => { if (c.counts.events > maxCount) maxCount = c.counts.events; });
+    let s = `<svg class="an-grid-svg" viewBox="0 0 700 450" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escapeHtml(g.id)} — tagged event density (3×3)">`;
+    for (let ti = 0; ti < 3; ti++) {
+      for (let ci = 0; ci < 3; ci++) {
+        const c = cells[ti * 3 + ci];
+        const n = c.counts.events;
+        const step = opts.insufficient ? 0 : densityStep(n, maxCount);
+        const x = (ti * 700 / 3).toFixed(2);
+        const y = (ci * 450 / 3).toFixed(2);
+        const w = (700 / 3).toFixed(2);
+        const h = (450 / 3).toFixed(2);
+        const fill = step ? ` style="fill:${DENSITY_FILLS[step]};"` : '';
+        const attrs = opts.clickable === false
+          ? ''
+          : ` data-grid="${escapeHtml(g.id)}" data-zone="${escapeHtml(c.zoneKey)}" tabindex="0" role="img" aria-label="${escapeHtml(c.zoneKey)}: ${n} tagged events"`;
+        s += `<rect class="an-zcell" x="${x}" y="${y}" width="${w}" height="${h}"${fill}${attrs}/>`;
+      }
+    }
+    s += ZONE_LINES_SVG;
+    s += pitchMarkingsSvg();
+    (g.events || []).forEach((rec) => { s += spatialDotMarkup(rec, resolver); });
+    if (!opts.insufficient && opts.showCounts !== false) {
+      for (let ti = 0; ti < 3; ti++) {
+        for (let ci = 0; ci < 3; ci++) {
+          const c = cells[ti * 3 + ci];
+          if (c.counts.events === 0) continue;
+          const cx = (ti * 700 / 3 + 700 / 6).toFixed(2);
+          const cy = (ci * 450 / 3 + 450 / 6).toFixed(2);
+          s += `<text class="an-zcount" x="${cx}" y="${cy}">${c.counts.events}</text>`;
+        }
+      }
+    }
+    s += '</svg>';
+    return s;
+  }
+
+  function gridMaxCount(g) {
+    let maxCount = 0;
+    g.cells.forEach((c) => { if (c.counts.events > maxCount) maxCount = c.counts.events; });
+    return maxCount;
+  }
+
+  // Traceability rows: the located events of one zone cell (read-only).
+  function buildTraceRows(g, zoneKey, resolver) {
+    const recs = (g.events || []).filter((r) => r.zoneKey === zoneKey);
+    let html = `<div class="an-trace-title">${escapeHtml(zoneKey)} — ${recs.length} located event${recs.length === 1 ? '' : 's'}</div>`;
+    recs.forEach((r) => {
+      const pname = r.playerId ? spatialPlayerName(resolver, r.playerId) : null;
+      const teamLabel = r.team === 'our' ? 'Us' : (r.team === 'opponent' ? 'Opponent' : '—');
+      html += '<div class="an-trace-row">'
+        + `<span class="an-trace-bin">${escapeHtml(r.minuteBin)}</span>`
+        + `<span class="an-trace-label">${escapeHtml(r.label)}${r.subtype ? ' · ' + escapeHtml(r.subtype) : ''}</span>`
+        + `<span class="an-trace-player">${escapeHtml(pname || '—')}</span>`
+        + `<span class="an-trace-team">${teamLabel}</span>`
+        + `<span class="an-trace-id">#${r.eventId}</span>`
+        + '</div>';
+    });
+    return html;
+  }
+
+  function buildSpatialGridBlock(g, minSample, resolver) {
+    const insufficient = g.located < minSample;
+    const share = g.locatedShare.value === null ? '—' : `${g.locatedShare.value}%`;
+    let html = '<div class="an-grid-wrap">';
+    html += `<div class="an-grid-head">${escapeHtml(g.scopeLabel)} — ${escapeHtml(g.partitionLabel)} · ${g.located}/${g.population} located events (${share})</div>`;
+    html += buildSpatialGridSvg(g, { insufficient, resolver });
+    if (insufficient) {
+      html += `<div class="an-grid-insufficient">Insufficient tagged locations for spatial visualization. (${g.located} located event${g.located === 1 ? '' : 's'} in this view — see the table below)</div>`;
+    } else {
+      html += '<div class="an-sp-legend">'
+        + DENSITY_FILLS.slice(1).map((fill, i) => `<span class="legend-item"><span class="legend-dot" style="background:${fill};"></span>${DENSITY_LEGEND[i]}</span>`).join('')
+        + `<span class="an-sp-legend-max">max = ${gridMaxCount(g)} (busiest cell)</span>`
+        + '</div>';
+    }
+    if (g.unlocated > 0) {
+      const pct = g.population > 0 ? anRound1((g.unlocated / g.population) * 100) : null;
+      html += `<div class="an-unloc-strip">Unlocated: ${g.unlocated}${pct !== null ? ` (${pct}% of selection)` : ''} — not shown on the pitch.</div>`;
+    }
+    html += `<div class="an-trace" data-trace-grid="${escapeHtml(g.id)}">`;
+    if (spatialTrace.gridId === g.id && spatialTrace.zoneKey) {
+      html += buildTraceRows(g, spatialTrace.zoneKey, resolver);
+    } else {
+      html += '<div class="an-trace-hint">Click a zone cell to list its located events.</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+    return html;
+  }
+
+  function buildSpatialFilterBar(A, view) {
+    const F = view.filters;
+    const SP = A.spatial;
+    const playerSet = F.player !== '__all__';
+    const opt = (value, label, selected) => `<option value="${escapeHtml(value)}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    const wrap = (key, label, options, extra) =>
+      `<label>${label} <select class="an-sp-filter" data-filter="${key}"${extra || ''}>${options.join('')}</select></label>`;
+
+    const scopeOptions = [opt('__all__', 'All events', F.scope === '__all__')]
+      .concat(SP.completeness.byLabel.map((row) => opt(row.label, row.label, F.scope === row.label)));
+    const teamOptions = [opt('__all__', 'All teams (compare)', F.team === '__all__'),
+      opt('our', 'Us', F.team === 'our'), opt('opponent', 'Opponent', F.team === 'opponent')];
+    const periodOptions = [opt('__all__', 'All periods', F.period === '__all__')]
+      .concat(['1H', '2H', 'ET1', 'ET2'].map((p) => opt(p, p, F.period === p)));
+    const stateOptions = [opt('__all__', 'All states', F.state === '__all__'),
+      opt('WINNING', 'Winning', F.state === 'WINNING'),
+      opt('DRAW', 'Drawing', F.state === 'DRAW'),
+      opt('LOSING', 'Losing', F.state === 'LOSING')];
+    const seqOptions = [opt('__all__', 'All sequences', F.sequence === '__all__')]
+      .concat(view.sequenceOptions.map((sq) => opt(sq, sq, F.sequence === sq)));
+    const playerList = (A.players && Array.isArray(A.players.list)) ? A.players.list : [];
+    const playerOptions = [opt('__all__', 'All players', F.player === '__all__')]
+      .concat(playerList.map((p) => opt(p.playerId, p.number ? `${p.number} ${p.name}` : p.name, F.player === p.playerId)));
+
+    let html = '<div class="an-sp-filters">';
+    html += wrap('scope', 'Event', scopeOptions);
+    html += wrap('team', 'Team', teamOptions,
+      playerSet ? ' disabled title="A player selection overrides the team partition"' : '');
+    html += wrap('period', 'Period', periodOptions);
+    html += wrap('state', 'State', stateOptions,
+      view.stateFilterSuppressed ? ' disabled title="Suppressed: score reconciliation MISMATCH (X1)"' : '');
+    html += wrap('sequence', 'Sequence', seqOptions);
+    html += wrap('player', 'Player', playerOptions);
+    html += '</div>';
+    return html;
+  }
+
+  const SP_TABLE_KEYS = ['events', 'goals', 'shots', 'chances', 'passes', 'turnovers'];
+  const SP_TABLE_HEAD = ['Events', 'Goals', 'Shots', 'Chances', 'Passes', 'Turnovers'];
+
+  function spatialCountsRow(label, counts) {
+    return `<tr><td>${escapeHtml(label)}</td>` + SP_TABLE_KEYS.map((k) => `<td>${counts[k]}</td>`).join('') + '</tr>';
+  }
+
+  // Numeric tables (numbers-before-color, SP-H4): byZone (all 9 + Unlocated),
+  // byThird / byChannel margins, and the full 19-key zone × metric matrix in
+  // a horizontally scrollable container — all restricted to the current
+  // selection, all values straight from the engine's view grids.
+  function buildSpatialTables(A, view) {
+    const T = view.tableGrid;
+    let html = '';
+    html += '<div class="stats-section-label">By zone (3×3 — current selection)</div>';
+    html += '<table class="an-table"><thead><tr><th>Zone</th>' + SP_TABLE_HEAD.map((h) => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+    T.cells.forEach((c) => { html += spatialCountsRow(c.zoneKey, c.counts); });
+    html += spatialCountsRow('Unlocated', T.unlocatedBucket.counts);
+    html += '</tbody></table>';
+
+    html += '<div class="stats-section-label">By third (3×3 margins — current selection)</div>';
+    html += '<table class="an-table"><thead><tr><th>Third</th>' + SP_TABLE_HEAD.map((h) => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+    T.margins.byThird.forEach((m) => { html += spatialCountsRow(m.name, m.counts); });
+    html += spatialCountsRow('Unlocated', T.unlocatedBucket.counts);
+    html += '</tbody></table>';
+
+    html += '<div class="stats-section-label">By channel (3×3 margins — current selection)</div>';
+    html += '<table class="an-table"><thead><tr><th>Channel</th>' + SP_TABLE_HEAD.map((h) => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
+    T.margins.byChannel.forEach((m) => { html += spatialCountsRow(m.name, m.counts); });
+    html += spatialCountsRow('Unlocated', T.unlocatedBucket.counts);
+    html += '</tbody></table>';
+
+    const cellKeys = A.spatial.model.cellKeys;
+    html += '<details class="an-fullmatrix"><summary>Full zone × metric table (all 19 bucket keys)</summary>';
+    html += '<div class="an-table-scroll"><table class="an-table"><thead><tr><th>Metric</th>'
+      + SHORT_ZONE_KEYS.map((z) => `<th>${z}</th>`).join('') + '<th>Unloc</th><th>Total</th></tr></thead><tbody>';
+    cellKeys.forEach((k) => {
+      let total = T.unlocatedBucket.counts[k];
+      let row = `<tr><td>${escapeHtml(k)}</td>`;
+      T.cells.forEach((c) => { row += `<td>${c.counts[k]}</td>`; total += c.counts[k]; });
+      row += `<td>${T.unlocatedBucket.counts[k]}</td><td>${total}</td></tr>`;
+      html += row;
+    });
+    html += '</tbody></table></div></details>';
+    html += '<div class="an-poss-note">D/M/A = Defensive/Middle/Attacking third · L/C/R = Left/Central/Right channel · partition: all teams in the current selection.</div>';
+    return html;
+  }
+
+  // Player spatial analysis: small multiples (top 12 by located count; the
+  // located count is printed in every heading — numbers, not rates) plus the
+  // full player × zone table.
+  function buildSpatialPlayersHtml(view, minSample, resolver) {
+    let html = '';
+    html += '<div class="stats-section-label">Player spatial — Tagged Event Density (3×3, counts not rates)</div>';
+    const PGS = view.playerGrids;
+    if (PGS.length === 0) {
+      html += '<div class="an-poss-note">No located player events in this selection.</div>';
+      return html;
+    }
+    html += '<div class="an-player-grids">';
+    PGS.slice(0, 12).forEach((g) => {
+      html += `<div class="an-player-grid"><div class="an-player-head">${escapeHtml(g.partitionLabel)} · ${g.located} located</div>`;
+      html += buildSpatialGridSvg(g, { insufficient: g.located < minSample, resolver, clickable: false, showCounts: false });
+      html += '</div>';
+    });
+    html += '</div>';
+    if (PGS.length > 12) html += `<div class="an-poss-note">Showing 12 of ${PGS.length} players — full counts in the table below.</div>`;
+    html += '<div class="an-table-scroll"><table class="an-table"><thead><tr><th>Player</th>'
+      + SHORT_ZONE_KEYS.map((z) => `<th>${z}</th>`).join('') + '<th>Unloc</th><th>Tot</th></tr></thead><tbody>';
+    PGS.forEach((g) => {
+      let tot = g.unlocatedBucket.counts.events;
+      let row = `<tr><td>${escapeHtml(g.partitionLabel)}</td>`;
+      g.cells.forEach((c) => { row += `<td>${c.counts.events}</td>`; tot += c.counts.events; });
+      row += `<td>${g.unlocatedBucket.counts.events}</td><td>${tot}</td></tr>`;
+      html += row;
+    });
+    html += '</tbody></table></div>';
+    html += '<div class="an-poss-note">D/M/A = Defensive/Middle/Attacking third · L/C/R = Left/Central/Right channel. Sub events are not attributed to players spatially (playerOff/playerOn only).</div>';
+    return html;
+  }
+
+  // Tagged Possession Duration by Zone (M-B10..13 × CT-ZONE under the full
+  // M-L2-B4 constraint): UNROUNDED seconds summed by the engine; displayed
+  // rounded to 1 decimal; NC-1 basis line always rendered; both team totals
+  // reported; never "Possession %".
+  function buildDurationGridSvg(P) {
+    const cells = P.secondsExact.cells;
+    let max = 0;
+    cells.forEach((v) => { if (v > max) max = v; });
+    let s = '<svg class="an-grid-svg" viewBox="0 0 700 450" preserveAspectRatio="xMidYMid meet" role="img" aria-label="tagged possession seconds by zone">';
+    for (let ti = 0; ti < 3; ti++) {
+      for (let ci = 0; ci < 3; ci++) {
+        const v = cells[ti * 3 + ci];
+        const step = densityStep(v, max);
+        const x = (ti * 700 / 3).toFixed(2);
+        const y = (ci * 450 / 3).toFixed(2);
+        const w = (700 / 3).toFixed(2);
+        const h = (450 / 3).toFixed(2);
+        const fill = step ? ` style="fill:${DENSITY_FILLS[step]};"` : '';
+        s += `<rect class="an-dcell" x="${x}" y="${y}" width="${w}" height="${h}"${fill}/>`;
+      }
+    }
+    s += ZONE_LINES_SVG;
+    s += pitchMarkingsSvg();
+    for (let ti = 0; ti < 3; ti++) {
+      for (let ci = 0; ci < 3; ci++) {
+        const v = cells[ti * 3 + ci];
+        if (!(v > 0)) continue;
+        const cx = (ti * 700 / 3 + 700 / 6).toFixed(2);
+        const cy = (ci * 450 / 3 + 450 / 6).toFixed(2);
+        s += `<text class="an-dcount" x="${cx}" y="${cy}">${anRound1(v)}</text>`;
+      }
+    }
+    s += '</svg>';
+    return s;
+  }
+
+  function buildSpatialPossessionHtml(view, SP) {
+    const D = view.possessionDurationByZone;
+    let html = '';
+    html += '<div class="stats-section-label">Tagged Possession Duration by Zone (recorded interval tags only)</div>';
+    const hasIntervals = (D.our.locatedIntervals + D.our.unlocatedIntervals
+      + D.opponent.locatedIntervals + D.opponent.unlocatedIntervals
+      + D.unattributed.locatedIntervals + D.unattributed.unlocatedIntervals) > 0;
+    if (!hasIntervals) {
+      html += '<div class="an-poss-note">No tagged Possession intervals in this selection.</div>';
+      return html;
+    }
+    html += `<div class="an-poss-note">${escapeHtml(D.basis)}.</div>`;
+    html += `<div class="an-poss-limit">${escapeHtml(SP.limitations[1])}</div>`;
+    [['our', 'Us'], ['opponent', 'Opponent']].forEach(([part, label]) => {
+      const P = D[part];
+      html += `<div class="an-grid-wrap"><div class="an-grid-head">${label} — tagged seconds by zone · ${P.locatedIntervals} located interval${P.locatedIntervals === 1 ? '' : 's'}</div>`;
+      if (P.locatedIntervals > 0) {
+        html += buildDurationGridSvg(P);
+      } else {
+        html += `<div class="an-grid-insufficient">No located Possession intervals for ${label.toLowerCase()} in this selection.</div>`;
+      }
+      html += `<div class="an-unloc-strip">Tagged total: ${anRound1(P.totalSecondsExact)}s${P.unlocatedIntervals > 0 ? ` · unlocated ${P.unlocatedIntervals} interval(s), ${anRound1(P.secondsExact.unlocated)}s not shown on the pitch` : ''}</div>`;
+      html += '</div>';
+    });
+    const U = D.unattributed;
+    if (U.locatedIntervals + U.unlocatedIntervals > 0) {
+      html += `<div class="an-poss-note">Unattributed intervals: ${U.locatedIntervals + U.unlocatedIntervals} (${anRound1(U.totalSecondsExact)}s) — excluded from the team grids above.</div>`;
+    }
+    return html;
+  }
+
+  function buildSpatialHtml(A, view) {
+    const SP = A.spatial;
+    const C = view.completeness;
+    const resolver = spatialSquadNameMap();
+    const minSample = SP.params.minSampleForDensity;
+    let html = '';
+
+    // Completeness (unlocated events are reported, never discarded) + the
+    // standing limitation and orientation notes.
+    const shareTxt = C.locatedShare.value === null ? '—' : `${C.locatedShare.value}%`;
+    html += `<div class="an-sp-summary">Total tagged events: ${C.total} · Located: ${C.located} (${shareTxt}) · Unlocated: ${C.unlocated}</div>`;
+    html += `<div class="an-poss-limit">${escapeHtml(SP.limitations[0])}</div>`;
+    html += `<div class="an-poss-note">${escapeHtml(SP.limitations[2])}</div>`;
+    if (C.outOfRange > 0) {
+      html += `<div class="an-poss-note">${C.outOfRange} located event(s) have coordinates outside [0,1] — clamped into the nearest zone for binning and flagged (SP-X1).</div>`;
+    }
+
+    // Spatial gates (advisories — displayed, never silently resolved).
+    const X1 = SP.gates['SP-X1'];
+    const x1Warn = X1.labelsBelowShare.length > 0 || X1.locationOutOfRange > 0 || X1.invalidLocation > 0;
+    const X2 = SP.gates['SP-X2'];
+    html += '<div class="an-gates">';
+    html += `<div class="an-gate-row">SP-X1 location completeness: <span class="${x1Warn ? 'an-flag-warn' : 'an-flag-ok'}">${C.located}/${C.total} located (${shareTxt})</span>`
+      + (X1.labelsBelowShare.length ? ` <span class="an-excl">(${X1.labelsBelowShare.map((l) => `${escapeHtml(l.label)} ${l.share}%`).join(', ')} below 50%)</span>` : '')
+      + (X1.locationOutOfRange ? ` <span class="an-excl">· out-of-range ${X1.locationOutOfRange}</span>` : '')
+      + (X1.invalidLocation ? ` <span class="an-excl">· invalid ${X1.invalidLocation}</span>` : '')
+      + '</div>';
+    html += `<div class="an-gate-row">SP-X2 foul Zone-qualifier vs location disagreements: ${X2.foulZoneQualifierMismatches}${X2.foulZoneQualifierMismatches > 0 ? ' <span class="an-excl">(independent claims — spatial metrics use location; reported, not resolved)</span>' : ''}</div>`;
+    html += '</div>';
+
+    // Filter bar + suppression/honesty notes.
+    html += buildSpatialFilterBar(A, view);
+    if (view.stateFilterSuppressed) {
+      html += '<div class="an-poss-note">Score-state filter suppressed: score reconciliation MISMATCH (X1).</div>';
+    }
+    html += '<div class="an-poss-note">Phase filter: not available — the event model has no phase field; use Event / Team / Period / Score state / Sequence / Player.</div>';
+
+    // Density grids (Us + Opponent comparison, or the focused selection).
+    view.grids.forEach((g) => { html += buildSpatialGridBlock(g, minSample, resolver); });
+    if (view.unattributedLocated > 0 && view.filters.team === '__all__' && view.filters.player === '__all__') {
+      html += `<div class="an-poss-note">${view.unattributedLocated} located event(s) have no team attributed — included in the tables, not drawn as a team grid.</div>`;
+    }
+
+    // Numeric tables, player section, possession duration.
+    html += buildSpatialTables(A, view);
+    html += buildSpatialPlayersHtml(view, minSample, resolver);
+    html += buildSpatialPossessionHtml(view, SP);
+    return html;
+  }
+
+  function renderSpatialSection() {
+    const el = document.getElementById('anSpatial');
+    if (!el) return;
+    if (!lastAnalytics || !window.AnalyticsEngine || typeof window.AnalyticsEngine.computeSpatialView !== 'function') {
+      el.innerHTML = '<div class="event-empty">Spatial engine not available (src/analytics.js).</div>';
+      lastSpatialView = null;
+      return;
+    }
+    let view = null;
+    try {
+      view = window.AnalyticsEngine.computeSpatialView(lastAnalytics, spatialFilters);
+    } catch (err) {
+      el.innerHTML = `<div class="event-empty">Spatial engine error: ${escapeHtml(String(err && err.message || err))}</div>`;
+      lastSpatialView = null;
+      return;
+    }
+    if (!view) {
+      el.innerHTML = '<div class="event-empty">Spatial data unavailable.</div>';
+      lastSpatialView = null;
+      return;
+    }
+    lastSpatialView = view;
+    el.innerHTML = buildSpatialHtml(lastAnalytics, view);
+  }
+
   function fmtEnv(env, suffix) {
     // Renders a metric result envelope { value, num?, den?, excluded? }.
     if (!env || env.value === null || env.value === undefined) return '—';
@@ -2116,6 +2588,12 @@
       html += `<div class="an-poss-limit">Score-state context suppressed: ${escapeHtml(L3.stateSuppressedReason)}.</div>`;
     }
 
+    // --- Spatial (SPATIAL & HEAT-MAP ENGINE V1) -----------------------------
+    // Placeholder — filled by renderSpatialSection() immediately after this
+    // HTML is mounted (and re-filled on every filter change / live refresh).
+    html += '<div class="stats-section-label">Spatial — Tagged Event Density (3×3)</div>';
+    html += '<div id="anSpatial"></div>';
+
     // --- Players -------------------------------------------------------------
     html += '<div class="stats-section-label">Players (counts + ratios, no per-90)</div>';
     const PL = A.players;
@@ -2175,6 +2653,8 @@
       return;
     }
     analyticsContentEl.innerHTML = buildAnalyticsHtml(A);
+    lastAnalytics = A;   // cached for the spatial section (filter re-renders)
+    renderSpatialSection();
   }
 
   function setEventsTab(tab) {
@@ -2194,6 +2674,54 @@
   tabEvents.addEventListener('click', () => setEventsTab('events'));
   tabStats.addEventListener('click', () => setEventsTab('stats'));
   tabAnalytics.addEventListener('click', () => setEventsTab('analytics'));
+
+  // Spatial section interactions (event delegation on the analytics panel —
+  // the section re-renders on every filter change / live refresh, so
+  // per-element listeners would be lost; delegation survives re-renders).
+  function spatialCellActivate(t) {
+    const gridId = t.getAttribute('data-grid');
+    const zoneKey = t.getAttribute('data-zone');
+    if (!gridId || !zoneKey) return;
+    if (spatialTrace.gridId === gridId && spatialTrace.zoneKey === zoneKey) {
+      spatialTrace.gridId = null;   // clicking the open cell again closes it
+      spatialTrace.zoneKey = null;
+    } else {
+      spatialTrace.gridId = gridId;
+      spatialTrace.zoneKey = zoneKey;
+    }
+    renderSpatialSection();
+  }
+
+  analyticsContentEl.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || !t.getAttribute) return;
+    const cls = t.getAttribute('class') || '';
+    if (cls.indexOf('an-sp-filter') === -1) return;
+    const key = t.getAttribute('data-filter');
+    if (!key || !(key in spatialFilters)) return;
+    spatialFilters[key] = t.value;
+    spatialTrace.gridId = null;   // population changed — close the open trace
+    spatialTrace.zoneKey = null;
+    renderSpatialSection();
+  });
+
+  analyticsContentEl.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || !t.getAttribute) return;
+    const cls = t.getAttribute('class') || '';
+    if (cls.indexOf('an-zcell') === -1) return;
+    spatialCellActivate(t);
+  });
+
+  analyticsContentEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const t = e.target;
+    if (!t || !t.getAttribute) return;
+    const cls = t.getAttribute('class') || '';
+    if (cls.indexOf('an-zcell') === -1) return;
+    e.preventDefault();
+    spatialCellActivate(t);
+  });
 
   // ---------- Season view (combine several saved sessions) ----------
 

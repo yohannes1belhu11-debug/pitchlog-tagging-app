@@ -24,10 +24,19 @@
 //
 // NOT implemented here (out of scope / NOT CURRENTLY COMPUTABLE per the
 // spec): OFFICIAL possession % (NC-1), PPDA, xG/xA, physical metrics,
-// player minutes / per-90, heat maps, season intelligence, AI. The only
+// player minutes / per-90, season intelligence, AI. The only
 // possession-duration metric implemented is the spec's sanctioned
 // substitute M-L2-B4, always named "Tagged Possession Share" and always
 // labelled as based ONLY on recorded PitchLog Possession interval tags.
+//
+// SPATIAL & HEAT-MAP ENGINE V1 (spec docs/spatial-heatmap-specification.md):
+// A.spatial carries the tagged-event-density contract over the FIXED 3×3
+// model (grid-based counts only — NO KDE, blur, interpolation, gradients,
+// contours or smoothing; located-share M-L2-E1 always accompanies every
+// grid; unlocated events are an explicit reported bucket), and
+// computeSpatialView(A, filters) is the pure filter/view transform the
+// renderer consumes. Official territory / field tilt / average positions
+// remain NOT COMPUTABLE (NC-18, spec §6.2).
 // Nothing in this file invents data: every number is derived from tagged
 // events only.
 //
@@ -44,7 +53,7 @@
   'use strict';
 
   var SPEC = 'PitchLog-METRIC-SPEC-v1.0';
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';   // 1.1.0 = + spatial engine V1 (A.spatial + computeSpatialView)
 
   // ---- Fixed vocabularies (mirror src/renderer.js; source is authority) ----
 
@@ -993,6 +1002,510 @@
     return null;
   }
 
+  // ---- Spatial engine (SPATIAL & HEAT-MAP ENGINE V1) -----------------------
+  //
+  // Spec: docs/spatial-heatmap-specification.md (PitchLog-SPATIAL-SPEC-v1.0).
+  // Pure, deterministic spatial aggregation over the VALIDATED records,
+  // delivered as the A.spatial contract and consumed by the renderer ONLY
+  // through computeSpatialView(A, filters) — the visualization layer never
+  // recomputes statistics. Rules (spec SP-H1..H10):
+  //   - the 3×3 model is reused VERBATIM (floor(x*3) thirds, floor(y*3)
+  //     channels, clamped binning); nothing is subdivided or re-gridded;
+  //   - grid-based counts only — NO KDE, blur, interpolation, gradients,
+  //     contours or smoothing; cells are the SAME L3_KEYS buckets produced
+  //     by addToBucket (no new counting rules, SP-A8);
+  //   - locations are analyst-tagged samples: the located-share (M-L2-E1)
+  //     accompanies every grid and unlocated events are an explicit
+  //     reported bucket, never discarded;
+  //   - FULL UNROUNDED x/y and unrounded interval seconds are preserved in
+  //     the event records (rounding happens only at display, spec §12.3);
+  //   - possession-duration-by-zone inherits the entire M-L2-B4 constraint:
+  //     unrounded seconds internally, NC-1 basis string, our + opponent
+  //     totals reported, never "Possession %" and never official;
+  //   - custom tags participate in scoped grids (they only ever land in the
+  //     generic 'events' bucket key — no standardized football
+  //     interpretation is attached to them).
+  // NOTE: a custom tag literally named 'all' would collide with the
+  // aggregate scope key in grid ids; pathological, accepted (data remains
+  // distinct — only the id string would repeat).
+
+  var SPATIAL_SPEC = 'PitchLog-SPATIAL-SPEC-v1.0';
+  var MIN_SAMPLE_FOR_DENSITY = 6;   // display threshold only (NOT statistics)
+
+  var PARTITION_ORDER = ['our', 'opponent', 'unattributed', 'all'];
+  var PARTITION_LABELS = { our: 'Us', opponent: 'Opponent', unattributed: 'Unattributed', all: 'All teams' };
+
+  var ZONE_KEYS = (function () {
+    var out = [];
+    THIRDS.forEach(function (t) {
+      CHANNELS.forEach(function (c) { out.push(t + ' · ' + c); });
+    });
+    return out;
+  })();
+
+  var SPATIAL_LIMITATIONS = [
+    'Locations are analyst-tagged samples of tagged events only — not positional tracking; unlocated events are excluded from the grid and reported below.',
+    'Based ONLY on recorded PitchLog Possession interval tags (single tagged point per interval) — not an official match possession statistic (NC-1); unrounded seconds summed internally, rounded for display only.',
+    'Orientation per tagging protocol T2: x = 0 our goal line → x = 1 opponent goal line; Left channel at y = 0.'
+  ];
+
+  function zoneIndicesOf(x, y) {
+    return {
+      ti: Math.min(2, Math.max(0, Math.floor(x * 3))),
+      ci: Math.min(2, Math.max(0, Math.floor(y * 3)))
+    };
+  }
+
+  function locationOutOfRange(loc) {
+    return loc.x < 0 || loc.x > 1 || loc.y < 0 || loc.y > 1;
+  }
+
+  // Event-level spatial record (spec §3.3). Located records keep the FULL
+  // UNROUNDED x/y (clamping happens only in the bin indices). Sub events
+  // carry playerId: null — spatial player analysis groups by playerId only
+  // (playerOff/playerOn roles are not spatial; spec SP-A6).
+  function spatialEventRecord(rec) {
+    var out = {
+      eventId: rec.id,
+      label: rec.label,
+      subtype: rec.subtype,
+      team: rec.team,
+      playerId: rec.label === 'Sub' ? null : rec.playerId,
+      period: rec.period,
+      matchSeconds: rec.matchSeconds,
+      minuteBin: minuteBin(rec),
+      stateBefore: rec.stateBefore,
+      sequenceId: rec.sequenceId,
+      isGoal: rec.isGoal,
+      isInterval: rec.isInterval,
+      durationSecondsExact: rec.isInterval ? intervalDuration(rec) : null
+    };
+    if (rec.location) {
+      var zi = zoneIndicesOf(rec.location.x, rec.location.y);
+      out.x = rec.location.x;
+      out.y = rec.location.y;
+      out.outOfRange = locationOutOfRange(rec.location);
+      out.thirdIndex = zi.ti;
+      out.channelIndex = zi.ci;
+      out.third = THIRDS[zi.ti];
+      out.channel = CHANNELS[zi.ci];
+      out.zoneKey = THIRDS[zi.ti] + ' · ' + CHANNELS[zi.ci];
+    }
+    return out;
+  }
+
+  function sumBuckets(target, source) {
+    L3_KEYS.forEach(function (k) { target[k] += source[k]; });
+    return target;
+  }
+
+  function emptyCells() {
+    var cells = [];
+    for (var ti = 0; ti < 3; ti++) {
+      for (var ci = 0; ci < 3; ci++) {
+        cells.push({
+          thirdIndex: ti,
+          channelIndex: ci,
+          zoneKey: THIRDS[ti] + ' · ' + CHANNELS[ci],
+          counts: zeroBucket()
+        });
+      }
+    }
+    return cells;
+  }
+
+  function newAcc() {
+    return { population: 0, located: 0, cells: emptyCells(), unlocatedBucket: zeroBucket() };
+  }
+
+  // One bucket-increment per record. addToAccValidated works on the internal
+  // validated records; addToAccRecord works on the contract's event records
+  // (view transform). Both feed the SAME addToBucket switch — there is never
+  // a second counting rule.
+  function addToAccValidated(acc, rec) {
+    acc.population++;
+    if (rec.location) {
+      acc.located++;
+      var zi = zoneIndicesOf(rec.location.x, rec.location.y);
+      addToBucket(acc.cells[zi.ti * 3 + zi.ci].counts, rec);
+    } else {
+      addToBucket(acc.unlocatedBucket, rec);
+    }
+  }
+
+  function addToAccRecord(acc, r) {
+    acc.population++;
+    if (r.zoneKey) {
+      acc.located++;
+      addToBucket(acc.cells[r.thirdIndex * 3 + r.channelIndex].counts, r);
+    } else {
+      addToBucket(acc.unlocatedBucket, r);
+    }
+  }
+
+  function newDurAcc() {
+    return {
+      locatedIntervals: 0,
+      unlocatedIntervals: 0,
+      secondsExact: { cells: [0, 0, 0, 0, 0, 0, 0, 0, 0], unlocated: 0 },
+      totalSecondsExact: 0
+    };
+  }
+
+  function accToDur(dur, part, zi, seconds) {
+    if (zi) {
+      dur[part].locatedIntervals++;
+      dur[part].secondsExact.cells[zi.ti * 3 + zi.ci] += seconds;
+    } else {
+      dur[part].unlocatedIntervals++;
+      dur[part].secondsExact.unlocated += seconds;
+    }
+    dur[part].totalSecondsExact += seconds;
+  }
+
+  function partitionOfTeam(team) {
+    return team === 'our' ? 'our' : (team === 'opponent' ? 'opponent' : 'unattributed');
+  }
+
+  // Grid object (spec §3.4.1): 9 row-major cells (third-major, channel-minor)
+  // of L3_KEYS counts, explicit Unlocated bucket, third/channel margins (full
+  // L3_KEYS counts), located-share envelope, stable id
+  // "grid:scope=<scope>:partition=<partition>".
+  function gridFromAccumulator(scope, scopeLabel, partition, acc, partitionLabelOverride) {
+    var byThird = [], byChannel = [];
+    for (var ti = 0; ti < 3; ti++) {
+      var mT = zeroBucket();
+      for (var ci = 0; ci < 3; ci++) sumBuckets(mT, acc.cells[ti * 3 + ci].counts);
+      byThird.push({ index: ti, name: THIRDS[ti], counts: mT });
+    }
+    for (var cj = 0; cj < 3; cj++) {
+      var mC = zeroBucket();
+      for (var tj = 0; tj < 3; tj++) sumBuckets(mC, acc.cells[tj * 3 + cj].counts);
+      byChannel.push({ index: cj, name: CHANNELS[cj], counts: mC });
+    }
+    return {
+      id: 'grid:scope=' + scope + ':partition=' + partition,
+      scope: scope,
+      scopeLabel: scopeLabel,
+      partition: partition,
+      partitionLabel: partitionLabelOverride || PARTITION_LABELS[partition] || partition,
+      population: acc.population,
+      located: acc.located,
+      unlocated: acc.population - acc.located,
+      locatedShare: ratioEnv(acc.located, acc.population),
+      cells: acc.cells,
+      unlocatedBucket: { counts: acc.unlocatedBucket },
+      margins: { byThird: byThird, byChannel: byChannel }
+    };
+  }
+
+  // ---- A.spatial contract builder (spec §3) --------------------------------
+
+  function buildSpatialSection(records, squad, locatedShareByLabel, outOfRangeCount, invalidLocationCount) {
+    var labelSet = new Set();
+    records.forEach(function (r) { labelSet.add(r.label); });
+    // Scope set: 'all' + EVERY label present in the session (canonical order
+    // first, custom tags sorted after — custom tags participate in spatial
+    // visualization without any standardized football interpretation).
+    var labelScopes = orderedLabels(labelSet);
+
+    var scopeKeys = ['all'].concat(labelScopes);
+    var acc = {};
+    scopeKeys.forEach(function (sk) {
+      acc[sk] = {};
+      PARTITION_ORDER.forEach(function (p) { acc[sk][p] = newAcc(); });
+    });
+
+    var locatedEvents = [];
+    var unlocatedEvents = [];
+    var playerAcc = {};
+    var playerLoc = {};   // playerId -> located records (traceability)
+    var dur = { our: newDurAcc(), opponent: newDurAcc(), unattributed: newDurAcc() };
+
+    records.forEach(function (rec) {
+      var r = spatialEventRecord(rec);
+      if (rec.location) locatedEvents.push(r); else unlocatedEvents.push(r);
+
+      var partitions = [partitionOfTeam(rec.team), 'all'];
+      var scopesHere = ['all', rec.label];
+      scopesHere.forEach(function (sk) {
+        partitions.forEach(function (p) { addToAccValidated(acc[sk][p], rec); });
+      });
+
+      if (rec.playerId && rec.label !== 'Sub') {
+        if (!playerAcc[rec.playerId]) { playerAcc[rec.playerId] = newAcc(); playerLoc[rec.playerId] = []; }
+        addToAccValidated(playerAcc[rec.playerId], rec);
+        if (rec.location) playerLoc[rec.playerId].push(r);
+      }
+
+      if (rec.label === 'Possession' && rec.isInterval) {
+        accToDur(dur, partitionOfTeam(rec.team),
+          rec.location ? zoneIndicesOf(rec.location.x, rec.location.y) : null,
+          intervalDuration(rec));   // UNROUNDED seconds (M-L2-B4 constraint)
+      }
+    });
+
+    // Grids: scope-major (aggregate first, then labels in canonical order),
+    // partition order our / opponent / unattributed / all (spec §3.4).
+    var grids = [];
+    scopeKeys.forEach(function (sk) {
+      var scopeLabel = sk === 'all' ? 'All events' : sk;
+      PARTITION_ORDER.forEach(function (p) {
+        grids.push(gridFromAccumulator(sk, scopeLabel, p, acc[sk][p]));
+      });
+    });
+
+    // Player grids (spec §3.4.4): players with ≥1 located event; ALL of that
+    // player's events count in population/unlocated. Names resolved from the
+    // squad at compute time ('Unknown player' fallback). Order: located desc,
+    // name asc, playerId asc (deterministic).
+    var playerGrids = Object.keys(playerAcc).map(function (pid) {
+      var squadEntry = null;
+      if (Array.isArray(squad)) {
+        for (var i = 0; i < squad.length; i++) {
+          if (squad[i] && squad[i].id === pid) { squadEntry = squad[i]; break; }
+        }
+      }
+      var name = squadEntry ? squadEntry.name : 'Unknown player';
+      var number = squadEntry ? (squadEntry.number || '') : '';
+      var g = gridFromAccumulator('all', 'All events', 'player:' + pid, playerAcc[pid],
+        (number ? number + ' ' : '') + name);
+      g.playerId = pid;
+      g.name = name;
+      g.number = number;
+      g.events = playerLoc[pid] || [];   // the player's located records
+      return g;
+    }).sort(function (a, b) {
+      if (b.located !== a.located) return b.located - a.located;
+      if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+      return a.playerId < b.playerId ? -1 : (a.playerId > b.playerId ? 1 : 0);
+    });
+
+    // SP-X2 (spec §7): Foul Zone-qualifier vs location disagreement — the two
+    // are independent claims (metric spec §11.6); the disagreement is
+    // reported here, never resolved.
+    var foulZoneQualifierMismatches = 0;
+    records.forEach(function (rec) {
+      if (rec.label !== 'Foul' || !rec.location) return;
+      var zq = qual(rec, 'Zone');
+      if (!zq) return;
+      var qIdx = FOUL_ZONES.indexOf(zq);
+      if (qIdx === -1) return;
+      if (qIdx !== zoneIndicesOf(rec.location.x, rec.location.y).ti) foulZoneQualifierMismatches++;
+    });
+
+    var locatedCount = locatedEvents.length;
+    var labelsBelowShare = locatedShareByLabel.filter(function (row) {
+      return row.share !== null && row.share < 50;
+    }).map(function (row) { return { label: row.label, share: row.share }; });
+
+    return {
+      spec: SPATIAL_SPEC,
+      model: {
+        thirds: THIRDS.slice(),
+        channels: CHANNELS.slice(),
+        zoneKeys: ZONE_KEYS.slice(),
+        unlocatedKey: 'Unlocated',
+        orientation: 'T2: x=0 our goal line, x=1 opponent goal line; y=0 Left channel edge',
+        cellKeys: L3_KEYS.slice()
+      },
+      completeness: {
+        total: records.length,
+        located: locatedCount,
+        unlocated: unlocatedEvents.length,
+        locatedShare: ratioEnv(locatedCount, records.length),
+        byLabel: locatedShareByLabel,
+        locationOutOfRange: outOfRangeCount,
+        invalidLocation: invalidLocationCount
+      },
+      locatedEvents: locatedEvents,
+      unlocatedEvents: unlocatedEvents,
+      grids: grids,
+      playerGrids: playerGrids,
+      possessionDurationByZone: {
+        name: 'Tagged Possession Duration by Zone',
+        basis: 'Recorded PitchLog Possession interval tags ONLY — not an official match possession statistic (NC-1)',
+        attribution: 'single tagged point per interval (interval start semantics, T2 orientation)',
+        our: dur.our,
+        opponent: dur.opponent,
+        unattributed: dur.unattributed,
+        display: 'seconds rounded half-up to 1 decimal at render only'
+      },
+      gates: {
+        'SP-X1': {
+          locatedShareOverall: ratioEnv(locatedCount, records.length).value,
+          labelsBelowShare: labelsBelowShare,
+          locationOutOfRange: outOfRangeCount,
+          invalidLocation: invalidLocationCount
+        },
+        'SP-X2': { foulZoneQualifierMismatches: foulZoneQualifierMismatches }
+      },
+      params: { minSampleForDensity: MIN_SAMPLE_FOR_DENSITY },
+      limitations: SPATIAL_LIMITATIONS.slice()
+    };
+  }
+
+  // ---- Spatial view transform (pure; renderer-facing) ----------------------
+  //
+  // computeSpatialView(A, filters) restricts the contract to the analyst's
+  // filter selection and rebuilds the affected grids from the contract's
+  // event records using the SAME bucket switch (never a second counting
+  // rule). With all filters off, the view grids are EQUAL to the contract
+  // grids for the same scope/partition (invariant, tested). The score-state
+  // filter is suppressed (forced off with a reported flag) when the X1
+  // score-reconciliation gate is in MISMATCH — the same suppression rule as
+  // CT-STATE (metric spec §6).
+  //
+  // filters: { scope, team, period, state, sequence, player } — each
+  // '__all__' (default) or a restriction value. Phase is NOT a filter: the
+  // event model has no phase field (F7 / NC-1); the honest substitutes are
+  // team / period / state / sequence.
+
+  function computeSpatialView(A, filters) {
+    var SP = A && A.spatial;
+    if (!SP) return null;
+    var norm = function (v) { return (typeof v === 'string' && v) ? v : '__all__'; };
+    var eff = {
+      scope: norm(filters && filters.scope),
+      team: norm(filters && filters.team),
+      period: norm(filters && filters.period),
+      state: norm(filters && filters.state),
+      sequence: norm(filters && filters.sequence),
+      player: norm(filters && filters.player)
+    };
+    if (eff.team !== 'our' && eff.team !== 'opponent') eff.team = '__all__';
+    var stateSuppressed = !!(A.gates && A.gates.X1_scoreReconciliation &&
+      A.gates.X1_scoreReconciliation.status === 'MISMATCH');
+    if (stateSuppressed) eff.state = '__all__';
+
+    function matches(rec) {
+      if (eff.scope !== '__all__' && rec.label !== eff.scope) return false;
+      if (eff.team !== '__all__' && rec.team !== eff.team) return false;
+      if (eff.period !== '__all__' && rec.period !== eff.period) return false;
+      if (eff.state !== '__all__' && rec.stateBefore !== eff.state) return false;
+      if (eff.sequence !== '__all__' && (rec.sequenceId || null) !== eff.sequence) return false;
+      if (eff.player !== '__all__' && (rec.playerId || null) !== eff.player) return false;
+      return true;
+    }
+
+    var locatedMatched = SP.locatedEvents.filter(matches);
+    var unlocatedMatched = SP.unlocatedEvents.filter(matches);
+
+    var accAll = newAcc();
+    var playerAcc = {};
+    var playerLoc = {};   // playerId -> located records (dots + traceability)
+    var dur = { our: newDurAcc(), opponent: newDurAcc(), unattributed: newDurAcc() };
+    locatedMatched.concat(unlocatedMatched).forEach(function (r) {
+      addToAccRecord(accAll, r);
+      if (r.playerId) {
+        if (!playerAcc[r.playerId]) { playerAcc[r.playerId] = newAcc(); playerLoc[r.playerId] = []; }
+        addToAccRecord(playerAcc[r.playerId], r);
+        if (r.zoneKey) playerLoc[r.playerId].push(r);
+      }
+      if (r.label === 'Possession' && r.isInterval) {
+        accToDur(dur, partitionOfTeam(r.team),
+          r.zoneKey ? { ti: r.thirdIndex, ci: r.channelIndex } : null,
+          r.durationSecondsExact || 0);   // unrounded
+      }
+    });
+
+    var nameById = {};
+    if (A.players && Array.isArray(A.players.list)) {
+      A.players.list.forEach(function (p) { nameById[p.playerId] = p; });
+    }
+    function playerLabel(pid) {
+      var p = nameById[pid];
+      if (!p) return 'Unknown player';
+      return (p.number ? p.number + ' ' : '') + p.name;
+    }
+
+    var scopeLabel = eff.scope === '__all__' ? 'All events' : eff.scope;
+    var scopeKey = eff.scope === '__all__' ? 'all' : eff.scope;
+
+    // viewGrid: same grid shape as the contract + the grid's located event
+    // records (canonical order) for dot rendering and cell traceability.
+    function viewGrid(partition, partitionLabel, locatedRecs, unlocatedRecs) {
+      var acc = newAcc();
+      locatedRecs.concat(unlocatedRecs).forEach(function (r) { addToAccRecord(acc, r); });
+      var g = gridFromAccumulator(scopeKey, scopeLabel, partition, acc, partitionLabel);
+      g.events = locatedRecs;
+      return g;
+    }
+
+    var grids = [];
+    var unattributedLocated = 0;
+    if (eff.player !== '__all__') {
+      // Player selection: one grid for that player (the team partition is
+      // intentionally overridden — stated in the UI, spec SP-H7).
+      grids.push(viewGrid('player:' + eff.player, 'Player: ' + playerLabel(eff.player),
+        locatedMatched, unlocatedMatched));
+    } else if (eff.team !== '__all__') {
+      grids.push(viewGrid(eff.team, PARTITION_LABELS[eff.team],
+        locatedMatched, unlocatedMatched));
+    } else {
+      // Team comparison (spec SP-V1): Us + Opponent side by side. The
+      // unattributed partition stays table-only (spec §3.4.3).
+      var ourLoc = locatedMatched.filter(function (r) { return r.team === 'our'; });
+      var ourUnloc = unlocatedMatched.filter(function (r) { return r.team === 'our'; });
+      var oppLoc = locatedMatched.filter(function (r) { return r.team === 'opponent'; });
+      var oppUnloc = unlocatedMatched.filter(function (r) { return r.team === 'opponent'; });
+      unattributedLocated = locatedMatched.filter(function (r) { return r.team === null; }).length;
+      grids.push(viewGrid('our', 'Us', ourLoc, ourUnloc));
+      grids.push(viewGrid('opponent', 'Opponent', oppLoc, oppUnloc));
+    }
+
+    // Numeric-table grid: the 'all' partition over the matched population
+    // (team/player restrictions are already applied through matching).
+    var tableGrid = viewGrid('all', 'Current selection', locatedMatched, unlocatedMatched);
+
+    var playerGrids = Object.keys(playerAcc).map(function (pid) {
+      var g = gridFromAccumulator('all', 'All events', 'player:' + pid, playerAcc[pid], playerLabel(pid));
+      g.playerId = pid;
+      g.events = playerLoc[pid] || [];   // the player's located records (dots)
+      return g;
+    }).sort(function (a, b) {
+      if (b.located !== a.located) return b.located - a.located;
+      // name asc (NOT partitionLabel — shirt numbers would dominate the
+      // order): the same rule as the contract playerGrids (spec §3.4.4).
+      var an = nameById[a.playerId] ? nameById[a.playerId].name : 'Unknown player';
+      var bn = nameById[b.playerId] ? nameById[b.playerId].name : 'Unknown player';
+      if (an !== bn) return an < bn ? -1 : 1;
+      return a.playerId < b.playerId ? -1 : (a.playerId > b.playerId ? 1 : 0);
+    });
+
+    var seqSet = new Set();
+    SP.locatedEvents.concat(SP.unlocatedEvents).forEach(function (r) {
+      if (r.sequenceId) seqSet.add(r.sequenceId);
+    });
+
+    var total = locatedMatched.length + unlocatedMatched.length;
+    return {
+      filters: eff,
+      stateFilterSuppressed: stateSuppressed || null,
+      completeness: {
+        total: total,
+        located: locatedMatched.length,
+        unlocated: unlocatedMatched.length,
+        locatedShare: ratioEnv(locatedMatched.length, total),
+        outOfRange: locatedMatched.filter(function (r) { return !!r.outOfRange; }).length
+      },
+      grids: grids,
+      tableGrid: tableGrid,
+      playerGrids: playerGrids,
+      possessionDurationByZone: {
+        name: SP.possessionDurationByZone.name,
+        basis: SP.possessionDurationByZone.basis,
+        attribution: SP.possessionDurationByZone.attribution,
+        display: SP.possessionDurationByZone.display,
+        our: dur.our,
+        opponent: dur.opponent,
+        unattributed: dur.unattributed
+      },
+      sequenceOptions: Array.from(seqSet).sort(),
+      unattributedLocated: unattributedLocated
+    };
+  }
+
   // ---- Main entry point ------------------------------------------------------
 
   // session: { events, matchInfo, matchClock, squad, tags } — read-only.
@@ -1242,6 +1755,16 @@
       }
     };
 
+    // --- Spatial contract (SPATIAL & HEAT-MAP ENGINE V1, spec §3) ----------
+    var outOfRangeCount = 0;
+    var invalidLocationCount = 0;
+    v.issues.forEach(function (i) {
+      if (i.code === 'LOCATION_OUT_OF_RANGE') outOfRangeCount = i.count;
+      if (i.code === 'INVALID_LOCATION') invalidLocationCount = i.count;
+    });
+    var spatial = buildSpatialSection(records, squad, locatedShareByLabel,
+      outOfRangeCount, invalidLocationCount);
+
     // --- Players / sequences ---------------------------------------------------
     var startingXIIds = [];
     if (matchInfo && Array.isArray(matchInfo.startingXI)) {
@@ -1318,6 +1841,7 @@
       level3CountsNote: 'byZone/byThird/byChannel/byPeriod/byMinuteBin/byState carry plain counts over the 3x3 model and fixed period bins; unknown buckets are explicit',
       level3: level3,
       level2: level2,
+      spatial: spatial,
       sequences: sequences,
       players: players,
       protocol: {
@@ -1328,6 +1852,7 @@
           'VIDEO_INTERVAL_TIMES: interval bounds may be video-clock times when a video was linked at tagging time',
           'SUB_ATTRIBUTION: Sub events attribute players via playerOff/playerOn only (spec M-G2)',
           'SCORE_STATE: state describes the score BEFORE the event (scoreForBefore/scoreAgainstBefore)',
+          'TAGGED_EVENT_DENSITY: spatial views show tagged, analyst-located events over the fixed 3×3 model (grid counts only — no smoothing or interpolation); the located-share (M-L2-E1) is always printed and unlocated events are reported, never discarded',
           'TAGGED_POSSESSION_SHARE (M-L2-B4): the PitchLog tagging model does NOT provide a complete independent possession dataset — every possession-duration figure is based ONLY on recorded Possession interval tags, uses the full unrounded interval seconds internally, preserves the raw interval list, and reports OUR + OPPONENT tagged durations with a limitation note. It is never presented as "Possession %" or as an official match possession statistic (NC-1); when tagged data is insufficient the share is null with the reason stated'
         ],
         params: { tauShot: TAU_SHOT, tauTurnover: TAU_TURNOVER, tauCoTagAdvisory: TAU_COTAG },
@@ -1338,7 +1863,10 @@
 
   return {
     computeMatchAnalytics: computeMatchAnalytics,
+    computeSpatialView: computeSpatialView,
     VERSION: VERSION,
-    SPEC: SPEC
+    SPEC: SPEC,
+    SPATIAL_SPEC: SPATIAL_SPEC,
+    MIN_SAMPLE_FOR_DENSITY: MIN_SAMPLE_FOR_DENSITY
   };
 });

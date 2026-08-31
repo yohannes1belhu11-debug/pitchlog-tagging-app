@@ -378,14 +378,18 @@
         <label>Player
           <select id="pitchMapPlayerFilter"></select>
         </label>
-        <label>Side
-          <select id="pitchMapSideFilter">
-            <option value="__all__">All sides</option>
-            <option value="for">For</option>
-            <option value="against">Against</option>
-            <option value="neutral">Neutral</option>
+        <!-- SP-V6: v3 team semantics (legacy `side` field is untouched in the
+             data model — only this filter's source field changed). -->
+        <label>Team
+          <select id="pitchMapTeamFilter">
+            <option value="__all__">All teams</option>
+            <option value="our">Us</option>
+            <option value="opponent">Opponent</option>
+            <option value="unattributed">No team set</option>
           </select>
         </label>
+        <!-- SP-V6: optional 3×3 zone overlay (grid lines only). -->
+        <button id="pitchMapZonesToggle" class="btn btn-ghost pitchmap-zones-toggle" type="button">3×3 zones: off</button>
       </div>
       <svg id="pitchMapSvg" class="pitch-svg pitch-map-svg" viewBox="0 0 700 450"></svg>
       <div id="pitchMapLegend" class="pitchmap-legend"></div>
