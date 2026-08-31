@@ -1489,3 +1489,161 @@ button {
 .touchline-overlay .btn-sm { min-height: 36px; min-width: 44px; padding: 6px 10px; }
 .touchline-overlay .team-btn { min-height: 40px; min-width: 80px; }
 .touchline-overlay .player-select { min-height: 40px; font-size: 13px; }
+
+/* ---------- Match analytics panel (Analytics tab) ---------- */
+
+.analytics-panel {
+  padding: 14px 16px;
+}
+
+.an-head {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.an-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.an-meta {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+.an-score {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.an-numden {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.an-excl {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.an-gates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.an-gate-row {
+  font-size: 11.5px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.an-flag-ok {
+  color: #2ecc71;
+  font-weight: 600;
+}
+
+.an-flag-warn {
+  color: #f39c12;
+  font-weight: 600;
+}
+
+.an-flag-bad {
+  color: var(--accent-bright);
+  font-weight: 700;
+}
+
+.an-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.an-table th {
+  text-align: left;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  font-weight: 600;
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.an-table td {
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  vertical-align: top;
+}
+
+.an-table td:first-child {
+  color: var(--text);
+  min-width: 130px;
+}
+
+.an-team td.an-our,
+.an-team th.an-our {
+  font-family: var(--font-mono);
+  color: #2ecc71;
+  text-align: right;
+  min-width: 70px;
+}
+
+.an-team td.an-opp,
+.an-team th.an-opp {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  text-align: right;
+  min-width: 70px;
+}
+
+.an-team th.an-our,
+.an-team th.an-opp {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.an-unattr td {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.an-poss-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 4px 0 6px;
+  line-height: 1.5;
+}
+
+.an-poss-limit {
+  font-size: 11px;
+  color: #f39c12;
+  background: rgba(243, 156, 18, 0.08);
+  border: 1px solid rgba(243, 156, 18, 0.25);
+  border-radius: var(--radius);
+  padding: 7px 9px;
+  margin: 6px 0 4px;
+  line-height: 1.5;
+}
+
+.an-protocol {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.an-engine {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 8px;
+}

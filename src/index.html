@@ -225,6 +225,7 @@
         <div class="events-tabs">
           <button id="tabEvents" class="events-tab active">Events <span id="eventCount" class="event-count">0</span></button>
           <button id="tabStats" class="events-tab">Stats</button>
+          <button id="tabAnalytics" class="events-tab">Analytics</button>
         </div>
       </div>
       <div id="eventFilterBar" class="event-filter-bar">
@@ -239,6 +240,9 @@
       </div>
       <div id="statsPanel" class="stats-panel" style="display:none;">
         <div id="statsContent"></div>
+      </div>
+      <div id="analyticsPanel" class="stats-panel analytics-panel" style="display:none;">
+        <div id="analyticsContent"></div>
       </div>
     </aside>
 
@@ -456,7 +460,13 @@
   <!-- integrity.js must load before renderer.js: it provides the shared
        player-id generation and missing-player-reference helpers
        (window.Integrity) used by the squad bulk-add and autosave recovery. -->
+  <!-- analytics.js loads after integrity.js and before renderer.js: it
+       provides the deterministic match-analytics engine
+       (window.AnalyticsEngine) used by the Analytics tab. It is a pure
+       function over the current session (events/matchInfo/matchClock/squad)
+       and never mutates them. -->
   <script src="integrity.js"></script>
+  <script src="analytics.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

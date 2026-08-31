@@ -230,8 +230,11 @@
   const eventFilterCountEl = document.getElementById('eventFilterCount');
   const tabEvents = document.getElementById('tabEvents');
   const tabStats = document.getElementById('tabStats');
+  const tabAnalytics = document.getElementById('tabAnalytics');
   const statsPanelEl = document.getElementById('statsPanel');
   const statsContentEl = document.getElementById('statsContent');
+  const analyticsPanelEl = document.getElementById('analyticsPanel');
+  const analyticsContentEl = document.getElementById('analyticsContent');
   const btnUndo = document.getElementById('btnUndo');
 
   const detailPanel = document.getElementById('detailPanel');
@@ -1872,25 +1875,325 @@
   function renderStatsPanel() {
     if (events.length === 0) {
       statsContentEl.innerHTML = '<div class="event-empty">No events tagged yet — stats will appear here once you start tagging.</div>';
+      if (analyticsPanelEl.style.display !== 'none') renderAnalyticsPanel();
       return;
     }
 
     statsContentEl.innerHTML = buildStatsHtml(computeStats());
+    if (analyticsPanelEl.style.display !== 'none') renderAnalyticsPanel();
   }
 
-  tabEvents.addEventListener('click', () => {
-    tabEvents.classList.add('active');
-    tabStats.classList.remove('active');
-    eventListEl.style.display = 'block';
-    statsPanelEl.style.display = 'none';
-  });
+  // ---------- Match analytics (Analytics tab) ----------
+  //
+  // Renders the MATCH ANALYTICS OBJECT produced by src/analytics.js
+  // (window.AnalyticsEngine.computeMatchAnalytics — a pure, deterministic
+  // function of the current session). This is a READ-ONLY report: it never
+  // mutates events, matchInfo, matchClock or squad, and it is recomputed
+  // from scratch on every render (spec §12.6 idempotence).
 
-  tabStats.addEventListener('click', () => {
-    tabStats.classList.add('active');
-    tabEvents.classList.remove('active');
-    eventListEl.style.display = 'none';
-    statsPanelEl.style.display = 'block';
-  });
+  function fmtEnv(env, suffix) {
+    // Renders a metric result envelope { value, num?, den?, excluded? }.
+    if (!env || env.value === null || env.value === undefined) return '—';
+    let out = String(env.value);
+    if (suffix) out += suffix;
+    if (typeof env.num === 'number' && typeof env.den === 'number' && env.den > 0) {
+      out += ` <span class="an-numden">(${env.num}/${env.den})</span>`;
+    }
+    const exKeys = env.excluded ? Object.keys(env.excluded).filter((k) => env.excluded[k] > 0) : [];
+    if (exKeys.length) {
+      out += ` <span class="an-excl">· excl. ${exKeys.map((k) => `${k} ${env.excluded[k]}`).join(', ')}</span>`;
+    }
+    return out;
+  }
+
+  function fmtPct(env) { return fmtEnv(env, '%'); }
+
+  function fmtSecs(v) {
+    if (v === null || v === undefined) return '—';
+    if (typeof v === 'number') return `${v}s`;
+    return String(v);
+  }
+
+  function anTeamRow(label, ourHtml, oppHtml) {
+    return `<tr><td>${escapeHtml(label)}</td><td class="an-our">${ourHtml}</td><td class="an-opp">${oppHtml}</td></tr>`;
+  }
+
+  function buildAnalyticsHtml(A) {
+    const S = A.matchSummary;
+    const L1 = A.level1;
+    const L2 = A.level2;
+    let html = '';
+
+    // --- Header: match + score reconciliation -----------------------------
+    const metaParts = [];
+    if (S.competition) metaParts.push(escapeHtml(S.competition));
+    if (S.homeAway) metaParts.push(S.homeAway === 'home' ? 'Home' : S.homeAway === 'away' ? 'Away' : 'Neutral');
+    if (S.opponent) metaParts.push(`vs ${escapeHtml(S.opponent)}`);
+    if (S.date) metaParts.push(escapeHtml(S.date));
+    if (S.formation) metaParts.push(escapeHtml(S.formation));
+    html += `<div class="an-head">`;
+    html += `<div class="an-title">Match analytics</div>`;
+    html += `<div class="an-meta">${metaParts.length ? metaParts.join(' · ') : 'No match details set'}</div>`;
+    const sc = S.score;
+    html += `<div class="an-score">${sc.chain.for}–${sc.chain.against} <span class="an-numden">(goal chain, ${sc.chain.attributedGoals} attributed)</span></div>`;
+    html += `</div>`;
+
+    // --- Data quality gates (X-group) --------------------------------------
+    const G = A.gates;
+    const x1Cls = sc.reconciliation === 'MISMATCH' ? 'an-flag-bad' : (sc.reconciliation === 'MATCH' ? 'an-flag-ok' : 'an-flag-warn');
+    const gateRows = [
+      `X1 score reconciliation: <span class="${x1Cls}">${sc.reconciliation}</span>`
+      + (sc.manual ? ` (manual ${sc.manual.for}–${sc.manual.against})` : ' (manual score not set)'),
+      `X2 unattributed events: ${G.X2_unattributedEvents.total}`
+      + (G.X2_unattributedEvents.total > 0 ? ` <span class="an-excl">(${Object.entries(G.X2_unattributedEvents.byLabel).map(([l, n]) => `${escapeHtml(l)} ${n}`).join(', ')})</span>` : ''),
+      `X4 press consistency: ${G.X4_pressConsistency.our.flag || G.X4_pressConsistency.opponent.flag ? '<span class="an-flag-bad">FLAGGED (Press Wins &gt; Presses)</span>' : 'ok'}`,
+      `X5 goal/shot co-tag: ${G.X5_goalShotCoTag.our.flag || G.X5_goalShotCoTag.opponent.flag ? '<span class="an-flag-bad">FLAGGED (Goals &gt; Shots)</span>' : 'ok'}`
+    ];
+    const x3bad = A.gates.X3_completeness.filter((c) => c.share !== null && c.share < 100);
+    gateRows.push(`X3 completeness: ${x3bad.length === 0 ? 'all checked fields complete' : `${x3bad.length} field(s) incomplete`}`);
+    const x6dup = G.X6_coTagAdvisory.sameLabel;
+    gateRows.push(`X6 co-timing advisory: ${x6dup.length === 0 ? 'no same-label near-duplicates' : `<span class="an-flag-warn">${x6dup.map((d) => `${escapeHtml(d.label)} ×${d.count}`).join(', ')} within 5s — possible double-tags</span>`}`);
+    const issues = A.validation.issues;
+    gateRows.push(`Validation: ${issues.length === 0 ? 'clean' : `<span class="an-flag-warn">${issues.map((i) => `${escapeHtml(i.code)} ×${i.count}`).join(', ')}</span>`}`);
+    html += '<div class="stats-section-label">Data quality gates</div>';
+    html += `<div class="an-gates">${gateRows.map((g) => `<div class="an-gate-row">${g}</div>`).join('')}</div>`;
+
+    // --- Match summary ------------------------------------------------------
+    html += '<div class="stats-section-label">Match summary (tagged universe)</div>';
+    html += '<table class="an-table"><tbody>';
+    html += `<tr><td>Events used</td><td class="an-our">${S.totalEvents}</td><td class="an-opp">${S.inPlayEvents} in play · ${S.nonPlayEvents} non-play · ${S.unknownPeriodEvents} unknown period</td></tr>`;
+    const stoppageTags = ['1H', '2H', 'ET1', 'ET2'].filter((p) => S.stoppageByPeriod[p]).map((p) => `${p}+`);
+    html += `<tr><td>Stoppage events</td><td class="an-our">${S.stoppageEvents}</td><td class="an-opp">${stoppageTags.length ? escapeHtml(stoppageTags.join(', ')) : 'none flagged'}</td></tr>`;
+    html += `<tr><td>Located events</td><td class="an-our">${S.locatedEvents}</td><td class="an-opp">${S.totalEvents - S.locatedEvents} unlocated</td></tr>`;
+    html += `<tr><td>Periods played</td><td class="an-our">${S.periodsPlayed.length ? S.periodsPlayed.join(', ') : '—'}</td><td class="an-opp">nominal ${S.durationMinutes}′</td></tr>`;
+    html += '</tbody></table>';
+
+    // --- Team comparison (Level 1 + Level 2) -------------------------------
+    html += '<div class="stats-section-label">Team comparison — Level 1 counts</div>';
+    html += '<table class="an-table an-team"><thead><tr><th></th><th class="an-our">Us</th><th class="an-opp">Opponent</th></tr></thead><tbody>';
+    const T1 = L1.team;
+    const rows1 = [
+      ['Goals', T1.our.goals.value, T1.opponent.goals.value],
+      ['Shots', T1.our.shots.value, T1.opponent.shots.value],
+      ['Shots on target', T1.our.shotsOnTarget.value, T1.opponent.shotsOnTarget.value],
+      ['Shots off target', T1.our.shotsOffTarget.value, T1.opponent.shotsOffTarget.value],
+      ['Blocked shots', T1.our.shotsBlocked.value, T1.opponent.shotsBlocked.value],
+      ['Shots unknown outcome', T1.our.shotsUnknownOutcome.value, T1.opponent.shotsUnknownOutcome.value],
+      ['Chances', T1.our.chances.value, T1.opponent.chances.value],
+      ['Crosses', T1.our.crosses.value, T1.opponent.crosses.value],
+      ['Corners', T1.our.corners.value, T1.opponent.corners.value],
+      ['Fouls', T1.our.fouls.value, T1.opponent.fouls.value],
+      ['Yellow cards', T1.our.yellowCards.value, T1.opponent.yellowCards.value],
+      ['Red cards', T1.our.redCards.value, T1.opponent.redCards.value],
+      ['Substitutions', T1.our.substitutions.value, T1.opponent.substitutions.value],
+      ['Passes', T1.our.passes.value, T1.opponent.passes.value],
+      ['Successful passes', T1.our.successfulPasses.value, T1.opponent.successfulPasses.value],
+      ['Passes unknown outcome', T1.our.passesUnknownOutcome.value, T1.opponent.passesUnknownOutcome.value],
+      ['Progressive / lateral / backward / long',
+        `${T1.our.progressivePasses.value}/${T1.our.lateralPasses.value}/${T1.our.backwardPasses.value}/${T1.our.longPasses.value}`,
+        `${T1.opponent.progressivePasses.value}/${T1.opponent.lateralPasses.value}/${T1.opponent.backwardPasses.value}/${T1.opponent.longPasses.value}`],
+      ['Passes under pressure', T1.our.passesUnderPressure.value, T1.opponent.passesUnderPressure.value],
+      ['Presses', T1.our.presses.value, T1.opponent.presses.value],
+      ['Press wins', T1.our.pressWins.value, T1.opponent.pressWins.value],
+      ['Interceptions', T1.our.interceptions.value, T1.opponent.interceptions.value],
+      ['Recoveries', T1.our.recoveries.value, T1.opponent.recoveries.value],
+      ['Turnovers', T1.our.turnovers.value, T1.opponent.turnovers.value],
+      ['Duels', T1.our.duels.value, T1.opponent.duels.value],
+      ['Positive transitions', T1.our.positiveTransitions.value, T1.opponent.positiveTransitions.value],
+      ['Negative transitions', T1.our.negativeTransitions.value, T1.opponent.negativeTransitions.value],
+      ['All events', T1.our.events.value, T1.opponent.events.value]
+    ];
+    rows1.forEach((r) => { html += anTeamRow(r[0], String(r[1]), String(r[2])); });
+    if (T1.unattributed.events.value > 0) {
+      html += `<tr class="an-unattr"><td>Unattributed (no team)</td><td colspan="2">${T1.unattributed.events.value} events — excluded from both columns above</td></tr>`;
+    }
+    html += '</tbody></table>';
+
+    html += '<div class="stats-section-label">Team comparison — Level 2 derived</div>';
+    html += '<table class="an-table an-team"><thead><tr><th></th><th class="an-our">Us</th><th class="an-opp">Opponent</th></tr></thead><tbody>';
+    const D = L2.team;
+    html += anTeamRow('Shot accuracy (on/(on+off))', fmtPct(D.our.shotAccuracy), fmtPct(D.opponent.shotAccuracy));
+    html += anTeamRow('Shot conversion (goals/shots)', fmtPct(D.our.shotConversion), fmtPct(D.opponent.shotConversion));
+    html += anTeamRow('Chance conversion (goals/chances)', fmtPct(D.our.chanceConversion), fmtPct(D.opponent.chanceConversion));
+    html += anTeamRow('Pass success', fmtPct(D.our.passSuccess), fmtPct(D.opponent.passSuccess));
+    html += anTeamRow('Pass success · under pressure', fmtPct(D.our.pressureSplitPassSuccess.underPressure), fmtPct(D.opponent.pressureSplitPassSuccess.underPressure));
+    html += anTeamRow('Pass success · free', fmtPct(D.our.pressureSplitPassSuccess.free), fmtPct(D.opponent.pressureSplitPassSuccess.free));
+    html += anTeamRow('Ball-winning events (rec+int)', String(D.our.ballWinningEvents.value), String(D.opponent.ballWinningEvents.value));
+    html += anTeamRow('Press win ratio', fmtPct(D.our.pressWinRatio), fmtPct(D.opponent.pressWinRatio));
+    const psO = D.our.passSubtypeProfile;
+    const psP = D.opponent.passSubtypeProfile;
+    html += anTeamRow('Pass subtype profile',
+      Object.entries(psO.shares).map(([k, v]) => `${k} ${v === null ? '—' : v + '%'}`).join(' · ') + (psO.knownTotal ? '' : ' (no subtype-known passes)'),
+      Object.entries(psP.shares).map(([k, v]) => `${k} ${v === null ? '—' : v + '%'}`).join(' · ') + (psP.knownTotal ? '' : ' (no subtype-known passes)'));
+    html += anTeamRow('Per-90 (goals · shots · passes)',
+      `${D.our.per90.goals.value} · ${D.our.per90.shots.value} · ${D.our.per90.passes.value}`,
+      `${D.opponent.per90.goals.value} · ${D.opponent.per90.shots.value} · ${D.opponent.per90.passes.value}`);
+    html += '</tbody></table>';
+
+    // --- TAGGED POSSESSION block (explicitly named, limitation shown) ------
+    const PO = L1.possession.our;
+    const PP = L1.possession.opponent;
+    const PU = L1.possession.unattributed;
+    const share = D.our.taggedPossessionShare;
+    const oppShare = D.opponent.taggedPossessionShare;
+    html += '<div class="stats-section-label">Tagged possession (recorded intervals only)</div>';
+    html += `<div class="an-poss-note">${escapeHtml(share.basis)}.</div>`;
+    html += '<table class="an-table an-team"><thead><tr><th></th><th class="an-our">Us</th><th class="an-opp">Opponent</th></tr></thead><tbody>';
+    html += anTeamRow('Tagged possession intervals', String(PO.intervals.value), String(PP.intervals.value));
+    html += anTeamRow('Tagged possession duration', fmtSecs(PO.totalDuration.value), fmtSecs(PP.totalDuration.value));
+    html += anTeamRow('Mean interval duration', fmtEnv(PO.meanDuration, 's'), fmtEnv(PP.meanDuration, 's'));
+    const erRow = (dist) => Object.entries(dist.buckets).filter(([, n]) => n > 0).map(([k, n]) => `${escapeHtml(k)} ${n}`).join(' · ')
+      + (dist.unknown > 0 ? ` · unknown ${dist.unknown}` : '');
+    html += anTeamRow('Ended by', erRow(PO.endReasons) || '—', erRow(PP.endReasons) || '—');
+    html += anTeamRow('Tagged Possession Share',
+      share.value === null ? `<span class="an-flag-warn">—</span>` : `<strong>${share.value}%</strong>`,
+      oppShare.value === null ? `<span class="an-flag-warn">—</span>` : `<strong>${oppShare.value}%</strong>`);
+    html += '</tbody></table>';
+    if (PU.intervals.value > 0) {
+      html += `<div class="an-poss-note">${PU.intervals.value} possession interval(s) (${fmtSecs(PU.totalDuration.value)}) have no team attributed and are excluded from the share.</div>`;
+    }
+    html += `<div class="an-poss-limit">${escapeHtml(share.limitation)}</div>`;
+
+    // --- Score state --------------------------------------------------------
+    const SS = L2.scoreState;
+    html += '<div class="stats-section-label">Score state (goal-chain based)</div>';
+    if (SS.changes.value === null) {
+      html += `<div class="an-poss-limit">Not computed — ${escapeHtml(SS.durationReason || SS.changes.reason || 'insufficient goal data')}.</div>`;
+    } else {
+      html += '<table class="an-table"><tbody>';
+      html += `<tr><td>State changes</td><td class="an-our">${SS.changes.value}</td></tr>`;
+      ['WINNING', 'DRAW', 'LOSING'].forEach((k) => {
+        html += `<tr><td>Time ${k.toLowerCase()}</td><td class="an-our">${fmtSecs(SS.durationSeconds[k])}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    }
+
+    // --- Transitions (linkage, τ reported) ----------------------------------
+    const TR = L2.transitions;
+    html += '<div class="stats-section-label">Transitions &amp; linkage (τ reported)</div>';
+    html += '<table class="an-table"><tbody>';
+    html += `<tr><td>Positive Transition → Shot (≤${TR.transitionToShot.params.tau}s)</td><td class="an-our">${fmtPct(TR.transitionToShot)}</td></tr>`;
+    html += `<tr><td>Positive Transition → Chance (≤${TR.transitionToChance.params.tau}s)</td><td class="an-our">${fmtPct(TR.transitionToChance)}</td></tr>`;
+    html += `<tr><td>Positive Transition → Goal (≤${TR.transitionToGoal.params.tau}s)</td><td class="an-our">${fmtPct(TR.transitionToGoal)}</td></tr>`;
+    html += `<tr><td>Turnover → opponent Shot/Chance (≤${TR.turnoversFollowedByOpponentShotOrChance.params.tau}s)</td><td class="an-our">${fmtPct(TR.turnoversFollowedByOpponentShotOrChance)}</td></tr>`;
+    html += '</tbody></table>';
+
+    // --- Level 3 contexts ----------------------------------------------------
+    const L3 = A.level3;
+    html += '<div class="stats-section-label">By period (Level 3)</div>';
+    html += '<table class="an-table"><thead><tr><th>Period</th><th>Events</th><th>Goals</th><th>Shots</th><th>Chances</th><th>Passes</th><th>Turnovers</th></tr></thead><tbody>';
+    Object.entries(L3.byPeriod).forEach(([p, b]) => {
+      if (b.counts.events === 0) return;
+      html += `<tr><td>${escapeHtml(p)}${b.stoppage.events > 0 ? ` <span class="an-excl">(+${b.stoppage.events} stoppage)</span>` : ''}</td><td>${b.counts.events}</td><td>${b.counts.goals}</td><td>${b.counts.shots}</td><td>${b.counts.chances}</td><td>${b.counts.passes}</td><td>${b.counts.turnovers}</td></tr>`;
+    });
+    html += '</tbody></table>';
+
+    html += '<div class="stats-section-label">By minute bin (period + match seconds)</div>';
+    html += '<table class="an-table"><thead><tr><th>Bin</th><th>Events</th><th>Goals</th><th>Shots</th><th>Chances</th><th>Passes</th><th>Turnovers</th></tr></thead><tbody>';
+    Object.entries(L3.byMinuteBin).forEach(([bin, b]) => {
+      if (b.events === 0) return;
+      html += `<tr><td>${escapeHtml(bin)}</td><td>${b.events}</td><td>${b.goals}</td><td>${b.shots}</td><td>${b.chances}</td><td>${b.passes}</td><td>${b.turnovers}</td></tr>`;
+    });
+    html += '</tbody></table>';
+
+    html += '<div class="stats-section-label">By third (3×3 model)</div>';
+    html += '<table class="an-table"><thead><tr><th>Third</th><th>Events</th><th>Goals</th><th>Shots</th><th>Chances</th><th>Passes</th><th>Turnovers</th></tr></thead><tbody>';
+    Object.entries(L3.byThird).forEach(([t, b]) => {
+      if (b.events === 0) return;
+      html += `<tr><td>${escapeHtml(t)}</td><td>${b.events}</td><td>${b.goals}</td><td>${b.shots}</td><td>${b.chances}</td><td>${b.passes}</td><td>${b.turnovers}</td></tr>`;
+    });
+    html += '</tbody></table>';
+
+    if (L3.byState) {
+      html += '<div class="stats-section-label">By score state (before event)</div>';
+      html += '<table class="an-table"><thead><tr><th>State</th><th>Events</th><th>Goals</th><th>Shots</th><th>Chances</th><th>Passes</th><th>Turnovers</th></tr></thead><tbody>';
+      Object.entries(L3.byState).forEach(([st, b]) => {
+        if (b.events === 0) return;
+        html += `<tr><td>${escapeHtml(st)}</td><td>${b.events}</td><td>${b.goals}</td><td>${b.shots}</td><td>${b.chances}</td><td>${b.passes}</td><td>${b.turnovers}</td></tr>`;
+      });
+      html += '</tbody></table>';
+    } else {
+      html += `<div class="an-poss-limit">Score-state context suppressed: ${escapeHtml(L3.stateSuppressedReason)}.</div>`;
+    }
+
+    // --- Players -------------------------------------------------------------
+    html += '<div class="stats-section-label">Players (counts + ratios, no per-90)</div>';
+    const PL = A.players;
+    if (PL.list.length === 0) {
+      html += '<div class="an-poss-note">No player-attributed events.</div>';
+    } else {
+      html += `<div class="an-poss-note">${escapeHtml(PL.note)}</div>`;
+      html += '<table class="an-table"><thead><tr><th>Player</th><th>Events</th><th>Goals</th><th>Shots</th><th>Passes</th><th>Pass&nbsp;%</th><th>Presses</th><th>Turnovers</th><th>+ / −</th></tr></thead><tbody>';
+      PL.list.forEach((p) => {
+        const label = p.number ? `${escapeHtml(p.number)} ${escapeHtml(p.name)}` : escapeHtml(p.name);
+        html += `<tr><td>${label}${p.appearance ? '' : ' <span class="an-excl">(no appearance)</span>'}</td><td>${p.metrics.events}</td><td>${p.metrics.goals}</td><td>${p.metrics.shots}</td><td>${p.metrics.passes}</td><td>${p.metrics.passSuccess.value === null ? '—' : p.metrics.passSuccess.value + '%'}</td><td>${p.metrics.presses}</td><td>${p.metrics.turnovers}</td><td>${p.metrics.positiveEvents} / ${p.metrics.negativeEvents}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      if (PL.unattributed.events > 0) {
+        html += `<div class="an-poss-note">${PL.unattributed.events} events have no player attributed${PL.unattributed.byLabel && Object.keys(PL.unattributed.byLabel).length ? ` (${Object.entries(PL.unattributed.byLabel).map(([l, n]) => `${escapeHtml(l)} ${n}`).join(', ')})` : ''}.</div>`;
+      }
+    }
+
+    // --- Sequences ------------------------------------------------------------
+    const SQ = A.sequences;
+    if (SQ.total > 0) {
+      html += '<div class="stats-section-label">Sequences (SEQ)</div>';
+      html += '<table class="an-table"><tbody>';
+      html += `<tr><td>Sequences</td><td class="an-our">${SQ.total}</td><td class="an-opp">${SQ.withTransition} contain a transition marker</td></tr>`;
+      html += `<tr><td>Mean events / duration</td><td class="an-our">${SQ.meanEventCount === null ? '—' : SQ.meanEventCount}</td><td class="an-opp">${SQ.meanDurationSeconds === null ? '—' : SQ.meanDurationSeconds + 's'} <span class="an-excl">(${SQ.spanningCount} span periods, excluded from mean)</span></td></tr>`;
+      html += '</tbody></table>';
+    }
+
+    // --- Protocol notes ---------------------------------------------------------
+    html += '<div class="stats-section-label">Method notes</div>';
+    html += `<div class="an-protocol">${A.protocol.notes.map((n) => `• ${escapeHtml(n)}`).join('<br>')}</div>`;
+    html += `<div class="an-engine">${escapeHtml(A.spec)} · engine v${escapeHtml(A.engine.version)} · deterministic</div>`;
+
+    return html;
+  }
+
+  function renderAnalyticsPanel() {
+    if (!window.AnalyticsEngine || typeof window.AnalyticsEngine.computeMatchAnalytics !== 'function') {
+      analyticsContentEl.innerHTML = '<div class="event-empty">Analytics engine not loaded (src/analytics.js).</div>';
+      return;
+    }
+    if (events.length === 0) {
+      analyticsContentEl.innerHTML = '<div class="event-empty">No events tagged yet — the match analytics report will appear here once you start tagging.</div>';
+      return;
+    }
+    let A;
+    try {
+      A = window.AnalyticsEngine.computeMatchAnalytics({
+        events: events,
+        matchInfo: matchInfo,
+        matchClock: matchClock,
+        squad: squad,
+        tags: tags
+      });
+    } catch (err) {
+      analyticsContentEl.innerHTML = `<div class="event-empty">Analytics engine error: ${escapeHtml(String(err && err.message || err))}</div>`;
+      return;
+    }
+    analyticsContentEl.innerHTML = buildAnalyticsHtml(A);
+  }
+
+  function setEventsTab(tab) {
+    // tab: 'events' | 'stats' | 'analytics'
+    // Filter bar visibility is intentionally untouched (the pre-existing
+    // events/stats switching never toggled it either).
+    const active = { events: tab === 'events', stats: tab === 'stats', analytics: tab === 'analytics' };
+    tabEvents.classList.toggle('active', active.events);
+    tabStats.classList.toggle('active', active.stats);
+    tabAnalytics.classList.toggle('active', active.analytics);
+    eventListEl.style.display = active.events ? 'block' : 'none';
+    statsPanelEl.style.display = active.stats ? 'block' : 'none';
+    analyticsPanelEl.style.display = active.analytics ? 'block' : 'none';
+    if (active.analytics) renderAnalyticsPanel();
+  }
+
+  tabEvents.addEventListener('click', () => setEventsTab('events'));
+  tabStats.addEventListener('click', () => setEventsTab('stats'));
+  tabAnalytics.addEventListener('click', () => setEventsTab('analytics'));
 
   // ---------- Season view (combine several saved sessions) ----------
 
