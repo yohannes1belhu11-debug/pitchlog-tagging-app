@@ -1,0 +1,2891 @@
+(() => {
+  'use strict';
+
+  // ---------- State ----------
+
+  // event: { id, time (seconds), label, subtype, qualifiers: { groupName: value } }
+  let events = [];
+  let currentVideoPath = null;
+  let nextEventId = 1;
+
+  // Each tag can optionally define:
+  //  - subtypes: a single-select list shown as chips after logging (e.g. Progressive/Lateral/Backward)
+  //  - qualifierGroups: any number of independent single-select chip groups (e.g. Outcome, Pressure)
+  // Tags with neither behave exactly like a flat tag: one click, one instant log.
+  let tags = [
+    {
+      label: 'Goal', key: '1',
+      qualifierGroups: [
+        { name: 'Body part', options: ['Left foot', 'Right foot', 'Head', 'Other'] }
+      ]
+    },
+    {
+      label: 'Shot', key: '2',
+      subtypes: ['On target', 'Off target', 'Blocked'],
+      qualifierGroups: [
+        { name: 'Body part', options: ['Left foot', 'Right foot', 'Head'] },
+        { name: 'Situation', options: ['Open play', 'Set piece', 'Penalty'] }
+      ]
+    },
+    {
+      label: 'Pass', key: '3',
+      subtypes: ['Progressive', 'Lateral', 'Backward', 'Long'],
+      qualifierGroups: [
+        { name: 'Outcome', options: ['Successful', 'Unsuccessful'] },
+        { name: 'Pressure', options: ['Under pressure', 'Free'] }
+      ]
+    },
+    {
+      label: 'Foul', key: '4',
+      qualifierGroups: [
+        { name: 'Zone', options: ['Defensive third', 'Middle third', 'Attacking third'] }
+      ]
+    },
+    { label: 'Card', key: '5', subtypes: ['Yellow', 'Red'] },
+    { label: 'Corner', key: '6' },
+    { label: 'Sub', key: '7', substitution: true },
+    {
+      label: 'Possession', key: '8', interval: true,
+      qualifierGroups: [
+        { name: 'Ended by', options: ['Shot', 'Turnover', 'Foul won', 'Out of play'] }
+      ]
+    }
+  ];
+
+  // Captured at startup so hasAutosavableWork() can detect whether the
+  // tag set has been customized (loaded from a session or extended with
+  // custom tags). Used to decide whether the current state is worth
+  // autosaving.
+  const DEFAULT_TAGS_LENGTH = tags.length;
+
+  // ---------- Match clock (independent of video) ----------
+  // Timestamp-based: clockStartedAt (ms epoch), clockBaseSeconds, clockRunning.
+  // The setInterval display timer ONLY refreshes the UI — never advances time.
+
+  const PERIOD_LABELS = {
+    'PRE_MATCH': 'Pre-match', '1H': '1st Half', 'HT': 'Half-time',
+    '2H': '2nd Half', 'FT': 'Full-time', 'ET1': 'ET 1st Half',
+    'ET_HT': 'ET Half-time', 'ET2': 'ET 2nd Half'
+  };
+
+  function blankMatchClock() {
+    return {
+      clockStartedAt: null, clockBaseSeconds: 0, clockRunning: false,
+      period: 'PRE_MATCH', scoreFor: 0, scoreAgainst: 0,
+      videoSyncOffset: 0, selectedTeam: 'our', selectedPlayerId: null,
+      activeSequenceId: null, nextSequenceNumber: 1
+    };
+  }
+
+  let matchClock = blankMatchClock();
+
+  function getMatchSeconds() {
+    if (!matchClock.clockRunning || matchClock.clockStartedAt === null) return matchClock.clockBaseSeconds;
+    return matchClock.clockBaseSeconds + (Date.now() - matchClock.clockStartedAt) / 1000;
+  }
+
+  function getMatchSecondsFromVideo() {
+    if (!currentVideoPath) return null;
+    return getCurrentTime() + matchClock.videoSyncOffset;
+  }
+
+  function getCurrentMatchSeconds() {
+    if (matchClock.clockRunning) return getMatchSeconds();
+    const fromVideo = getMatchSecondsFromVideo();
+    if (fromVideo !== null && fromVideo > 0) return fromVideo;
+    return matchClock.clockBaseSeconds;
+  }
+
+  function formatMatchClock(seconds, period) {
+    if (!period || period === 'PRE_MATCH') return '00:00';
+    const s = Math.max(0, Math.floor(seconds));
+    const pad = (n) => String(n).padStart(2, '0');
+    let boundary = 0;
+    if (period === '1H' || period === 'HT') boundary = 45 * 60;
+    else if (period === '2H' || period === 'FT') boundary = 90 * 60;
+    else if (period === 'ET1' || period === 'ET_HT') boundary = 105 * 60;
+    else if (period === 'ET2') boundary = 120 * 60;
+    if (s > boundary && (period === '1H' || period === '2H' || period === 'ET1' || period === 'ET2')) {
+      return `${Math.floor(boundary / 60)}+${s - boundary}`;
+    }
+    return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+  }
+
+  function formatOfficialMinute(seconds, period) {
+    if (!period || period === 'PRE_MATCH') return 0;
+    const s = Math.max(0, Math.floor(seconds));
+    let boundary = 0;
+    if (period === '1H' || period === 'HT') boundary = 45 * 60;
+    else if (period === '2H' || period === 'FT') boundary = 90 * 60;
+    else if (period === 'ET1' || period === 'ET_HT') boundary = 105 * 60;
+    else if (period === 'ET2') boundary = 120 * 60;
+    if (s > boundary && (period === '1H' || period === '2H' || period === 'ET1' || period === 'ET2')) {
+      return Math.floor(boundary / 60) + Math.ceil((s - boundary) / 60);
+    }
+    return Math.ceil(s / 60);
+  }
+
+  function startMatchClock() {
+    if (matchClock.clockRunning) return;
+    if (matchClock.period === 'PRE_MATCH') matchClock.period = '1H';
+    matchClock.clockStartedAt = Date.now();
+    matchClock.clockRunning = true;
+    renderMatchClock(); markAutosaveDirty();
+  }
+
+  function pauseMatchClock() {
+    if (!matchClock.clockRunning) return;
+    matchClock.clockBaseSeconds = getMatchSeconds();
+    matchClock.clockStartedAt = null;
+    matchClock.clockRunning = false;
+    renderMatchClock(); markAutosaveDirty();
+  }
+
+  function endHalf() {
+    if (matchClock.clockRunning) {
+      matchClock.clockBaseSeconds = getMatchSeconds();
+      matchClock.clockStartedAt = null;
+      matchClock.clockRunning = false;
+    }
+    if (matchClock.period === '1H') { matchClock.clockBaseSeconds = 45 * 60; matchClock.period = 'HT'; }
+    else if (matchClock.period === '2H') { matchClock.clockBaseSeconds = 90 * 60; matchClock.period = 'FT'; }
+    else if (matchClock.period === 'ET1') { matchClock.clockBaseSeconds = 105 * 60; matchClock.period = 'ET_HT'; }
+    else if (matchClock.period === 'ET2') { matchClock.clockBaseSeconds = 120 * 60; matchClock.period = 'FT'; }
+    renderMatchClock(); markAutosaveDirty();
+  }
+
+  function startNextHalf() {
+    if (matchClock.period === 'HT') { matchClock.period = '2H'; matchClock.clockBaseSeconds = 45 * 60; }
+    else if (matchClock.period === 'FT') { matchClock.period = 'ET1'; matchClock.clockBaseSeconds = 90 * 60; }
+    else if (matchClock.period === 'ET_HT') { matchClock.period = 'ET2'; matchClock.clockBaseSeconds = 105 * 60; }
+    else return;
+    matchClock.clockStartedAt = Date.now();
+    matchClock.clockRunning = true;
+    renderMatchClock(); markAutosaveDirty();
+  }
+
+  let clockDisplayTimer = null;
+  function startClockDisplayTimer() {
+    if (clockDisplayTimer) return;
+    clockDisplayTimer = setInterval(() => {
+      if (matchClock.clockRunning) {
+        renderMatchClock();
+        if (touchlineMode) renderTouchlineAll();
+      }
+    }, 250);
+  }
+
+  function renderMatchClock() {
+    const clockEl = document.getElementById('matchClockDisplay');
+    const periodEl = document.getElementById('matchPeriodDisplay');
+    if (clockEl) clockEl.textContent = formatMatchClock(getCurrentMatchSeconds(), matchClock.period);
+    if (periodEl) periodEl.textContent = PERIOD_LABELS[matchClock.period] || matchClock.period;
+    const btnStart = document.getElementById('btnClockStart');
+    const btnPause = document.getElementById('btnClockPause');
+    const btnEndHalf = document.getElementById('btnClockEndHalf');
+    const btnNextHalf = document.getElementById('btnClockNextHalf');
+    if (btnStart) btnStart.disabled = matchClock.clockRunning || matchClock.period === 'FT';
+    if (btnPause) btnPause.disabled = !matchClock.clockRunning;
+    if (btnEndHalf) btnEndHalf.disabled = matchClock.period === 'PRE_MATCH' || matchClock.period === 'HT' || matchClock.period === 'FT' || matchClock.period === 'ET_HT';
+    if (btnNextHalf) {
+      btnNextHalf.disabled = !(matchClock.period === 'HT' || matchClock.period === 'FT' || matchClock.period === 'ET_HT');
+      if (matchClock.period === 'HT') btnNextHalf.textContent = 'Start 2nd Half';
+      else if (matchClock.period === 'FT') btnNextHalf.textContent = 'Start Extra Time';
+      else if (matchClock.period === 'ET_HT') btnNextHalf.textContent = 'Start ET 2nd Half';
+      else btnNextHalf.textContent = 'Next Half';
+    }
+  }
+
+  // ---------- Elements ----------
+
+  const video = document.getElementById('video');
+  const videoEmpty = document.getElementById('videoEmpty');
+  const videoErrorMsg = document.getElementById('videoErrorMsg');
+  const videoDetachedMsg = document.getElementById('videoDetachedMsg');
+  const btnDetachVideo = document.getElementById('btnDetachVideo');
+  const btnReattachVideo = document.getElementById('btnReattachVideo');
+  const tally = document.getElementById('tally');
+
+  const btnOpenVideo = document.getElementById('btnOpenVideo');
+  const btnOpenVideoEmpty = document.getElementById('btnOpenVideoEmpty');
+  const btnLoadSession = document.getElementById('btnLoadSession');
+  const btnSaveSession = document.getElementById('btnSaveSession');
+  const btnExportCsv = document.getElementById('btnExportCsv');
+  const btnAddCustom = document.getElementById('btnAddCustom');
+
+  const btnPlayPause = document.getElementById('btnPlayPause');
+  const timecodeEl = document.getElementById('timecode');
+  const durationEl = document.getElementById('duration');
+  const scrub = document.getElementById('scrub');
+  const timelineStrip = document.getElementById('timelineStrip');
+  const timelineMarkersEl = document.getElementById('timelineMarkers');
+  const timelinePlayheadEl = document.getElementById('timelinePlayhead');
+  const speed = document.getElementById('speed');
+
+  const tagButtonsEl = document.getElementById('tagButtons');
+  const eventListEl = document.getElementById('eventList');
+  const eventCountEl = document.getElementById('eventCount');
+  const eventSearchInput = document.getElementById('eventSearchInput');
+  const eventTypeFilter = document.getElementById('eventTypeFilter');
+  const eventFilterCountEl = document.getElementById('eventFilterCount');
+  const tabEvents = document.getElementById('tabEvents');
+  const tabStats = document.getElementById('tabStats');
+  const statsPanelEl = document.getElementById('statsPanel');
+  const statsContentEl = document.getElementById('statsContent');
+  const btnUndo = document.getElementById('btnUndo');
+
+  const detailPanel = document.getElementById('detailPanel');
+
+  const addTagModal = document.getElementById('addTagModal');
+  const newTagName = document.getElementById('newTagName');
+  const newTagKey = document.getElementById('newTagKey');
+  const newTagSubtypes = document.getElementById('newTagSubtypes');
+  const newTagQualifiers = document.getElementById('newTagQualifiers');
+  const newTagIsInterval = document.getElementById('newTagIsInterval');
+  const btnCancelAddTag = document.getElementById('btnCancelAddTag');
+  const btnConfirmAddTag = document.getElementById('btnConfirmAddTag');
+
+  const btnExportClips = document.getElementById('btnExportClips');
+  const clipExportModal = document.getElementById('clipExportModal');
+  const clipPreRoll = document.getElementById('clipPreRoll');
+  const clipPostRoll = document.getElementById('clipPostRoll');
+  const btnCancelClipExport = document.getElementById('btnCancelClipExport');
+  const btnConfirmClipExport = document.getElementById('btnConfirmClipExport');
+
+  const btnManageSquad = document.getElementById('btnManageSquad');
+  const squadModal = document.getElementById('squadModal');
+  const squadListEl = document.getElementById('squadList');
+  const squadBulkInput = document.getElementById('squadBulkInput');
+  const btnAddSquadBulk = document.getElementById('btnAddSquadBulk');
+  const btnCloseSquadModal = document.getElementById('btnCloseSquadModal');
+
+  const btnMatchSetup = document.getElementById('btnMatchSetup');
+  const matchSetupModal = document.getElementById('matchSetupModal');
+  const matchSummaryEl = document.getElementById('matchSummary');
+  const matchCompetition = document.getElementById('matchCompetition');
+  const matchDate = document.getElementById('matchDate');
+  const matchOpponent = document.getElementById('matchOpponent');
+  const matchVenue = document.getElementById('matchVenue');
+  const matchHomeAway = document.getElementById('matchHomeAway');
+  const matchOurScore = document.getElementById('matchOurScore');
+  const matchOpponentScore = document.getElementById('matchOpponentScore');
+  const matchFormation = document.getElementById('matchFormation');
+  const lineupSlotsEl = document.getElementById('lineupSlots');
+  const btnCancelMatchSetup = document.getElementById('btnCancelMatchSetup');
+  const btnSaveMatchSetup = document.getElementById('btnSaveMatchSetup');
+
+  const btnPitchMap = document.getElementById('btnPitchMap');
+  const pitchMapModal = document.getElementById('pitchMapModal');
+  const pitchMapTagFilter = document.getElementById('pitchMapTagFilter');
+  const pitchMapPlayerFilter = document.getElementById('pitchMapPlayerFilter');
+  const pitchMapSideFilter = document.getElementById('pitchMapSideFilter');
+  const pitchMapSvg = document.getElementById('pitchMapSvg');
+  const pitchMapLegend = document.getElementById('pitchMapLegend');
+  const pitchMapCount = document.getElementById('pitchMapCount');
+  const btnClosePitchMap = document.getElementById('btnClosePitchMap');
+
+  const btnSeasonView = document.getElementById('btnSeasonView');
+  const seasonModal = document.getElementById('seasonModal');
+  const btnCloseSeasonModal = document.getElementById('btnCloseSeasonModal');
+  const btnAddSeasonMatches = document.getElementById('btnAddSeasonMatches');
+  const seasonMatchListEl = document.getElementById('seasonMatchList');
+  const seasonStatsContentEl = document.getElementById('seasonStatsContent');
+  const btnExportSeasonCsv = document.getElementById('btnExportSeasonCsv');
+
+  // Recovery modal + autosave toast elements
+  const recoveryModal = document.getElementById('recoveryModal');
+  const recoveryDetails = document.getElementById('recoveryDetails');
+  const btnRecoverAutosave = document.getElementById('btnRecoverAutosave');
+  const btnDiscardRecovery = document.getElementById('btnDiscardRecovery');
+  const autosaveToast = document.getElementById('autosaveToast');
+  const autosaveToastText = document.getElementById('autosaveToastText');
+  const autosaveToastClose = document.getElementById('autosaveToastClose');
+
+  // Dirty-state indicator + unsaved-changes confirm modal
+  const dirtyIndicator = document.getElementById('dirtyIndicator');
+  const dirtyDot = dirtyIndicator ? dirtyIndicator.querySelector('.dirty-dot') : null;
+  const dirtyLabel = dirtyIndicator ? dirtyIndicator.querySelector('.dirty-label') : null;
+  const unsavedConfirmModal = document.getElementById('unsavedConfirmModal');
+  const btnUnsavedSave = document.getElementById('btnUnsavedSave');
+  const btnUnsavedDiscard = document.getElementById('btnUnsavedDiscard');
+  const btnUnsavedCancel = document.getElementById('btnUnsavedCancel');
+
+  // ---------- Squad roster (persists across matches, separate from tags/events) ----------
+
+  let squad = []; // { id, number, name }
+  let nextPlayerId = 1;
+
+  // persistSquad(): writes the squad to disk via the main process and
+  // surfaces failures via the autosave toast (reused for squad errors).
+  async function persistSquad() {
+    const ok = await window.matchtag.saveSquad(squad);
+    if (!ok) {
+      showAutosaveToast('Could not save the squad roster. Check disk space and file permissions.');
+    }
+    return ok;
+  }
+
+  function renderSquadList() {
+    if (squad.length === 0) {
+      squadListEl.innerHTML = '<div class="squad-empty-note">No players added yet — use the box below.</div>';
+      return;
+    }
+    squadListEl.innerHTML = '';
+    squad.forEach((p) => {
+      const chip = document.createElement('div');
+      chip.className = 'squad-chip';
+      chip.innerHTML = `
+        ${p.number ? `<span class="squad-number">${escapeHtml(p.number)}</span>` : ''}
+        <span>${escapeHtml(p.name)}</span>
+        <button class="squad-chip-remove" title="Remove">✕</button>
+      `;
+      chip.querySelector('.squad-chip-remove').addEventListener('click', async () => {
+        squad = squad.filter((x) => x.id !== p.id);
+        renderSquadList();
+        await persistSquad();
+        markAutosaveDirty();
+      });
+      squadListEl.appendChild(chip);
+    });
+  }
+
+  function openSquadModal() {
+    renderSquadList();
+    squadBulkInput.value = '';
+    squadModal.style.display = 'flex';
+  }
+
+  function closeSquadModal() {
+    squadModal.style.display = 'none';
+  }
+
+  btnManageSquad.addEventListener('click', openSquadModal);
+  btnCloseSquadModal.addEventListener('click', closeSquadModal);
+
+  btnAddSquadBulk.addEventListener('click', async () => {
+    const lines = squadBulkInput.value.split('\n').map((l) => l.trim()).filter(Boolean);
+    lines.forEach((line) => {
+      const commaIdx = line.indexOf(',');
+      let number = '';
+      let name = line;
+      if (commaIdx !== -1) {
+        number = line.slice(0, commaIdx).trim();
+        name = line.slice(commaIdx + 1).trim();
+      }
+      if (!name) return;
+      squad.push({ id: `player_${nextPlayerId++}`, number, name });
+    });
+    squadBulkInput.value = '';
+    renderSquadList();
+    await persistSquad();
+    markAutosaveDirty();
+  });
+
+  // ---------- Match setup (metadata + formation/starting XI) ----------
+
+  const FORMATIONS = {
+    '4-4-2': ['GK', 'RB', 'CB', 'CB', 'LB', 'RM', 'CM', 'CM', 'LM', 'ST', 'ST'],
+    '4-3-3': ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CM', 'CM', 'RW', 'ST', 'LW'],
+    '4-2-3-1': ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'CDM', 'CAM', 'RW', 'LW', 'ST'],
+    '3-5-2': ['GK', 'CB', 'CB', 'CB', 'RWB', 'CM', 'CM', 'CM', 'LWB', 'ST', 'ST'],
+    '3-4-3': ['GK', 'CB', 'CB', 'CB', 'RM', 'CM', 'CM', 'LM', 'RW', 'ST', 'LW'],
+    '5-3-2': ['GK', 'RWB', 'CB', 'CB', 'CB', 'LWB', 'CM', 'CM', 'CM', 'ST', 'ST'],
+    '4-1-4-1': ['GK', 'RB', 'CB', 'CB', 'LB', 'CDM', 'RM', 'CM', 'CM', 'LM', 'ST']
+  };
+
+  function blankMatchInfo() {
+    return {
+      competition: '', date: '', opponent: '', venue: '', homeAway: 'home',
+      ourScore: '', opponentScore: '', formation: '', startingXI: []
+    };
+  }
+
+  let matchInfo = blankMatchInfo();
+
+  function renderMatchSummary() {
+    const parts = [];
+    if (matchInfo.opponent) parts.push(`vs ${matchInfo.opponent}`);
+    if (matchInfo.homeAway) {
+      parts.push(matchInfo.homeAway === 'home' ? 'Home' : matchInfo.homeAway === 'away' ? 'Away' : 'Neutral');
+    }
+    if (matchInfo.ourScore !== '' && matchInfo.opponentScore !== '' && matchInfo.ourScore != null && matchInfo.opponentScore != null) {
+      parts.push(`${matchInfo.ourScore}–${matchInfo.opponentScore}`);
+    }
+    if (matchInfo.date) parts.push(matchInfo.date);
+    if (matchInfo.formation) parts.push(matchInfo.formation);
+    matchSummaryEl.textContent = parts.join(' · ');
+    renderScoreboard();
+  }
+
+  function renderScoreboard() {
+    const scoreEl = document.getElementById('scoreboardDisplay');
+    const stateEl = document.getElementById('scoreStateDisplay');
+    if (scoreEl) scoreEl.textContent = `${matchClock.scoreFor} — ${matchClock.scoreAgainst}`;
+    if (stateEl) {
+      let state = 'draw';
+      if (matchClock.scoreFor > matchClock.scoreAgainst) state = 'winning';
+      else if (matchClock.scoreFor < matchClock.scoreAgainst) state = 'losing';
+      stateEl.textContent = state.toUpperCase();
+      stateEl.className = 'score-state ' + state;
+    }
+  }
+
+  function renderLineupSlots(forceReset) {
+    const formation = matchFormation.value;
+    const positions = FORMATIONS[formation] || [];
+
+    if (!positions.length) {
+      lineupSlotsEl.innerHTML = '<div class="detail-empty-note">Choose a formation to set the starting XI.</div>';
+      matchInfo.startingXI = [];
+      return;
+    }
+
+    if (forceReset || matchInfo.startingXI.length !== positions.length) {
+      matchInfo.startingXI = positions.map((pos) => ({ position: pos, playerId: '' }));
+    }
+
+    const squadOptions = squad.map((p) => {
+      const label = p.number ? `${p.number} ${p.name}` : p.name;
+      return `<option value="${escapeHtml(p.id)}">${escapeHtml(label)}</option>`;
+    }).join('');
+
+    lineupSlotsEl.innerHTML = matchInfo.startingXI.map((slot, i) => `
+      <div class="lineup-slot">
+        <span class="lineup-position">${escapeHtml(slot.position)}</span>
+        <select class="lineup-player-select" data-slot-index="${i}">
+          <option value="">— Select player —</option>
+          ${squadOptions}
+        </select>
+      </div>
+    `).join('');
+
+    matchInfo.startingXI.forEach((slot, i) => {
+      const sel = lineupSlotsEl.querySelector(`select[data-slot-index="${i}"]`);
+      if (sel) sel.value = slot.playerId || '';
+    });
+
+    lineupSlotsEl.querySelectorAll('.lineup-player-select').forEach((sel) => {
+      sel.addEventListener('change', () => {
+        const idx = Number(sel.dataset.slotIndex);
+        matchInfo.startingXI[idx].playerId = sel.value;
+        markAutosaveDirty();
+      });
+    });
+  }
+
+  function openMatchSetupModal() {
+    matchCompetition.value = matchInfo.competition || '';
+    matchDate.value = matchInfo.date || '';
+    matchOpponent.value = matchInfo.opponent || '';
+    matchVenue.value = matchInfo.venue || '';
+    matchHomeAway.value = matchInfo.homeAway || 'home';
+    matchOurScore.value = matchInfo.ourScore ?? '';
+    matchOpponentScore.value = matchInfo.opponentScore ?? '';
+    matchFormation.value = matchInfo.formation || '';
+    renderLineupSlots(false);
+    matchSetupModal.style.display = 'flex';
+  }
+
+  function closeMatchSetupModal() {
+    matchSetupModal.style.display = 'none';
+  }
+
+  btnMatchSetup.addEventListener('click', openMatchSetupModal);
+  btnCancelMatchSetup.addEventListener('click', closeMatchSetupModal);
+  matchFormation.addEventListener('change', () => {
+    renderLineupSlots(true);
+    markAutosaveDirty();
+  });
+
+  btnSaveMatchSetup.addEventListener('click', () => {
+    matchInfo.competition = matchCompetition.value.trim();
+    matchInfo.date = matchDate.value;
+    matchInfo.opponent = matchOpponent.value.trim();
+    matchInfo.venue = matchVenue.value.trim();
+    matchInfo.homeAway = matchHomeAway.value;
+    matchInfo.ourScore = matchOurScore.value;
+    matchInfo.opponentScore = matchOpponentScore.value;
+    matchInfo.formation = matchFormation.value;
+    renderMatchSummary();
+    renderEventList(); // player labels may now show updated starting-XI positions
+    closeMatchSetupModal();
+    markAutosaveDirty();
+  });
+
+  // ---------- Time formatting ----------
+
+  function formatTimecode(totalSeconds, withTenths) {
+    const s = Math.max(0, totalSeconds || 0);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = Math.floor(s % 60);
+    const pad = (n) => String(n).padStart(2, '0');
+    let out = `${pad(h)}:${pad(m)}:${pad(sec)}`;
+    if (withTenths) {
+      const tenths = Math.floor((s % 1) * 10);
+      out += `.${tenths}`;
+    }
+    return out;
+  }
+
+  // ---------- Video loading ----------
+
+  let currentVideoUrl = null;
+  let isDetached = false;
+  let remoteState = { currentTime: 0, duration: 0, paused: true, playbackRate: 1 };
+
+  async function openVideo() {
+    const result = await window.matchtag.openVideo();
+    if (!result) return;
+    loadVideoFromPath(result.path, result.url);
+  }
+
+  function loadVideoFromPath(filePath, fileUrl) {
+    currentVideoPath = filePath;
+    currentVideoUrl = fileUrl;
+    videoErrorMsg.style.display = 'none';
+    videoDetachedMsg.style.display = 'none';
+    video.src = fileUrl;
+    videoEmpty.style.display = 'none';
+    video.style.display = 'block';
+    btnPlayPause.disabled = false;
+    scrub.disabled = false;
+    speed.disabled = false;
+    btnDetachVideo.disabled = false;
+    markAutosaveDirty();
+  }
+
+  // A single source of truth for "what time is it right now" and "how long is
+  // the video", regardless of whether the video is playing locally or in the
+  // detached window. Tagging, seeking, and the transport bar all go through
+  // these instead of touching video.currentTime/video.duration directly.
+  function getCurrentTime() {
+    return isDetached ? remoteState.currentTime : video.currentTime;
+  }
+
+  function getDuration() {
+    return isDetached ? remoteState.duration : video.duration;
+  }
+
+  function seekTo(time) {
+    if (isDetached) {
+      remoteState.currentTime = time; // optimistic, so the UI feels instant
+      window.matchtag.sendVideoCommand({ type: 'seek', value: time });
+    } else {
+      video.currentTime = time;
+    }
+  }
+
+  // ---------- Timeline strip (event markers + playhead) ----------
+
+  function renderTimelineStrip() {
+    const duration = getDuration();
+    if (!duration || !isFinite(duration) || duration <= 0) {
+      timelineMarkersEl.innerHTML = '';
+      return;
+    }
+
+    const marks = events.map((ev) => {
+      const color = eventDotColor(ev);
+      const label = `${ev.label} · ${formatTimecode(ev.time, true)}`;
+      if (ev.isInterval) {
+        const startPct = (ev.startTime / duration) * 100;
+        const endPct = (ev.endTime / duration) * 100;
+        const widthPct = Math.max(0.3, endPct - startPct);
+        return `<div class="timeline-mark timeline-mark-interval" style="left:${startPct}%; width:${widthPct}%; background:${color};" data-time="${ev.time}" title="${escapeHtml(label)}"></div>`;
+      }
+      const pct = (ev.time / duration) * 100;
+      return `<div class="timeline-mark" style="left:${pct}%; background:${color};" data-time="${ev.time}" title="${escapeHtml(label)}"></div>`;
+    }).join('');
+
+    timelineMarkersEl.innerHTML = marks;
+    timelineMarkersEl.querySelectorAll('.timeline-mark').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        seekTo(parseFloat(el.dataset.time));
+      });
+    });
+  }
+
+  function updateTimelinePlayhead() {
+    const duration = getDuration();
+    const current = getCurrentTime();
+    if (!duration || !isFinite(duration) || duration <= 0) {
+      timelinePlayheadEl.style.left = '0%';
+      return;
+    }
+    const pct = Math.min(100, Math.max(0, (current / duration) * 100));
+    timelinePlayheadEl.style.left = pct + '%';
+  }
+
+  timelineStrip.addEventListener('click', (e) => {
+    if (!currentVideoPath) return;
+    const duration = getDuration();
+    if (!duration || !isFinite(duration)) return;
+    const rect = timelineStrip.getBoundingClientRect();
+    const fraction = (e.clientX - rect.left) / rect.width;
+    seekTo(Math.min(duration, Math.max(0, fraction * duration)));
+  });
+
+  video.addEventListener('loadedmetadata', () => {
+    scrub.max = Math.floor(video.duration * 10);
+    durationEl.textContent = formatTimecode(video.duration, false);
+    renderTimelineStrip();
+    updateTimelinePlayhead();
+  });
+
+  video.addEventListener('timeupdate', () => {
+    if (!scrubbing) {
+      scrub.value = Math.floor(video.currentTime * 10);
+    }
+    timecodeEl.textContent = formatTimecode(video.currentTime, true);
+    updateTimelinePlayhead();
+  });
+
+  video.addEventListener('play', () => tally.classList.add('live'));
+  video.addEventListener('pause', () => tally.classList.remove('live'));
+
+  video.addEventListener('error', () => {
+    const err = video.error;
+    const messages = {
+      1: 'Loading was aborted.',
+      2: 'A network or file-access error occurred while loading this video.',
+      3: 'The video file could not be decoded (unsupported codec).',
+      4: 'This video format is not supported.'
+    };
+    const message = err ? (messages[err.code] || 'Could not load this video.') : 'Could not load this video.';
+    // Build the error UI: message text + a "Find video" button that lets the
+    // analyst re-link to the video file if it was moved or renamed.
+    const showRelink = !!currentVideoPath;
+    videoErrorMsg.innerHTML = `
+      <p>${escapeHtml(message)}</p>
+      ${showRelink ? '<button id="btnRelinkVideo" class="btn btn-accent">Find video</button>' : ''}
+      <p class="video-error-hint">The video file may have been moved or renamed. Click "Find video" to locate it — your tagged events will be preserved.</p>
+    `;
+    videoErrorMsg.style.display = 'flex';
+    video.style.display = 'none';
+    btnPlayPause.disabled = true;
+    scrub.disabled = true;
+    btnDetachVideo.disabled = true;
+    const btnRelink = document.getElementById('btnRelinkVideo');
+    if (btnRelink) {
+      btnRelink.addEventListener('click', relinkVideo);
+    }
+  });
+
+  // relinkVideo(): let the analyst pick a new location for the video file
+  // when the original path is missing or broken. Preserves all tagged events.
+  async function relinkVideo() {
+    const result = await window.matchtag.openVideo();
+    if (!result) return;
+    loadVideoFromPath(result.path, result.url);
+  }
+
+  // ---------- Detach / reattach video ----------
+
+  btnDetachVideo.addEventListener('click', async () => {
+    if (!currentVideoPath || isDetached) return;
+
+    const state = {
+      url: currentVideoUrl,
+      currentTime: video.currentTime,
+      paused: video.paused,
+      playbackRate: video.playbackRate
+    };
+    const ok = await window.matchtag.detachVideo(state);
+    if (!ok) return;
+
+    remoteState = state;
+    isDetached = true;
+    btnDetachVideo.disabled = true;
+
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    video.style.display = 'none';
+    videoDetachedMsg.style.display = 'flex';
+  });
+
+  btnReattachVideo.addEventListener('click', () => {
+    window.matchtag.reattachVideo();
+    // The actual UI reattachment happens in onVideoClosed below, which fires
+    // once the detached window actually closes - the same path used whether
+    // the user clicks this button or just closes that window directly.
+  });
+
+  function reattachLocally() {
+    if (!isDetached) return;
+    isDetached = false;
+    btnDetachVideo.disabled = false;
+
+    const restoreState = remoteState;
+    videoDetachedMsg.style.display = 'none';
+    video.style.display = 'block';
+    video.src = currentVideoUrl;
+
+    const applyRestoredState = () => {
+      video.currentTime = restoreState.currentTime || 0;
+      video.playbackRate = restoreState.playbackRate || 1;
+      if (!restoreState.paused) video.play();
+      video.removeEventListener('loadedmetadata', applyRestoredState);
+    };
+    video.addEventListener('loadedmetadata', applyRestoredState);
+  }
+
+  window.matchtag.onVideoState((state) => {
+    const durationJustLearned = !remoteState.duration && state.duration;
+    remoteState = state;
+    if (!isDetached) return;
+    if (state.duration) {
+      scrub.max = Math.floor(state.duration * 10);
+      durationEl.textContent = formatTimecode(state.duration, false);
+    }
+    if (!scrubbing) scrub.value = Math.floor(state.currentTime * 10);
+    timecodeEl.textContent = formatTimecode(state.currentTime, true);
+    btnPlayPause.textContent = state.paused ? '▶' : '⏸';
+    tally.classList.toggle('live', !state.paused);
+    updateTimelinePlayhead();
+    if (durationJustLearned) renderTimelineStrip();
+  });
+
+  window.matchtag.onVideoClosed(() => {
+    reattachLocally();
+  });
+
+  // ---------- Transport controls ----------
+
+  let scrubbing = false;
+
+  btnPlayPause.addEventListener('click', () => {
+    if (isDetached) {
+      window.matchtag.sendVideoCommand({ type: remoteState.paused ? 'play' : 'pause' });
+      return;
+    }
+    if (video.paused) {
+      video.play();
+      btnPlayPause.textContent = '⏸';
+    } else {
+      video.pause();
+      btnPlayPause.textContent = '▶';
+    }
+  });
+
+  scrub.addEventListener('input', () => {
+    scrubbing = true;
+    const t = Number(scrub.value) / 10;
+    timecodeEl.textContent = formatTimecode(t, true);
+  });
+
+  scrub.addEventListener('change', () => {
+    seekTo(Number(scrub.value) / 10);
+    scrubbing = false;
+  });
+
+  speed.addEventListener('change', () => {
+    const rate = Number(speed.value);
+    if (isDetached) {
+      window.matchtag.sendVideoCommand({ type: 'setRate', value: rate });
+    } else {
+      video.playbackRate = rate;
+    }
+  });
+
+  // ---------- Tag buttons ----------
+
+  let activeIntervals = {}; // tag.label -> { startTime }
+
+  function tagHasDetails(tag) {
+    return Boolean((tag.subtypes && tag.subtypes.length) || (tag.qualifierGroups && tag.qualifierGroups.length) || tag.substitution);
+  }
+
+  function isRecordingInterval(tag) {
+    return Object.prototype.hasOwnProperty.call(activeIntervals, tag.label);
+  }
+
+  function renderTagButtons() {
+    tagButtonsEl.innerHTML = '';
+    tags.forEach((tag) => {
+      const recording = tag.interval && isRecordingInterval(tag);
+      const btn = document.createElement('button');
+      btn.className = 'tag-btn' + (recording ? ' tag-btn-recording' : '');
+      btn.innerHTML = `
+        <span>${escapeHtml(tag.label)}${tag.interval ? ' ⏱' : ''}</span>
+        <span class="key">${escapeHtml(tag.key)}</span>
+        ${recording ? '<span class="tag-recording-label">Recording…</span>' : ''}
+        ${tagHasDetails(tag) ? '<span class="tag-detail-dot" title="Has extra detail options"></span>' : ''}
+      `;
+      btn.addEventListener('click', () => handleTagPress(tag));
+      tagButtonsEl.appendChild(btn);
+    });
+  }
+
+  function handleTagPress(tag) {
+    // Tagging no longer requires a video. The match clock provides the timestamp.
+    if (tag.interval) {
+      if (isRecordingInterval(tag)) { finishInterval(tag); }
+      else { startInterval(tag); }
+    } else {
+      logEvent(tag);
+    }
+  }
+
+  function startInterval(tag) {
+    activeIntervals[tag.label] = { startTime: getCurrentTime() };
+    renderTagButtons();
+  }
+
+  // buildEventTimestamps(): creates the match-time fields for an event.
+  function buildEventTimestamps() {
+    // videoTime is null when no video is loaded OR when the video failed to load
+    // (video.readyState === 0 means no data has loaded, which happens when the
+    // video file is missing/corrupt). This prevents storing videoTime=0 for
+    // events tagged while a broken video path is set.
+    const videoLoaded = currentVideoPath && video.readyState >= 2;
+    const videoTime = videoLoaded ? getCurrentTime() : null;
+    const matchSeconds = getCurrentMatchSeconds();
+    const period = matchClock.period;
+    return {
+      videoTime: videoTime,
+      matchTime: matchSeconds,
+      matchSeconds: Math.floor(matchSeconds),
+      officialMinute: formatOfficialMinute(matchSeconds, period),
+      second: Math.floor(matchSeconds) % 60,
+      period: period
+    };
+  }
+
+  // buildEventBase(tag): creates the common event fields shared by instant
+  // and interval events. Includes the v3 match-time fields plus the legacy
+  // `time` field (aliased to matchTime) for backward compatibility.
+  function buildEventBase(tag) {
+    const ts = buildEventTimestamps();
+    return {
+      id: nextEventId++,
+      time: ts.matchTime,          // legacy alias for matchTime
+      videoTime: ts.videoTime,
+      matchTime: ts.matchTime,
+      matchSeconds: ts.matchSeconds,
+      officialMinute: ts.officialMinute,
+      second: ts.second,
+      period: ts.period,
+      label: tag.label,
+      subtype: null,
+      qualifiers: {},
+      location: null,
+      playerId: matchClock.selectedPlayerId || null,
+      playerOffId: null,
+      playerOnId: null,
+      side: matchClock.selectedTeam === 'our' ? 'for' : matchClock.selectedTeam === 'opponent' ? 'against' : null,
+      team: matchClock.selectedTeam,
+      sequenceId: matchClock.activeSequenceId || null,
+      scoreForBefore: matchClock.scoreFor,
+      scoreAgainstBefore: matchClock.scoreAgainst
+    };
+  }
+
+  function finishInterval(tag) {
+    const active = activeIntervals[tag.label];
+    if (!active) return;
+    delete activeIntervals[tag.label];
+
+    const currentTime = getCurrentTime();
+    const startTime = Math.min(active.startTime, currentTime);
+    const endTime = Math.max(active.startTime, currentTime);
+    const event = Object.assign(buildEventBase(tag), {
+      time: startTime, isInterval: true, startTime, endTime, matchTime: startTime
+    });
+    events.push(event);
+    events.sort((a, b) => a.time - b.time);
+    lastLoggedEventId = event.id;
+    updateUndoButton();
+    renderTagButtons();
+    renderEventList();
+    openDetailPanel(tag, event);
+    markAutosaveDirty();
+  }
+
+  function logEvent(tag) {
+    const event = buildEventBase(tag);
+    // For goal events, update the live score
+    if (tag.label === 'Goal' || tag.label === 'GOAL') {
+      if (matchClock.selectedTeam === 'our') {
+        event.scoreForBefore = matchClock.scoreFor;
+        event.scoreAgainstBefore = matchClock.scoreAgainst;
+        matchClock.scoreFor++;
+        event.scoreForAfter = matchClock.scoreFor;
+        event.scoreAgainstAfter = matchClock.scoreAgainst;
+      } else if (matchClock.selectedTeam === 'opponent') {
+        event.scoreForBefore = matchClock.scoreFor;
+        event.scoreAgainstBefore = matchClock.scoreAgainst;
+        matchClock.scoreAgainst++;
+        event.scoreForAfter = matchClock.scoreFor;
+        event.scoreAgainstAfter = matchClock.scoreAgainst;
+      }
+      renderScoreboard();
+    }
+    events.push(event);
+    events.sort((a, b) => a.time - b.time);
+    lastLoggedEventId = event.id;
+    updateUndoButton();
+    renderEventList();
+    openDetailPanel(tag, event);
+    markAutosaveDirty();
+  }
+
+  let lastLoggedEventId = null;
+
+  function updateUndoButton() {
+    btnUndo.disabled = lastLoggedEventId == null || !events.some((e) => e.id === lastLoggedEventId);
+  }
+
+  function undoLastTag() {
+    if (lastLoggedEventId == null) return;
+    if (activeDetailEvent && activeDetailEvent.id === lastLoggedEventId) closeDetailPanel();
+    events = events.filter((e) => e.id !== lastLoggedEventId);
+    lastLoggedEventId = null;
+    updateUndoButton();
+    renderEventList();
+    markAutosaveDirty();
+  }
+
+  btnUndo.addEventListener('click', undoLastTag);
+
+  // ---------- Detail panel (subtypes, qualifiers & pitch location) ----------
+
+  let activeDetailTag = null;
+  let activeDetailEvent = null;
+
+  const PITCH_THIRDS = ['Defensive third', 'Middle third', 'Attacking third'];
+  const PITCH_CHANNELS = ['Left channel', 'Central channel', 'Right channel'];
+
+  function clamp01(n) {
+    return Math.min(1, Math.max(0, n));
+  }
+
+  function locationZone(x, y) {
+    const tIdx = Math.min(2, Math.floor(x * 3));
+    const cIdx = Math.min(2, Math.floor(y * 3));
+    return `${PITCH_THIRDS[tIdx]} · ${PITCH_CHANNELS[cIdx]}`;
+  }
+
+  function openDetailPanel(tag, event) {
+    activeDetailTag = tag;
+    activeDetailEvent = event;
+    renderDetailPanel();
+    detailPanel.style.display = 'block';
+  }
+
+  function closeDetailPanel() {
+    detailPanel.style.display = 'none';
+    activeDetailTag = null;
+    activeDetailEvent = null;
+  }
+
+  function pitchMarkingsSvg() {
+    return `
+      <rect x="4" y="4" width="692" height="442" class="pitch-outline" rx="3" />
+      <line x1="350" y1="4" x2="350" y2="446" class="pitch-line" />
+      <circle cx="350" cy="225" r="55" class="pitch-line" />
+      <circle cx="350" cy="225" r="3" class="pitch-spot" />
+      <rect x="4" y="115" width="110" height="220" class="pitch-line" />
+      <rect x="4" y="170" width="45" height="110" class="pitch-line" />
+      <circle cx="96" cy="225" r="3" class="pitch-spot" />
+      <path d="M 114 180 A 55 55 0 0 1 114 270" class="pitch-line" />
+      <rect x="586" y="115" width="110" height="220" class="pitch-line" />
+      <rect x="651" y="170" width="45" height="110" class="pitch-line" />
+      <circle cx="604" cy="225" r="3" class="pitch-spot" />
+      <path d="M 586 180 A 55 55 0 0 0 586 270" class="pitch-line" />
+    `;
+  }
+
+  function pitchSvgMarkup(ev) {
+    const marker = ev.location
+      ? `<circle class="pitch-marker" cx="${ev.location.x * 700}" cy="${ev.location.y * 450}" r="8"/>`
+      : '';
+    return `
+      <svg class="pitch-svg" id="pitchSvg" viewBox="0 0 700 450" preserveAspectRatio="xMidYMid meet">
+        ${pitchMarkingsSvg()}
+        ${marker}
+      </svg>
+      <div class="pitch-readout">
+        ${ev.location
+          ? `<span class="pitch-zone-text">${escapeHtml(locationZone(ev.location.x, ev.location.y))}</span>
+             <button class="chip pitch-clear-btn" id="clearLocation">Clear</button>`
+          : '<span class="pitch-zone-text placeholder">Click the pitch to set a location</span>'}
+      </div>
+    `;
+  }
+
+  function playerChipLabel(p) {
+    const starterEntry = (matchInfo.startingXI || []).find((s) => s.playerId === p.id);
+    const posSuffix = starterEntry ? ` (${starterEntry.position})` : '';
+    return (p.number ? `${p.number} ${p.name}` : p.name) + posSuffix;
+  }
+
+  // resolvePlayer(playerId): look up a player in the current squad by ID.
+  // Returns the player object { id, number, name } or null if not found.
+  // This is the core of the Phase 1E reference-by-ID change: events store
+  // only the playerId string, and the renderer resolves it to the current
+  // squad entry at display time. If the player was deleted from the squad,
+  // this returns null and the caller shows "Unknown player".
+  function resolvePlayer(playerId) {
+    if (!playerId || typeof playerId !== 'string') return null;
+    return squad.find((p) => p.id === playerId) || null;
+  }
+
+  function squadChipsMarkup(ev, kind, selectedField) {
+    if (squad.length === 0) {
+      return '<span class="detail-empty-note">No players added — use "Manage squad" in the top bar.</span>';
+    }
+    const starterIds = new Set((matchInfo.startingXI || []).map((s) => s.playerId).filter(Boolean));
+    const starters = squad.filter((p) => starterIds.has(p.id));
+    const bench = squad.filter((p) => !starterIds.has(p.id));
+    // selectedField is now 'playerId', 'playerOffId', or 'playerOnId'
+    // (a plain string, not a snapshot object)
+    const selectedId = ev[selectedField];
+
+    function chipsFor(list) {
+      return list.map((p) => {
+        const isSel = selectedId && selectedId === p.id ? ' selected' : '';
+        return `<button class="chip${isSel}" data-kind="${kind}" data-player-id="${escapeHtml(p.id)}">${escapeHtml(playerChipLabel(p))}</button>`;
+      }).join('');
+    }
+
+    let html = '';
+    if (starters.length) {
+      html += `<div class="detail-subgroup-label">Starting XI</div><div class="detail-chips">${chipsFor(starters)}</div>`;
+    }
+    if (bench.length) {
+      html += `<div class="detail-subgroup-label">${starters.length ? 'Bench' : 'Squad'}</div><div class="detail-chips">${chipsFor(bench)}</div>`;
+    }
+    return html;
+  }
+
+  function playerSectionMarkup(ev) {
+    return squadChipsMarkup(ev, 'player', 'playerId');
+  }
+
+  function sideSectionMarkup(ev) {
+    const options = [
+      { value: 'for', label: 'For' },
+      { value: 'against', label: 'Against' },
+      { value: 'neutral', label: 'Neutral' }
+    ];
+    const chips = options.map((o) => {
+      const selected = ev.side === o.value ? ' selected' : '';
+      return `<button class="chip${selected}" data-kind="side" data-value="${o.value}">${o.label}</button>`;
+    }).join('');
+    return `<div class="detail-chips">${chips}</div>`;
+  }
+
+  function timingControlsMarkup(ev) {
+    return `
+      <div class="timing-controls">
+        <button class="btn btn-ghost timing-btn" data-nudge="-1">-1s</button>
+        <button class="btn btn-ghost timing-btn" data-nudge="-0.1">-0.1s</button>
+        <span class="timing-current">${formatTimecode(ev.time, true)}</span>
+        <button class="btn btn-ghost timing-btn" data-nudge="0.1">+0.1s</button>
+        <button class="btn btn-ghost timing-btn" data-nudge="1">+1s</button>
+      </div>
+      <button class="btn btn-ghost btn-set-playhead" id="setToPlayhead">Use current playhead position</button>
+    `;
+  }
+
+  function intervalTimingControlsMarkup(ev) {
+    const duration = (ev.endTime - ev.startTime).toFixed(1);
+    return `
+      <div class="timing-bound-label">Start</div>
+      <div class="timing-controls">
+        <button class="btn btn-ghost timing-btn" data-bound="start" data-nudge="-1">-1s</button>
+        <button class="btn btn-ghost timing-btn" data-bound="start" data-nudge="-0.1">-0.1s</button>
+        <span class="timing-current">${formatTimecode(ev.startTime, true)}</span>
+        <button class="btn btn-ghost timing-btn" data-bound="start" data-nudge="0.1">+0.1s</button>
+        <button class="btn btn-ghost timing-btn" data-bound="start" data-nudge="1">+1s</button>
+      </div>
+      <button class="btn btn-ghost btn-set-playhead" id="setStartPlayhead">Set start to current playhead</button>
+
+      <div class="timing-bound-label">End</div>
+      <div class="timing-controls">
+        <button class="btn btn-ghost timing-btn" data-bound="end" data-nudge="-1">-1s</button>
+        <button class="btn btn-ghost timing-btn" data-bound="end" data-nudge="-0.1">-0.1s</button>
+        <span class="timing-current">${formatTimecode(ev.endTime, true)}</span>
+        <button class="btn btn-ghost timing-btn" data-bound="end" data-nudge="0.1">+0.1s</button>
+        <button class="btn btn-ghost timing-btn" data-bound="end" data-nudge="1">+1s</button>
+      </div>
+      <button class="btn btn-ghost btn-set-playhead" id="setEndPlayhead">Set end to current playhead</button>
+
+      <div class="timing-duration">Duration: ${duration}s</div>
+    `;
+  }
+
+  // ---------- Aggregate pitch map ----------
+
+  const PITCH_MAP_PALETTE = ['#e8b93b', '#4f8fdb', '#e08a3c', '#3ba8a0', '#8a6fd1', '#d84b4b', '#6fcf6f', '#e07ec0'];
+
+  function eventDotColor(ev) {
+    if (ev.label === 'Card') {
+      if (ev.subtype === 'Yellow') return '#e8c93b';
+      if (ev.subtype === 'Red') return '#d84b4b';
+    }
+    const idx = tags.findIndex((t) => t.label === ev.label);
+    return PITCH_MAP_PALETTE[(idx === -1 ? 0 : idx) % PITCH_MAP_PALETTE.length];
+  }
+
+  function eventDotLegendLabel(ev) {
+    if (ev.label === 'Card' && (ev.subtype === 'Yellow' || ev.subtype === 'Red')) {
+      return `${ev.subtype} card`;
+    }
+    return ev.label;
+  }
+
+  function populatePitchMapFilters() {
+    const tagOptions = ['<option value="__all__">All events</option>']
+      .concat(tags.map((t) => `<option value="${escapeHtml(t.label)}">${escapeHtml(t.label)}</option>`));
+    pitchMapTagFilter.innerHTML = tagOptions.join('');
+
+    const playerOptions = [
+      '<option value="__all__">All players</option>',
+      '<option value="__none__">No player set</option>'
+    ].concat(squad.map((p) => {
+      const label = p.number ? `${p.number} ${p.name}` : p.name;
+      return `<option value="${escapeHtml(p.id)}">${escapeHtml(label)}</option>`;
+    }));
+    pitchMapPlayerFilter.innerHTML = playerOptions.join('');
+  }
+
+  function renderPitchMap() {
+    const tagFilterValue = pitchMapTagFilter.value || '__all__';
+    const playerFilterValue = pitchMapPlayerFilter.value || '__all__';
+    const sideFilterValue = pitchMapSideFilter.value || '__all__';
+
+    let filtered = events.filter((ev) => ev.location);
+    if (tagFilterValue !== '__all__') {
+      filtered = filtered.filter((ev) => ev.label === tagFilterValue);
+    }
+    if (playerFilterValue === '__none__') {
+      filtered = filtered.filter((ev) => !ev.playerId);
+    } else if (playerFilterValue !== '__all__') {
+      filtered = filtered.filter((ev) => ev.playerId === playerFilterValue);
+    }
+    if (sideFilterValue !== '__all__') {
+      filtered = filtered.filter((ev) => ev.side === sideFilterValue);
+    }
+
+    const dots = filtered.map((ev) => {
+      const color = eventDotColor(ev);
+      const cx = (ev.location.x * 700).toFixed(1);
+      const cy = (ev.location.y * 450).toFixed(1);
+      return `<circle class="pitch-map-dot" cx="${cx}" cy="${cy}" r="7" style="fill:${color};" />`;
+    }).join('');
+
+    pitchMapSvg.innerHTML = pitchMarkingsSvg() + dots;
+
+    const seen = new Map();
+    filtered.forEach((ev) => {
+      const label = eventDotLegendLabel(ev);
+      if (!seen.has(label)) seen.set(label, eventDotColor(ev));
+    });
+
+    if (seen.size > 1) {
+      pitchMapLegend.innerHTML = Array.from(seen.entries())
+        .map(([label, color]) => `<span class="legend-item"><span class="legend-dot" style="background:${color};"></span>${escapeHtml(label)}</span>`)
+        .join('');
+      pitchMapLegend.style.display = 'flex';
+    } else {
+      pitchMapLegend.innerHTML = '';
+      pitchMapLegend.style.display = 'none';
+    }
+
+    const totalLocated = events.filter((ev) => ev.location).length;
+    pitchMapCount.textContent = totalLocated === 0
+      ? 'No events have a location set yet — click the pitch in any tag\'s detail panel to add one.'
+      : `Showing ${filtered.length} of ${totalLocated} located event${totalLocated === 1 ? '' : 's'}.`;
+  }
+
+  function openPitchMapModal() {
+    populatePitchMapFilters();
+    pitchMapTagFilter.value = '__all__';
+    pitchMapPlayerFilter.value = '__all__';
+    pitchMapSideFilter.value = '__all__';
+    renderPitchMap();
+    pitchMapModal.style.display = 'flex';
+  }
+
+  function closePitchMapModal() {
+    pitchMapModal.style.display = 'none';
+  }
+
+  btnPitchMap.addEventListener('click', openPitchMapModal);
+  btnClosePitchMap.addEventListener('click', closePitchMapModal);
+  pitchMapTagFilter.addEventListener('change', renderPitchMap);
+  pitchMapPlayerFilter.addEventListener('change', renderPitchMap);
+  pitchMapSideFilter.addEventListener('change', renderPitchMap);
+
+  function renderDetailPanel() {
+    const tag = activeDetailTag;
+    const ev = activeDetailEvent;
+
+    const headerTime = ev.isInterval
+      ? `${formatTimecode(ev.startTime, true)} → ${formatTimecode(ev.endTime, true)}`
+      : formatTimecode(ev.time, true);
+
+    let html = `
+      <div class="detail-panel-header">
+        <span class="detail-panel-title">${escapeHtml(tag.label)} · ${headerTime}</span>
+        <button id="detailPanelDone" class="btn btn-ghost detail-panel-close">Done</button>
+      </div>
+      <div class="detail-panel-body">
+        <div class="detail-group">
+          <span class="detail-group-label">${ev.isInterval ? 'Start / End' : 'Timestamp'}</span>
+          ${ev.isInterval ? intervalTimingControlsMarkup(ev) : timingControlsMarkup(ev)}
+        </div>
+        <div class="detail-group">
+          <span class="detail-group-label">Side</span>
+          ${sideSectionMarkup(ev)}
+        </div>
+    `;
+
+    if (tag.substitution) {
+      html += `
+        <div class="detail-group">
+          <span class="detail-group-label">Player off</span>
+          ${squadChipsMarkup(ev, 'playerOff', 'playerOffId')}
+        </div>
+        <div class="detail-group">
+          <span class="detail-group-label">Player on</span>
+          ${squadChipsMarkup(ev, 'playerOn', 'playerOnId')}
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="detail-group">
+          <span class="detail-group-label">Player</span>
+          ${playerSectionMarkup(ev)}
+        </div>
+      `;
+    }
+
+    if (tag.subtypes && tag.subtypes.length) {
+      html += `<div class="detail-group"><span class="detail-group-label">Type</span><div class="detail-chips">`;
+      tag.subtypes.forEach((opt) => {
+        const selected = ev.subtype === opt ? ' selected' : '';
+        html += `<button class="chip${selected}" data-kind="subtype" data-value="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`;
+      });
+      html += `</div></div>`;
+    }
+
+    (tag.qualifierGroups || []).forEach((group) => {
+      html += `<div class="detail-group"><span class="detail-group-label">${escapeHtml(group.name)}</span><div class="detail-chips">`;
+      group.options.forEach((opt) => {
+        const selected = ev.qualifiers[group.name] === opt ? ' selected' : '';
+        html += `<button class="chip${selected}" data-kind="qualifier" data-group="${escapeHtml(group.name)}" data-value="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`;
+      });
+      html += `</div></div>`;
+    });
+
+    html += `<div class="detail-group"><span class="detail-group-label">Location</span>${pitchSvgMarkup(ev)}</div>`;
+
+    html += `</div>`;
+    detailPanel.innerHTML = html;
+
+    detailPanel.querySelectorAll('.chip:not(.pitch-clear-btn)').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const kind = chip.dataset.kind;
+        if (kind === 'player' || kind === 'playerOff' || kind === 'playerOn') {
+          // v2: store playerId (string) instead of a snapshot object.
+          // The field name is kind + 'Id' (e.g. 'playerId', 'playerOffId', 'playerOnId').
+          const playerId = chip.dataset.playerId;
+          const fieldName = kind + 'Id';
+          const alreadySelected = ev[fieldName] === playerId;
+          ev[fieldName] = alreadySelected ? null : playerId;
+        } else if (kind === 'side') {
+          const value = chip.dataset.value;
+          ev.side = (ev.side === value) ? null : value;
+        } else if (kind === 'subtype') {
+          const value = chip.dataset.value;
+          ev.subtype = (ev.subtype === value) ? null : value;
+        } else {
+          const value = chip.dataset.value;
+          const group = chip.dataset.group;
+          ev.qualifiers[group] = (ev.qualifiers[group] === value) ? null : value;
+        }
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    });
+
+    detailPanel.querySelectorAll('.timing-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const delta = parseFloat(btn.dataset.nudge);
+        const bound = btn.dataset.bound;
+        const max = isFinite(getDuration()) ? getDuration() : Infinity;
+
+        if (ev.isInterval && bound === 'start') {
+          ev.startTime = Math.min(ev.endTime, Math.max(0, ev.startTime + delta));
+          ev.time = ev.startTime;
+        } else if (ev.isInterval && bound === 'end') {
+          ev.endTime = Math.max(ev.startTime, Math.min(max, ev.endTime + delta));
+        } else {
+          ev.time = Math.min(max, Math.max(0, ev.time + delta));
+        }
+        events.sort((a, b) => a.time - b.time);
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    });
+
+    const setPlayheadBtn = detailPanel.querySelector('#setToPlayhead');
+    if (setPlayheadBtn) {
+      setPlayheadBtn.addEventListener('click', () => {
+        ev.time = getCurrentTime();
+        events.sort((a, b) => a.time - b.time);
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    }
+
+    const setStartPlayheadBtn = detailPanel.querySelector('#setStartPlayhead');
+    if (setStartPlayheadBtn) {
+      setStartPlayheadBtn.addEventListener('click', () => {
+        ev.startTime = Math.min(getCurrentTime(), ev.endTime);
+        ev.time = ev.startTime;
+        events.sort((a, b) => a.time - b.time);
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    }
+
+    const setEndPlayheadBtn = detailPanel.querySelector('#setEndPlayhead');
+    if (setEndPlayheadBtn) {
+      setEndPlayheadBtn.addEventListener('click', () => {
+        ev.endTime = Math.max(getCurrentTime(), ev.startTime);
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    }
+
+    const pitchSvg = detailPanel.querySelector('#pitchSvg');
+    if (pitchSvg) {
+      pitchSvg.addEventListener('click', (e) => {
+        const rect = pitchSvg.getBoundingClientRect();
+        ev.location = {
+          x: clamp01((e.clientX - rect.left) / rect.width),
+          y: clamp01((e.clientY - rect.top) / rect.height)
+        };
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    }
+
+    const clearBtn = detailPanel.querySelector('#clearLocation');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        ev.location = null;
+        renderDetailPanel();
+        renderEventList();
+        markAutosaveDirty();
+      });
+    }
+
+    document.getElementById('detailPanelDone').addEventListener('click', closeDetailPanel);
+  }
+
+  // ---------- Add custom tag (modal) ----------
+
+  function openAddTagModal() {
+    newTagName.value = '';
+    newTagKey.value = '';
+    newTagSubtypes.value = '';
+    newTagQualifiers.value = '';
+    newTagIsInterval.checked = false;
+    addTagModal.style.display = 'flex';
+    newTagName.focus();
+  }
+
+  function closeAddTagModal() {
+    addTagModal.style.display = 'none';
+  }
+
+  function parseQualifiersText(text) {
+    return text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const colonIndex = line.indexOf(':');
+        if (colonIndex === -1) return null;
+        const name = line.slice(0, colonIndex).trim();
+        const options = line.slice(colonIndex + 1).split(',').map((s) => s.trim()).filter(Boolean);
+        if (!name || options.length === 0) return null;
+        return { name, options };
+      })
+      .filter(Boolean);
+  }
+
+  btnAddCustom.addEventListener('click', openAddTagModal);
+  btnCancelAddTag.addEventListener('click', closeAddTagModal);
+
+  btnConfirmAddTag.addEventListener('click', () => {
+    const label = newTagName.value.trim();
+    if (!label) return;
+
+    const subtypes = newTagSubtypes.value.split(',').map((s) => s.trim()).filter(Boolean);
+    const qualifierGroups = parseQualifiersText(newTagQualifiers.value);
+
+    let key = newTagKey.value.trim();
+    const usedKeys = new Set(tags.map((t) => t.key));
+    if (!key || usedKeys.has(key)) {
+      key = '';
+      for (let i = 0; i <= 9; i++) {
+        if (!usedKeys.has(String(i))) { key = String(i); break; }
+      }
+    }
+
+    const newTag = { label, key };
+    if (subtypes.length) newTag.subtypes = subtypes;
+    if (qualifierGroups.length) newTag.qualifierGroups = qualifierGroups;
+    if (newTagIsInterval.checked) newTag.interval = true;
+
+    tags.push(newTag);
+    renderTagButtons();
+    populateEventTypeFilter();
+    closeAddTagModal();
+    markAutosaveDirty();
+  });
+
+  // Keyboard shortcuts: number keys tag, spacebar toggles play/pause, Escape closes overlays.
+  window.addEventListener('keydown', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
+      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); }
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      closeDetailPanel();
+      closeAddTagModal();
+      closeClipExportModal();
+      closeSquadModal();
+      closePitchMapModal();
+      closeMatchSetupModal();
+      closeSeasonModal();
+      return;
+    }
+
+    if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      undoLastTag();
+      return;
+    }
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (!btnPlayPause.disabled) btnPlayPause.click();
+      return;
+    }
+
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      if (!currentVideoPath) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 1 : 5;
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      const max = isFinite(getDuration()) ? getDuration() : Infinity;
+      seekTo(Math.min(max, Math.max(0, getCurrentTime() + dir * step)));
+      return;
+    }
+
+    const tag = tags.find((t) => t.key === e.key);
+    if (tag) handleTagPress(tag);
+  });
+
+  // ---------- Event list ----------
+
+  function eventDetailText(ev) {
+    const parts = [];
+    const playerOffId = ev.playerOffId;
+    const playerOnId = ev.playerOnId;
+    const playerId = ev.playerId;
+
+    if (playerOffId || playerOnId) {
+      const offPlayer = resolvePlayer(playerOffId);
+      const onPlayer = resolvePlayer(playerOnId);
+      const off = offPlayer ? (offPlayer.number ? `#${offPlayer.number} ${offPlayer.name}` : offPlayer.name) : (playerOffId ? 'Unknown player' : '?');
+      const on = onPlayer ? (onPlayer.number ? `#${onPlayer.number} ${onPlayer.name}` : onPlayer.name) : (playerOnId ? 'Unknown player' : '?');
+      parts.push(`${off} → ${on}`);
+    } else if (playerId) {
+      const player = resolvePlayer(playerId);
+      if (player) {
+        parts.push(player.number ? `#${player.number} ${player.name}` : player.name);
+      } else {
+        parts.push('Unknown player');
+      }
+    }
+    if (ev.subtype) parts.push(ev.subtype);
+    Object.values(ev.qualifiers || {}).forEach((v) => { if (v) parts.push(v); });
+    if (ev.location) parts.push(`📍 ${locationZone(ev.location.x, ev.location.y)}`);
+    return parts.join(' · ');
+  }
+
+  // ---------- Event log filtering ----------
+
+  let eventSearchTerm = '';
+  let eventTypeFilterValue = '__all__';
+
+  function populateEventTypeFilter() {
+    const currentValue = eventTypeFilter.value || '__all__';
+    const options = ['<option value="__all__">All types</option>']
+      .concat(tags.map((t) => `<option value="${escapeHtml(t.label)}">${escapeHtml(t.label)}</option>`));
+    eventTypeFilter.innerHTML = options.join('');
+    eventTypeFilter.value = currentValue;
+    if (eventTypeFilter.value !== currentValue) {
+      // the previously selected type no longer exists (e.g. after loading a
+      // different session) - fall back to showing everything rather than a
+      // filter silently pointing at nothing
+      eventTypeFilter.value = '__all__';
+      eventTypeFilterValue = '__all__';
+    }
+  }
+
+  function matchesEventFilters(ev) {
+    if (eventTypeFilterValue !== '__all__' && ev.label !== eventTypeFilterValue) return false;
+    if (eventSearchTerm) {
+      const haystack = [ev.label, eventDetailText(ev), ev.side || ''].join(' ').toLowerCase();
+      if (!haystack.includes(eventSearchTerm.toLowerCase())) return false;
+    }
+    return true;
+  }
+
+  eventSearchInput.addEventListener('input', () => {
+    eventSearchTerm = eventSearchInput.value;
+    renderEventList();
+  });
+
+  eventTypeFilter.addEventListener('change', () => {
+    eventTypeFilterValue = eventTypeFilter.value;
+    renderEventList();
+  });
+
+  function renderEventList() {
+    eventCountEl.textContent = String(events.length);
+
+    if (events.length === 0) {
+      eventListEl.innerHTML = '<div class="event-empty">No events tagged yet. Load a video and tap a tag button to start.</div>';
+      eventFilterCountEl.textContent = '';
+      renderStatsPanel();
+      renderTimelineStrip();
+      return;
+    }
+
+    const filteredEvents = events.filter(matchesEventFilters);
+    const filterActive = eventSearchTerm !== '' || eventTypeFilterValue !== '__all__';
+    eventFilterCountEl.textContent = filterActive
+      ? `Showing ${filteredEvents.length} of ${events.length}.`
+      : '';
+
+    if (filteredEvents.length === 0) {
+      eventListEl.innerHTML = '<div class="event-empty">No events match your search or filter.</div>';
+      renderStatsPanel();
+      renderTimelineStrip();
+      return;
+    }
+
+    eventListEl.innerHTML = '';
+    filteredEvents.forEach((ev) => {
+      const tagDef = tags.find((t) => t.label === ev.label) || { label: ev.label };
+      const detailText = eventDetailText(ev);
+      const timeDisplay = ev.isInterval
+        ? `${formatTimecode(ev.startTime, true)} → ${formatTimecode(ev.endTime, true)}`
+        : formatTimecode(ev.time, true);
+
+      const row = document.createElement('div');
+      row.className = 'event-row' + (ev.side ? ` event-row-${ev.side}` : '');
+      row.innerHTML = `
+        <span class="event-time">${timeDisplay}</span>
+        <span class="event-label">
+          ${escapeHtml(ev.label)}
+          ${detailText ? `<span class="event-detail">${escapeHtml(detailText)}</span>` : ''}
+        </span>
+        <button class="event-edit" title="Edit details">✎</button>
+        <button class="event-delete" title="Delete event">✕</button>
+      `;
+      row.addEventListener('click', (e) => {
+        if (e.target.classList.contains('event-delete') || e.target.classList.contains('event-edit')) return;
+        seekTo(ev.time);
+      });
+      row.querySelector('.event-edit').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDetailPanel(tagDef, ev);
+      });
+      row.querySelector('.event-delete').addEventListener('click', (e) => {
+        e.stopPropagation();
+        events = events.filter((x) => x.id !== ev.id);
+        if (ev.id === lastLoggedEventId) lastLoggedEventId = null;
+        updateUndoButton();
+        renderEventList();
+        markAutosaveDirty();
+      });
+      eventListEl.appendChild(row);
+    });
+
+    renderStatsPanel();
+    renderTimelineStrip();
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ---------- Live stats ----------
+
+  function computeStatsFor(eventsList) {
+    const byType = new Map(); // label -> { count, subtypeCounts, qualifierCounts }
+    const bySide = { for: 0, against: 0, neutral: 0 };
+    const byPlayer = new Map(); // playerId -> { player, count }
+
+    eventsList.forEach((ev) => {
+      if (!byType.has(ev.label)) {
+        byType.set(ev.label, { count: 0, subtypeCounts: new Map(), qualifierCounts: new Map() });
+      }
+      const typeStats = byType.get(ev.label);
+      typeStats.count++;
+
+      if (ev.subtype) {
+        typeStats.subtypeCounts.set(ev.subtype, (typeStats.subtypeCounts.get(ev.subtype) || 0) + 1);
+      }
+
+      Object.entries(ev.qualifiers || {}).forEach(([group, value]) => {
+        if (!value) return;
+        if (!typeStats.qualifierCounts.has(group)) typeStats.qualifierCounts.set(group, new Map());
+        const groupMap = typeStats.qualifierCounts.get(group);
+        groupMap.set(value, (groupMap.get(value) || 0) + 1);
+      });
+
+      if (ev.side) bySide[ev.side] = (bySide[ev.side] || 0) + 1;
+
+      // v2: events store playerId/playerOffId/playerOnId (strings), not
+      // snapshot objects. Resolve to the current squad entry for display.
+      // If the player doesn't exist in the squad, use a fallback object
+      // so the stats still aggregate correctly by ID.
+      const involvedIds = [ev.playerId, ev.playerOffId, ev.playerOnId].filter(Boolean);
+      involvedIds.forEach((pid) => {
+        if (!byPlayer.has(pid)) {
+          const player = resolvePlayer(pid) || { id: pid, number: '', name: 'Unknown player' };
+          byPlayer.set(pid, { player, count: 0 });
+        }
+        byPlayer.get(pid).count++;
+      });
+    });
+
+    return { byType, bySide, byPlayer };
+  }
+
+  function computeStats() {
+    return computeStatsFor(events);
+  }
+
+  function buildStatsHtml({ byType, bySide, byPlayer }) {
+    let html = '';
+
+    html += '<div class="stats-section-label">By type</div><div class="stats-type-list">';
+    const orderedLabels = tags.map((t) => t.label).filter((label) => byType.has(label));
+    const extraLabels = Array.from(byType.keys()).filter((label) => !orderedLabels.includes(label));
+    [...orderedLabels, ...extraLabels].forEach((label) => {
+      const stat = byType.get(label);
+      html += `
+        <div class="stats-type-row">
+          <span>${escapeHtml(label)}</span>
+          <span class="stats-type-count">${stat.count}</span>
+        </div>
+      `;
+      if (stat.subtypeCounts.size > 0) {
+        const parts = Array.from(stat.subtypeCounts.entries()).map(([k, v]) => `${escapeHtml(k)} ${v}`);
+        html += `<div class="stats-breakdown-line">${parts.join(' · ')}</div>`;
+      }
+      stat.qualifierCounts.forEach((groupMap, groupName) => {
+        const total = Array.from(groupMap.values()).reduce((a, b) => a + b, 0);
+        const parts = Array.from(groupMap.entries()).map(([val, count]) => {
+          const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+          return `${escapeHtml(val)} ${count} (${pct}%)`;
+        });
+        html += `<div class="stats-breakdown-line"><span class="stats-breakdown-label">${escapeHtml(groupName)}:</span> ${parts.join(' · ')}</div>`;
+      });
+    });
+    html += '</div>';
+
+    const sideTotal = bySide.for + bySide.against + bySide.neutral;
+    if (sideTotal > 0) {
+      html += `
+        <div class="stats-section-label">By side</div>
+        <div class="stats-side-row">
+          <span class="stats-side-chip stats-side-for">For ${bySide.for}</span>
+          <span class="stats-side-chip stats-side-against">Against ${bySide.against}</span>
+          <span class="stats-side-chip stats-side-neutral">Neutral ${bySide.neutral}</span>
+        </div>
+      `;
+    }
+
+    if (byPlayer.size > 0) {
+      const sorted = Array.from(byPlayer.values()).sort((a, b) => b.count - a.count).slice(0, 8);
+      html += '<div class="stats-section-label">Most involved players</div><div class="stats-player-list">';
+      sorted.forEach(({ player, count }) => {
+        const label = player.number ? `${player.number} ${player.name}` : player.name;
+        html += `<div class="stats-player-row"><span>${escapeHtml(label)}</span><span class="stats-player-count">${count}</span></div>`;
+      });
+      html += '</div>';
+    }
+
+    return html;
+  }
+
+  function renderStatsPanel() {
+    if (events.length === 0) {
+      statsContentEl.innerHTML = '<div class="event-empty">No events tagged yet — stats will appear here once you start tagging.</div>';
+      return;
+    }
+
+    statsContentEl.innerHTML = buildStatsHtml(computeStats());
+  }
+
+  tabEvents.addEventListener('click', () => {
+    tabEvents.classList.add('active');
+    tabStats.classList.remove('active');
+    eventListEl.style.display = 'block';
+    statsPanelEl.style.display = 'none';
+  });
+
+  tabStats.addEventListener('click', () => {
+    tabStats.classList.add('active');
+    tabEvents.classList.remove('active');
+    eventListEl.style.display = 'none';
+    statsPanelEl.style.display = 'block';
+  });
+
+  // ---------- Season view (combine several saved sessions) ----------
+
+  let seasonMatches = []; // { id, sourceFile, matchInfo, events, tags }
+  let nextSeasonMatchId = 1;
+
+  function seasonMatchLabel(m) {
+    const info = m.matchInfo;
+    const parts = [];
+    if (info && info.opponent) parts.push(`vs ${info.opponent}`);
+    if (info && info.homeAway) {
+      parts.push(info.homeAway === 'home' ? 'Home' : info.homeAway === 'away' ? 'Away' : 'Neutral');
+    }
+    if (info && info.ourScore !== '' && info.ourScore != null && info.opponentScore !== '' && info.opponentScore != null) {
+      parts.push(`${info.ourScore}–${info.opponentScore}`);
+    }
+    if (info && info.date) parts.push(info.date);
+    return parts.length ? parts.join(' · ') : '(Match with no details set)';
+  }
+
+  function renderSeasonMatchList() {
+    if (seasonMatches.length === 0) {
+      seasonMatchListEl.innerHTML = '<div class="detail-empty-note" style="padding:10px;">No matches loaded yet — click "+ Add match session(s)" and pick one or more saved .json sessions.</div>';
+      return;
+    }
+    seasonMatchListEl.innerHTML = seasonMatches.map((m) => `
+      <div class="season-match-row" data-id="${m.id}">
+        <span class="season-match-label">${escapeHtml(seasonMatchLabel(m))}</span>
+        <span class="season-match-count">${m.events.length} event${m.events.length === 1 ? '' : 's'}</span>
+        <button class="season-match-remove" title="Remove">✕</button>
+      </div>
+    `).join('');
+
+    seasonMatchListEl.querySelectorAll('.season-match-remove').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest('.season-match-row');
+        const id = Number(row.dataset.id);
+        seasonMatches = seasonMatches.filter((m) => m.id !== id);
+        renderSeasonMatchList();
+        renderSeasonStats();
+      });
+    });
+  }
+
+  function renderSeasonStats() {
+    const allEvents = seasonMatches.flatMap((m) => m.events);
+    if (allEvents.length === 0) {
+      seasonStatsContentEl.innerHTML = '<div class="event-empty">Load one or more match sessions above to see combined totals.</div>';
+      return;
+    }
+    seasonStatsContentEl.innerHTML = buildStatsHtml(computeStatsFor(allEvents));
+  }
+
+  btnSeasonView.addEventListener('click', () => {
+    renderSeasonMatchList();
+    renderSeasonStats();
+    seasonModal.style.display = 'flex';
+  });
+
+  function closeSeasonModal() {
+    seasonModal.style.display = 'none';
+  }
+
+  btnCloseSeasonModal.addEventListener('click', closeSeasonModal);
+
+  btnAddSeasonMatches.addEventListener('click', async () => {
+    const loaded = await window.matchtag.loadMultipleSessions();
+    if (!Array.isArray(loaded) || loaded.length === 0) return;
+
+    loaded.forEach((data) => {
+      if (data.sourceFile && seasonMatches.some((m) => m.sourceFile === data.sourceFile)) return; // already loaded
+      seasonMatches.push({
+        id: nextSeasonMatchId++,
+        sourceFile: data.sourceFile || null,
+        matchInfo: data.matchInfo || null,
+        events: Array.isArray(data.events) ? data.events : [],
+        tags: Array.isArray(data.tags) ? data.tags : []
+      });
+    });
+
+    renderSeasonMatchList();
+    renderSeasonStats();
+  });
+
+  btnExportSeasonCsv.addEventListener('click', async () => {
+    if (seasonMatches.length === 0) return;
+
+    const header = 'match,timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y';
+    const rows = [];
+
+    seasonMatches.forEach((m) => {
+      const matchLabel = seasonMatchLabel(m);
+      m.events.forEach((ev) => {
+        const qualifiersStr = Object.entries(ev.qualifiers || {})
+          .filter(([, v]) => v)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('; ');
+        const zone = ev.location ? locationZone(ev.location.x, ev.location.y) : '';
+        const x = ev.location ? ev.location.x.toFixed(3) : '';
+        const y = ev.location ? ev.location.y.toFixed(3) : '';
+        const endTime = ev.isInterval ? ev.endTime : ev.time;
+        const duration = ev.isInterval ? (ev.endTime - ev.startTime) : 0;
+        rows.push([
+          csvEscape(matchLabel),
+          formatTimecode(ev.time, true),
+          ev.time.toFixed(1),
+          formatTimecode(endTime, true),
+          endTime.toFixed(1),
+          duration.toFixed(1),
+          csvEscape(ev.label),
+          csvEscape(ev.side || ''),
+          csvEscape((() => { const p = resolvePlayer(ev.playerId); return p ? (p.number || '') : ''; })()),
+          csvEscape((() => { const p = resolvePlayer(ev.playerId); return p ? p.name : ''; })()),
+          csvEscape((() => { const p = resolvePlayer(ev.playerOffId); return p ? (p.number || '') : ''; })()),
+          csvEscape((() => { const p = resolvePlayer(ev.playerOffId); return p ? p.name : ''; })()),
+          csvEscape((() => { const p = resolvePlayer(ev.playerOnId); return p ? (p.number || '') : ''; })()),
+          csvEscape((() => { const p = resolvePlayer(ev.playerOnId); return p ? p.name : ''; })()),
+          csvEscape(ev.subtype || ''),
+          csvEscape(qualifiersStr),
+          csvEscape(zone),
+          x,
+          y
+        ].join(','));
+      });
+    });
+
+    const csv = [header, ...rows].join('\n');
+    await window.matchtag.exportCsv(csv);
+  });
+
+  // ---------- Session save / load ----------
+
+  // saveSession(): writes the current session to a user-chosen JSON file.
+  // Returns true if saved, false if the user canceled the save dialog.
+  // On success, marks the session clean and clears the autosave so it
+  // never clobbers the deliberately-saved file.
+  async function saveSession() {
+    const sessionData = { videoPath: currentVideoPath, tags, events, squad, matchInfo, matchClock };
+    const result = await window.matchtag.saveSession(sessionData);
+    if (!result || result.canceled) return false;
+    // Manual save succeeded — the saved file is now the source of truth.
+    // Clear the autosave so it never clobbers a deliberately-saved session.
+    setClean();
+    await clearAutosave();
+    return true;
+  }
+
+  btnSaveSession.addEventListener('click', saveSession);
+
+  btnLoadSession.addEventListener('click', async () => {
+    const data = await window.matchtag.loadSession();
+    if (!data) return;
+
+    tags = Array.isArray(data.tags) && data.tags.length ? data.tags : tags;
+    events = Array.isArray(data.events)
+      ? data.events.map((ev) => ({
+          ...ev,
+          subtype: ev.subtype ?? null,
+          qualifiers: ev.qualifiers ?? {},
+          location: ev.location ?? null,
+          playerId: ev.playerId ?? null,
+          playerOffId: ev.playerOffId ?? null,
+          playerOnId: ev.playerOnId ?? null,
+          side: ev.side ?? null,
+          isInterval: ev.isInterval ?? false
+        }))
+      : [];
+    nextEventId = events.reduce((max, ev) => Math.max(max, ev.id + 1), 1);
+
+    activeIntervals = {};
+
+    matchInfo = data.matchInfo && typeof data.matchInfo === 'object'
+      ? { ...blankMatchInfo(), ...data.matchInfo }
+      : blankMatchInfo();
+    renderMatchSummary();
+
+    // Restore match clock (merged onto blank; stopped on load)
+    if (data.matchClock && typeof data.matchClock === 'object') {
+      matchClock = { ...blankMatchClock(), ...data.matchClock };
+      matchClock.clockRunning = false;
+      matchClock.clockStartedAt = null;
+    } else {
+      matchClock = blankMatchClock();
+    }
+    renderMatchClock();
+    renderTeamSelector();
+    renderPlayerSelector();
+    renderSequenceControls();
+    renderScoreboard();
+    renderVideoOffset();
+
+    if (data.videoPath && data.videoUrl) loadVideoFromPath(data.videoPath, data.videoUrl);
+
+    lastLoggedEventId = null;
+    updateUndoButton();
+
+    eventSearchTerm = '';
+    eventSearchInput.value = '';
+    eventTypeFilterValue = '__all__';
+    populateEventTypeFilter();
+
+    renderTagButtons();
+    renderEventList();
+
+    // Manual load succeeded — the loaded file is now the source of truth.
+    // Clear the autosave so it never clobbers a deliberately-loaded session.
+    // (loadVideoFromPath above may have called markAutosaveDirty +
+    // scheduleAutosave; setClean + clearAutosave cancel that pending
+    // write and delete the autosave file.)
+    setClean();
+    await clearAutosave();
+  });
+
+  // ---------- CSV export ----------
+
+  btnExportCsv.addEventListener('click', async () => {
+    const header = 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y';
+    const rows = events.map((ev) => {
+      const qualifiersStr = Object.entries(ev.qualifiers || {})
+        .filter(([, v]) => v)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ');
+      const zone = ev.location ? locationZone(ev.location.x, ev.location.y) : '';
+      const x = ev.location ? ev.location.x.toFixed(3) : '';
+      const y = ev.location ? ev.location.y.toFixed(3) : '';
+      const endTime = ev.isInterval ? ev.endTime : ev.time;
+      const duration = ev.isInterval ? (ev.endTime - ev.startTime) : 0;
+      return [
+        formatTimecode(ev.time, true),
+        ev.time.toFixed(1),
+        formatTimecode(endTime, true),
+        endTime.toFixed(1),
+        duration.toFixed(1),
+        csvEscape(ev.label),
+        csvEscape(ev.side || ''),
+        csvEscape((() => { const p = resolvePlayer(ev.playerId); return p ? (p.number || '') : ''; })()),
+        csvEscape((() => { const p = resolvePlayer(ev.playerId); return p ? p.name : ''; })()),
+        csvEscape((() => { const p = resolvePlayer(ev.playerOffId); return p ? (p.number || '') : ''; })()),
+        csvEscape((() => { const p = resolvePlayer(ev.playerOffId); return p ? p.name : ''; })()),
+        csvEscape((() => { const p = resolvePlayer(ev.playerOnId); return p ? (p.number || '') : ''; })()),
+        csvEscape((() => { const p = resolvePlayer(ev.playerOnId); return p ? p.name : ''; })()),
+        csvEscape(ev.subtype || ''),
+        csvEscape(qualifiersStr),
+        csvEscape(zone),
+        x,
+        y
+      ].join(',');
+    });
+    const csv = [header, ...rows].join('\n');
+    await window.matchtag.exportCsv(csv);
+  });
+
+  function csvEscape(value) {
+    const str = String(value);
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  }
+
+  // ---------- Clip playlist export (ffmpeg script) ----------
+
+  function sanitizeFilename(str) {
+    const cleaned = str.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+    return cleaned || 'event';
+  }
+
+  function openClipExportModal() {
+    if (!currentVideoPath || events.length === 0) return;
+    clipPreRoll.value = '5';
+    clipPostRoll.value = '8';
+    clipExportModal.style.display = 'flex';
+  }
+
+  function closeClipExportModal() {
+    clipExportModal.style.display = 'none';
+  }
+
+  btnExportClips.addEventListener('click', openClipExportModal);
+  btnCancelClipExport.addEventListener('click', closeClipExportModal);
+
+  btnConfirmClipExport.addEventListener('click', async () => {
+    const preRoll = Math.max(0, parseFloat(clipPreRoll.value) || 0);
+    const postRoll = Math.max(0, parseFloat(clipPostRoll.value) || 0);
+    const duration = (getDuration() && isFinite(getDuration())) ? getDuration() : null;
+
+    const clips = events.map((ev, idx) => {
+      const coreStart = ev.isInterval ? ev.startTime : ev.time;
+      const coreEnd = ev.isInterval ? ev.endTime : ev.time;
+      const start = Math.max(0, coreStart - preRoll);
+      const rawEnd = coreEnd + postRoll;
+      const end = duration != null ? Math.min(duration, rawEnd) : rawEnd;
+      const fileName = `clip_${String(idx + 1).padStart(3, '0')}_${sanitizeFilename(ev.label)}.mp4`;
+      return { index: idx + 1, label: ev.label, detail: eventDetailText(ev), start, end, fileName };
+    });
+
+    // CSV reference
+    const csvHeader = 'clip,label,details,start_timecode,end_timecode,duration_seconds,filename';
+    const csvRows = clips.map((c) => [
+      c.index,
+      csvEscape(c.label),
+      csvEscape(c.detail),
+      formatTimecode(c.start, true),
+      formatTimecode(c.end, true),
+      (c.end - c.start).toFixed(1),
+      c.fileName
+    ].join(','));
+    const csv = [csvHeader, ...csvRows].join('\n');
+
+    // Windows batch script: cuts each clip with ffmpeg, then merges them into one reel
+    const lines = [];
+    lines.push('@echo off');
+    lines.push('chcp 65001 >nul');
+    lines.push('REM Generated by MatchTag. Run this from inside the folder it was saved to.');
+    lines.push('setlocal enabledelayedexpansion');
+    lines.push('');
+    lines.push('where ffmpeg >nul 2>nul');
+    lines.push('if errorlevel 1 (');
+    lines.push('  echo ffmpeg was not found on this computer.');
+    lines.push('  echo Install it first: run "winget install ffmpeg" in Command Prompt, then try again.');
+    lines.push('  pause');
+    lines.push('  exit /b 1');
+    lines.push(')');
+    lines.push('');
+    lines.push(`set "SOURCE=${currentVideoPath}"`);
+    lines.push('mkdir clips 2>nul');
+    lines.push('');
+
+    clips.forEach((c) => {
+      lines.push(`echo Cutting clip ${c.index} of ${clips.length}: ${c.label}...`);
+      lines.push(`ffmpeg -y -ss ${c.start.toFixed(2)} -i "%SOURCE%" -t ${(c.end - c.start).toFixed(2)} -c:v libx264 -c:a aac "clips\\${c.fileName}"`);
+      lines.push('');
+    });
+
+    lines.push('echo Building the combined clip list...');
+    lines.push('(');
+    clips.forEach((c) => {
+      lines.push(`  echo file 'clips/${c.fileName}'`);
+    });
+    lines.push(') > concat_list.txt');
+    lines.push('');
+    lines.push('echo Merging into one highlight reel...');
+    lines.push('ffmpeg -y -f concat -safe 0 -i concat_list.txt -c copy highlight_reel.mp4');
+    lines.push('');
+    lines.push('echo Done. See highlight_reel.mp4 and the clips folder.');
+    lines.push('pause');
+
+    const script = lines.join('\r\n');
+
+    const result = await window.matchtag.exportClipPlaylist({ csv, script });
+    closeClipExportModal();
+    if (result && !result.canceled) {
+      window.alert(`Saved clip_playlist.csv and cut_clips.bat to:\n${result.dir}\n\nDouble-click cut_clips.bat there to build the highlight reel.`);
+    }
+  });
+
+  // ---------- Dirty state, autosave, recovery, and safe close ----------
+  //
+  // `sessionDirty` is the single source of truth for "the current session
+  // has unsaved changes". It is set true by setDirty() (called from every
+  // state mutation point) and false by setClean() (called after manual
+  // save, manual load, or discarding recovery). The autosave timer, the
+  // dirty indicator in the top bar, and the close-protection modal all
+  // key off this one flag, so they can never drift out of sync.
+  //
+  // The autosave file at userData/autosave.json mirrors the working
+  // session. It is written (debounced) after every state mutation and
+  // flushed synchronously on window close. On startup, if the file
+  // exists, a recovery modal offers to restore the work.
+  //
+  // The autosave is cleared after a successful manual save or load so it
+  // never clobbers a deliberately-saved session.
+  //
+  // Design notes:
+  //   - `sessionDirty` drives: the dirty indicator UI, the autosave
+  //     schedule, and the close-protection modal.
+  //   - The debounced write (AUTOSAVE_DEBOUNCE_MS = 1500ms) coalesces
+  //     rapid tagging into a single disk write.
+  //   - On window close, beforeunload fires a synchronous flush so the
+  //     write completes before the renderer is torn down.
+  //   - If a write fails, a non-blocking toast is shown; the previous
+  //     valid autosave (if any) is left intact (atomic write = temp +
+  //     rename).
+  //   - Safe close: the main process intercepts the OS close event and
+  //     sends 'close:requested' to the renderer. If sessionDirty is true,
+  //     the renderer shows the unsaved-changes modal (Save / Don't save /
+  //     Cancel). The renderer then either calls closeProceed() (Save or
+  //     Don't save) or does nothing (Cancel = stay open).
+
+  let sessionDirty = false;
+  let autosaveTimer = null;
+  let autosaveWriteInFlight = false;
+  let autosaveLastWriteFailed = false;
+  let autosaveLastWriteError = '';
+  let recoveryModalVisible = false;
+  let pendingRecoveryData = null;
+  let unsavedConfirmVisible = false;
+  let pendingCloseResolution = null; // 'save' | 'discard' | null
+  const AUTOSAVE_DEBOUNCE_MS = 1500;
+
+  // ---------- Dirty-state indicator ----------
+
+  function renderDirtyIndicator() {
+    if (!dirtyIndicator) return;
+    if (sessionDirty) {
+      dirtyIndicator.classList.remove('dirty-clean');
+      dirtyIndicator.classList.add('dirty-dirty');
+      if (dirtyLabel) dirtyLabel.textContent = 'Unsaved';
+      dirtyIndicator.title = 'You have unsaved changes. Save before closing to keep them.';
+    } else {
+      dirtyIndicator.classList.remove('dirty-dirty');
+      dirtyIndicator.classList.add('dirty-clean');
+      if (dirtyLabel) dirtyLabel.textContent = 'Saved';
+      dirtyIndicator.title = 'No unsaved changes.';
+    }
+  }
+
+  // setDirty(): mark the session as having unsaved changes. Called from
+  // every state mutation point. Also schedules the debounced autosave.
+  // Idempotent: calling it when already dirty just reschedules the
+  // autosave (effectively resetting the debounce timer).
+  function setDirty() {
+    if (recoveryModalVisible) return; // don't touch state while recovery prompt is up
+    if (unsavedConfirmVisible) return; // don't touch state while close-confirm is up
+    const wasClean = !sessionDirty;
+    sessionDirty = true;
+    if (wasClean) renderDirtyIndicator();
+    scheduleAutosave();
+  }
+
+  // setClean(): mark the session as clean (no unsaved changes). Used
+  // after manual save, manual load, or discarding recovery. Cancels any
+  // pending debounced autosave and updates the indicator.
+  function setClean() {
+    const wasDirty = sessionDirty;
+    sessionDirty = false;
+    clearAutosaveTimer();
+    if (wasDirty) renderDirtyIndicator();
+  }
+
+  // Build the data payload that gets written to autosave.json. Same shape
+  // as a manual session save, plus a single __savedAt ISO timestamp so the
+  // recovery modal can show when the work was last preserved.
+  function buildAutosaveData() {
+    return {
+      __savedAt: new Date().toISOString(),
+      videoPath: currentVideoPath,
+      tags,
+      events,
+      squad,
+      matchInfo,
+      matchClock
+    };
+  }
+
+  // Decide whether the current state is worth autosaving. If everything is
+  // empty/default, there's nothing to recover, so we skip the write and
+  // instead clear any stale autosave from a previous session.
+  function hasAutosavableWork() {
+    if (events.length > 0) return true;
+    if (currentVideoPath) return true;
+    if (tags.length !== DEFAULT_TAGS_LENGTH) return true;
+    if (JSON.stringify(matchInfo) !== JSON.stringify(blankMatchInfo())) return true;
+    // Check matchClock state — if the match has started, the clock is running,
+    // the score has changed, a team/player is selected, a sequence is active,
+    // or the video offset is non-zero, there IS autosavable work.
+    if (matchClock) {
+      if (matchClock.clockRunning) return true;
+      if (matchClock.clockBaseSeconds > 0) return true;
+      if (matchClock.period !== 'PRE_MATCH') return true;
+      if (matchClock.scoreFor > 0 || matchClock.scoreAgainst > 0) return true;
+      if (matchClock.selectedPlayerId) return true;
+      if (matchClock.activeSequenceId) return true;
+      if (matchClock.videoSyncOffset !== 0) return true;
+    }
+    return false;
+  }
+
+  function clearAutosaveTimer() {
+    if (autosaveTimer) {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = null;
+    }
+  }
+
+  // Legacy aliases kept so the existing mutation hooks (which call
+  // markAutosaveDirty / markAutosaveClean) continue to work. They now
+  // delegate to the unified setDirty / setClean, so the dirty indicator
+  // and close protection stay in sync with the autosave.
+  function markAutosaveDirty() { setDirty(); }
+  function markAutosaveClean() { setClean(); }
+
+  // Schedule a debounced autosave. Multiple rapid mutations coalesce into
+  // a single write to avoid hammering the disk during fast tagging.
+  function scheduleAutosave() {
+    clearAutosaveTimer();
+    if (!sessionDirty) return;
+    if (!hasAutosavableWork()) {
+      // Dirty but no actual work — clear any stale autosave from a previous
+      // session. Async delete; failure is non-fatal.
+      window.matchtag.autosaveDelete().catch(() => {});
+      return;
+    }
+    autosaveTimer = setTimeout(performAutosave, AUTOSAVE_DEBOUNCE_MS);
+  }
+
+  // Actually write the autosave. Async. Updates the failure flag for the
+  // toast notification. Never throws — write failures are surfaced via the
+  // toast, not as exceptions.
+  async function performAutosave() {
+    autosaveTimer = null;
+    if (autosaveWriteInFlight) {
+      // Another write is in progress; reschedule for later.
+      autosaveTimer = setTimeout(performAutosave, AUTOSAVE_DEBOUNCE_MS);
+      return;
+    }
+    autosaveWriteInFlight = true;
+    const data = buildAutosaveData();
+    let result;
+    try {
+      result = await window.matchtag.autosaveWrite(data);
+    } catch (err) {
+      result = { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+    autosaveWriteInFlight = false;
+    if (result && result.ok) {
+      if (autosaveLastWriteFailed) {
+        autosaveLastWriteFailed = false;
+        autosaveLastWriteError = '';
+        hideAutosaveToast();
+      }
+    } else {
+      const err = (result && result.error) || 'Unknown error';
+      if (!autosaveLastWriteFailed || err !== autosaveLastWriteError) {
+        autosaveLastWriteFailed = true;
+        autosaveLastWriteError = err;
+        showAutosaveToast('Autosave failed: ' + err + '. Please save your work manually.');
+      }
+    }
+  }
+
+  // Clear the autosave entirely (after manual save or load). Cancels any
+  // pending debounced write and deletes the autosave file.
+  async function clearAutosave() {
+    clearAutosaveTimer();
+    autosaveLastWriteFailed = false;
+    autosaveLastWriteError = '';
+    hideAutosaveToast();
+    try {
+      await window.matchtag.autosaveDelete();
+    } catch (e) { /* best effort */ }
+  }
+
+  // Synchronous flush for the beforeunload handler. The renderer is about
+  // to be torn down, so we cannot use async IPC here. If there's unsaved
+  // work, write it; otherwise clear any stale autosave.
+  //
+  // This runs as a safety net for hard kills (power loss, kill -9). For
+  // graceful closes via the OS close button, the main process intercepts
+  // the close via the 'close' event and the renderer shows the unsaved-
+  // changes modal instead — see the safe-close wiring below. beforeunload
+  // still fires in both cases (the renderer is going down), so this
+  // flush is the last line of defense.
+  function flushAutosaveSync() {
+    if (recoveryModalVisible) return; // don't touch autosave while recovery prompt is up
+    clearAutosaveTimer();
+    if (sessionDirty && hasAutosavableWork()) {
+      const data = buildAutosaveData();
+      window.matchtag.autosaveFlushSync(data);
+    } else {
+      // No unsaved work — clear any stale autosave so it doesn't surface a
+      // spurious recovery prompt next startup.
+      window.matchtag.autosaveFlushSync(null);
+    }
+  }
+
+  function showAutosaveToast(message) {
+    if (!autosaveToast || !autosaveToastText) return;
+    autosaveToastText.textContent = message;
+    autosaveToast.style.display = 'flex';
+  }
+
+  function hideAutosaveToast() {
+    if (!autosaveToast) return;
+    autosaveToast.style.display = 'none';
+  }
+
+  // ---------- Recovery check (on startup) ----------
+
+  async function checkForRecoverableAutosave() {
+    let autosave = null;
+    try {
+      autosave = await window.matchtag.autosaveRead();
+    } catch (e) {
+      return; // can't read, can't recover
+    }
+    if (!autosave) return; // no autosave, no recovery needed
+    showRecoveryModal(autosave);
+  }
+
+  function showRecoveryModal(autosave) {
+    pendingRecoveryData = autosave;
+
+    // Format the saved-at timestamp
+    let savedAtStr = 'unknown time';
+    if (autosave.__savedAt) {
+      try {
+        const d = new Date(autosave.__savedAt);
+        if (!isNaN(d.getTime())) {
+          savedAtStr = d.toLocaleString();
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Format the video filename
+    let videoStr = 'No video';
+    if (autosave.videoPath) {
+      const basename = autosave.videoPath.split(/[\\/]/).pop();
+      videoStr = basename || autosave.videoPath;
+      if (autosave.__videoExists === false) {
+        videoStr += ' (file not found)';
+      }
+    }
+
+    // Count events
+    const eventCount = Array.isArray(autosave.events) ? autosave.events.length : 0;
+
+    if (recoveryDetails) {
+      recoveryDetails.innerHTML = `
+        <div class="detail-row">
+          <span class="detail-label">Last preserved:</span>
+          <span class="detail-value">${escapeHtml(savedAtStr)}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Video:</span>
+          <span class="detail-value">${escapeHtml(videoStr)}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Events:</span>
+          <span class="detail-value">${eventCount}</span>
+        </div>
+      `;
+    }
+
+    recoveryModalVisible = true;
+    recoveryModal.style.display = 'flex';
+  }
+
+  function closeRecoveryModal() {
+    recoveryModal.style.display = 'none';
+    recoveryModalVisible = false;
+  }
+
+  // Restore state from the autosave. Similar to loadSession, but:
+  //   - We don't clear the autosave file (keep it as a safety net until
+  //     the analyst makes a change that triggers a new autosave, or until
+  //     they manually save).
+  //   - We use the local squad (already loaded from squad.json on startup)
+  //     rather than the autosave's squad snapshot, because the local
+  //     squad.json is always at least as up-to-date (the squad is
+  //     auto-persisted on every change).
+  async function recoverFromAutosave(autosave) {
+    // Restore tags (only if the autosave's tags array is non-empty;
+    // otherwise keep the defaults, same as loadSession).
+    if (Array.isArray(autosave.tags) && autosave.tags.length) {
+      tags = autosave.tags;
+    }
+
+    // Restore events (defensive null-coalescing, same as loadSession).
+    if (Array.isArray(autosave.events)) {
+      events = autosave.events.map((ev) => ({
+        ...ev,
+        subtype: ev.subtype ?? null,
+        qualifiers: ev.qualifiers ?? {},
+        location: ev.location ?? null,
+        playerId: ev.playerId ?? null,
+        playerOffId: ev.playerOffId ?? null,
+        playerOnId: ev.playerOnId ?? null,
+        side: ev.side ?? null,
+        isInterval: ev.isInterval ?? false
+      }));
+    } else {
+      events = [];
+    }
+    nextEventId = events.reduce((max, ev) => Math.max(max, (ev.id || 0) + 1), 1);
+
+    activeIntervals = {};
+
+    // Restore matchInfo (merged onto blank, same as loadSession).
+    if (autosave.matchInfo && typeof autosave.matchInfo === 'object') {
+      matchInfo = { ...blankMatchInfo(), ...autosave.matchInfo };
+    } else {
+      matchInfo = blankMatchInfo();
+    }
+
+    // Restore video (if the path is still valid). loadVideoFromPath will
+    // call markAutosaveDirty() + scheduleAutosave() — that's fine, because
+    // the recovered work IS unsaved (dirty = true is correct).
+    if (autosave.videoPath && autosave.videoUrl) {
+      loadVideoFromPath(autosave.videoPath, autosave.videoUrl);
+    }
+
+    lastLoggedEventId = null;
+    updateUndoButton();
+
+    eventSearchTerm = '';
+    eventSearchInput.value = '';
+    eventTypeFilterValue = '__all__';
+    populateEventTypeFilter();
+
+    renderTagButtons();
+    renderEventList();
+    renderMatchSummary();
+
+    // Restore match clock (merged onto blank; stopped on recovery)
+    if (autosave.matchClock && typeof autosave.matchClock === 'object') {
+      matchClock = { ...blankMatchClock(), ...autosave.matchClock };
+      matchClock.clockRunning = false;
+      matchClock.clockStartedAt = null;
+    }
+    renderMatchClock();
+    renderTeamSelector();
+    renderPlayerSelector();
+    renderSequenceControls();
+    renderScoreboard();
+    renderVideoOffset();
+
+    // The recovered work is unsaved — mark dirty so any subsequent change
+    // triggers a fresh autosave, and so closing without saving preserves
+    // the recovery file.
+    markAutosaveDirty();
+  }
+
+  // Wire up the recovery modal buttons
+  if (btnRecoverAutosave) {
+    btnRecoverAutosave.addEventListener('click', async () => {
+      const data = pendingRecoveryData;
+      closeRecoveryModal();
+      if (data) {
+        await recoverFromAutosave(data);
+        pendingRecoveryData = null;
+      }
+    });
+  }
+
+  if (btnDiscardRecovery) {
+    btnDiscardRecovery.addEventListener('click', async () => {
+      closeRecoveryModal();
+      pendingRecoveryData = null;
+      // Discard = delete the autosave file and start fresh.
+      setClean();
+      await clearAutosave();
+    });
+  }
+
+  // Wire up the autosave toast close button
+  if (autosaveToastClose) {
+    autosaveToastClose.addEventListener('click', hideAutosaveToast);
+  }
+
+  // ---------- Safe-close protection ----------
+  //
+  // The main process intercepts the OS close (X button, Alt+F4, taskbar
+  // close) and sends 'close:requested' to the renderer instead of closing
+  // immediately. The renderer decides what to do:
+  //
+  //   - If the session is clean (sessionDirty === false), proceed with the
+  //     close immediately. The beforeunload handler will still flush the
+  //     autosave (which clears any stale autosave so it doesn't surface a
+  //     spurious recovery prompt next startup).
+  //
+  //   - If the session is dirty, show the unsaved-changes modal with three
+  //     choices:
+  //       Save       → trigger the manual save flow, then proceed with close
+  //       Don't save → discard unsaved work (clear the autosave so the
+  //                    recovery modal doesn't show next startup), then
+  //                    proceed with close
+  //       Cancel     → do nothing; the window stays open
+  //
+  // The 'close:proceed' IPC tells the main process to set forceClose and
+  // call close() again — this time the main's 'close' handler sees
+  // forceClose and lets the close proceed (which fires beforeunload →
+  // flushAutosaveSync → window tears down).
+
+  function showUnsavedConfirmModal() {
+    unsavedConfirmVisible = true;
+    pendingCloseResolution = null;
+    if (unsavedConfirmModal) unsavedConfirmModal.style.display = 'flex';
+  }
+
+  function hideUnsavedConfirmModal() {
+    unsavedConfirmVisible = false;
+    if (unsavedConfirmModal) unsavedConfirmModal.style.display = 'none';
+  }
+
+  // Called when the main process intercepts the OS close. Decides whether
+  // to show the unsaved-changes modal or proceed immediately.
+  function handleCloseRequested() {
+    if (recoveryModalVisible) {
+      // Recovery modal is up — block the close. The analyst must first
+      // decide whether to recover or discard the autosaved work.
+      return;
+    }
+    if (!sessionDirty) {
+      // Clean — proceed immediately. The beforeunload handler will flush
+      // the autosave (clearing any stale autosave so it doesn't surface
+      // a spurious recovery prompt next startup).
+      window.matchtag.closeProceed();
+      return;
+    }
+    // Dirty — show the modal and let the user decide.
+    showUnsavedConfirmModal();
+  }
+
+  if (btnUnsavedCancel) {
+    btnUnsavedCancel.addEventListener('click', () => {
+      // Cancel = stay open. Don't proceed with the close.
+      hideUnsavedConfirmModal();
+    });
+  }
+
+  if (btnUnsavedDiscard) {
+    btnUnsavedDiscard.addEventListener('click', async () => {
+      hideUnsavedConfirmModal();
+      // Discard unsaved work: clear the dirty flag, delete the autosave
+      // so the recovery modal doesn't show next startup, then proceed
+      // with the close.
+      setClean();
+      await clearAutosave();
+      window.matchtag.closeProceed();
+    });
+  }
+
+  if (btnUnsavedSave) {
+    btnUnsavedSave.addEventListener('click', async () => {
+      hideUnsavedConfirmModal();
+      // Save: trigger the manual save flow. If the user cancels the save
+      // dialog, stay open (don't proceed with the close). If the save
+      // succeeds, proceed with the close.
+      const saved = await saveSession();
+      if (saved) {
+        window.matchtag.closeProceed();
+      }
+      // If saved === false (user canceled the save dialog), the window
+      // stays open. The session is still dirty, so closing again will
+      // re-prompt.
+    });
+  }
+
+  // Wire up the main process's 'close:requested' message.
+  window.matchtag.onCloseRequested(() => {
+    handleCloseRequested();
+  });
+
+  // Synchronous flush on window close. The sendSync IPC completes the
+  // write before the renderer is torn down, so no work is lost on
+  // graceful close. (For hard crashes, the last debounced autosave is
+  // the safety net.)
+  //
+  // Note: when the user clicks "Save" or "Don't save" in the unsaved-
+  // changes modal, the close proceeds via closeProceed() → main sets
+  // forceClose → close event fires → beforeunload → this flush runs.
+  // In the "Save" case the session is already clean (setClean was called
+  // by saveSession), so the flush deletes any stale autosave. In the
+  // "Don't save" case the session is also clean (setClean was called by
+  // the discard handler), so the flush also deletes the autosave. In the
+  // hard-kill case (no modal shown), the session is still dirty and the
+  // flush writes the autosave so recovery is offered next startup.
+  window.addEventListener('beforeunload', () => {
+    flushAutosaveSync();
+  });
+
+  // ---------- Wire up match clock buttons ----------
+
+  const btnClockStart = document.getElementById('btnClockStart');
+  const btnClockPause = document.getElementById('btnClockPause');
+  const btnClockEndHalf = document.getElementById('btnClockEndHalf');
+  const btnClockNextHalf = document.getElementById('btnClockNextHalf');
+  if (btnClockStart) btnClockStart.addEventListener('click', startMatchClock);
+  if (btnClockPause) btnClockPause.addEventListener('click', pauseMatchClock);
+  if (btnClockEndHalf) btnClockEndHalf.addEventListener('click', endHalf);
+  if (btnClockNextHalf) btnClockNextHalf.addEventListener('click', startNextHalf);
+
+  // ---------- Team selector, player selector, sequence, video sync, touchline, CSV ----------
+
+  function renderTeamSelector() {
+    const btnOur = document.getElementById('btnTeamOur');
+    const btnOpp = document.getElementById('btnTeamOpponent');
+    if (btnOur) btnOur.classList.toggle('active', matchClock.selectedTeam === 'our');
+    if (btnOpp) btnOpp.classList.toggle('active', matchClock.selectedTeam === 'opponent');
+  }
+
+  function renderPlayerSelector() {
+    const sel = document.getElementById('selectedPlayerSelect');
+    if (!sel) return;
+    const current = matchClock.selectedPlayerId || '';
+    sel.innerHTML = ['<option value="">— None —</option>'].concat(
+      squad.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.number ? `${p.number} ${p.name}` : p.name)}</option>`)
+    ).join('');
+    sel.value = current;
+  }
+
+  function renderSequenceControls() {
+    const btnStart = document.getElementById('btnStartSequence');
+    const btnEnd = document.getElementById('btnEndSequence');
+    const display = document.getElementById('activeSequenceDisplay');
+    if (btnStart) btnStart.disabled = !!matchClock.activeSequenceId;
+    if (btnEnd) btnEnd.disabled = !matchClock.activeSequenceId;
+    if (display) display.textContent = matchClock.activeSequenceId || '';
+  }
+
+  function selectTeam(team) { matchClock.selectedTeam = team; renderTeamSelector(); markAutosaveDirty(); }
+  function selectPlayer(playerId) { matchClock.selectedPlayerId = playerId || null; markAutosaveDirty(); }
+  function startSequence() {
+    if (matchClock.activeSequenceId) return;
+    matchClock.activeSequenceId = `SEQ-${String(matchClock.nextSequenceNumber++).padStart(3, '0')}`;
+    renderSequenceControls(); markAutosaveDirty();
+  }
+  function endSequence() {
+    if (!matchClock.activeSequenceId) return;
+    matchClock.activeSequenceId = null;
+    renderSequenceControls(); markAutosaveDirty();
+  }
+
+  // Wire up desktop controls
+  const btnTeamOur = document.getElementById('btnTeamOur');
+  const btnTeamOpponent = document.getElementById('btnTeamOpponent');
+  const selectedPlayerSelect = document.getElementById('selectedPlayerSelect');
+  const btnStartSequence = document.getElementById('btnStartSequence');
+  const btnEndSequence = document.getElementById('btnEndSequence');
+  if (btnTeamOur) btnTeamOur.addEventListener('click', () => selectTeam('our'));
+  if (btnTeamOpponent) btnTeamOpponent.addEventListener('click', () => selectTeam('opponent'));
+  if (selectedPlayerSelect) selectedPlayerSelect.addEventListener('change', () => selectPlayer(selectedPlayerSelect.value));
+  if (btnStartSequence) btnStartSequence.addEventListener('click', startSequence);
+  if (btnEndSequence) btnEndSequence.addEventListener('click', endSequence);
+
+  // ---------- Video sync offset UI ----------
+  // Convention: matchTime = videoTime + videoSyncOffset
+  const videoOffsetInput = document.getElementById('videoOffsetInput');
+  function formatOffset(seconds) {
+    const sign = seconds >= 0 ? '+' : '-';
+    const abs = Math.abs(seconds);
+    return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+  }
+  function parseOffset(str) {
+    if (!str) return 0; str = str.trim();
+    let sign = 1;
+    if (str.startsWith('+')) str = str.slice(1);
+    else if (str.startsWith('-')) { sign = -1; str = str.slice(1); }
+    str = str.trim();
+    if (str.includes(':')) { const parts = str.split(':'); const m = parseInt(parts[0], 10); const s = parseInt(parts[1], 10); if (!isNaN(m) && !isNaN(s)) return sign * (m * 60 + s); }
+    const n = parseInt(str, 10); if (!isNaN(n)) return sign * n;
+    return 0;
+  }
+  function renderVideoOffset() { if (videoOffsetInput) videoOffsetInput.value = formatOffset(matchClock.videoSyncOffset); }
+  function setVideoOffset(seconds) { matchClock.videoSyncOffset = seconds; renderVideoOffset(); renderMatchClock(); markAutosaveDirty(); }
+  function adjustVideoOffset(delta) { setVideoOffset(matchClock.videoSyncOffset + delta); }
+
+  const btnOffsetMinus10 = document.getElementById('btnOffsetMinus10');
+  const btnOffsetMinus1 = document.getElementById('btnOffsetMinus1');
+  const btnOffsetPlus1 = document.getElementById('btnOffsetPlus1');
+  const btnOffsetPlus10 = document.getElementById('btnOffsetPlus10');
+  const btnSetOffset = document.getElementById('btnSetOffset');
+  if (btnOffsetMinus10) btnOffsetMinus10.addEventListener('click', () => adjustVideoOffset(-10));
+  if (btnOffsetMinus1) btnOffsetMinus1.addEventListener('click', () => adjustVideoOffset(-1));
+  if (btnOffsetPlus1) btnOffsetPlus1.addEventListener('click', () => adjustVideoOffset(1));
+  if (btnOffsetPlus10) btnOffsetPlus10.addEventListener('click', () => adjustVideoOffset(10));
+  if (btnSetOffset) btnSetOffset.addEventListener('click', () => { if (videoOffsetInput) setVideoOffset(parseOffset(videoOffsetInput.value)); });
+  if (videoOffsetInput) videoOffsetInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { setVideoOffset(parseOffset(videoOffsetInput.value)); videoOffsetInput.blur(); } });
+
+  // ---------- Expanded CSV export ----------
+  function buildFullAnalysisCsv() {
+    const header = ['Match ID','Date','Competition','Home Team','Away Team','Opponent','Period','Official Minute','Second','Match Seconds','Match Time','Video Time','Team','Primary Player ID','Secondary Player ID','Category','Event','Label','Subtype','Outcome','Phase','Pitch Zone','X','Y','Third','Channel','Score For Before','Score Against Before','Score For After','Score Against After','Score State','Sequence ID','Note','Created At','Updated At'];
+    const matchId = matchInfo.date ? `${matchInfo.date}_${(matchInfo.opponent || 'unknown').replace(/\s+/g, '_')}` : '';
+    const homeTeam = matchInfo.homeAway === 'home' ? 'Us' : (matchInfo.opponent || '');
+    const awayTeam = matchInfo.homeAway === 'away' ? 'Us' : (matchInfo.opponent || '');
+    const rows = events.map((ev) => {
+      const zone = ev.location ? locationZone(ev.location.x, ev.location.y) : '';
+      const tp = zone.split(' · ');
+      const sfb = ev.scoreForBefore ?? 0;
+      const sab = ev.scoreAgainstBefore ?? 0;
+      let scoreState = 'DRAW'; if (sfb > sab) scoreState = 'WINNING'; else if (sfb < sab) scoreState = 'LOSING';
+      const qualStr = Object.entries(ev.qualifiers || {}).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join('; ');
+      return [csvEscape(matchId),csvEscape(matchInfo.date||''),csvEscape(matchInfo.competition||''),csvEscape(homeTeam),csvEscape(awayTeam),csvEscape(matchInfo.opponent||''),csvEscape(ev.period||''),ev.officialMinute??'',ev.second??'',ev.matchSeconds??'',ev.matchTime!=null?ev.matchTime.toFixed(1):'',ev.videoTime!=null?ev.videoTime.toFixed(1):'',csvEscape(ev.team||''),csvEscape(ev.playerId||''),csvEscape(ev.playerOffId||''),csvEscape(ev.label||''),csvEscape(ev.label||''),csvEscape(ev.label||''),csvEscape(ev.subtype||''),csvEscape(qualStr),'',csvEscape(zone),ev.location?(ev.location.x*100).toFixed(1):'',ev.location?(ev.location.y*100).toFixed(1):'',csvEscape(tp[0]||''),csvEscape(tp[1]||''),sfb,sab,ev.scoreForAfter??'',ev.scoreAgainstAfter??'',csvEscape(scoreState),csvEscape(ev.sequenceId||''),'','',''].join(',');
+    });
+    return [header.join(','), ...rows].join('\n');
+  }
+
+  if (btnExportCsv) {
+    btnExportCsv.title = 'Click: Standard CSV | Shift+Click: Full Analysis CSV';
+    btnExportCsv.addEventListener('click', (e) => {
+      if (e.shiftKey) { window.matchtag.exportCsv(buildFullAnalysisCsv()); }
+    });
+  }
+
+  // ---------- Save status for Touchline ----------
+  function renderTouchlineSaveStatus(status) {
+    const el = document.getElementById('touchlineSaveStatus');
+    if (!el) return;
+    if (status === 'saved') { el.textContent = '✓ SAVED'; el.className = 'save-status-saved'; }
+    else if (status === 'saving') { el.textContent = 'SAVING...'; el.className = 'save-status-saving'; }
+    else if (status === 'error') { el.textContent = '⚠ SAVE ERROR'; el.className = 'save-status-error'; }
+  }
+
+  // ---------- Touchline Mode ----------
+  let touchlineMode = false;
+  const touchlineOverlay = document.getElementById('touchlineOverlay');
+  const btnTouchlineToggle = document.getElementById('btnTouchlineToggle');
+  const btnExitTouchline = document.getElementById('btnExitTouchline');
+  const QUICK_TAGS = ['Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub'];
+
+  function enterTouchlineMode() { touchlineMode = true; if (touchlineOverlay) touchlineOverlay.style.display = 'flex'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Desktop Mode'; renderTouchlineQuickTags(); renderTouchlineAll(); }
+  function exitTouchlineMode() { touchlineMode = false; if (touchlineOverlay) touchlineOverlay.style.display = 'none'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Touchline Mode'; }
+  function toggleTouchlineMode() { if (touchlineMode) exitTouchlineMode(); else enterTouchlineMode(); }
+
+  function renderTouchlineQuickTags() {
+    const c = document.getElementById('touchlineQuickTags'); if (!c) return; c.innerHTML = '';
+    QUICK_TAGS.forEach((label) => {
+      const btn = document.createElement('button');
+      btn.className = 'touchline-tag-btn' + (label === 'Goal' ? ' goal-tag' : '');
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        let tag = tags.find((t) => t.label === label);
+        if (!tag) { tag = { label: label, key: '' }; tags.push(tag); renderTagButtons(); populateEventTypeFilter(); }
+        handleTagPress(tag); renderTouchlineAll();
+      });
+      c.appendChild(btn);
+    });
+  }
+
+  function renderTouchlineAll() {
+    if (!touchlineMode) return;
+    const seconds = getCurrentMatchSeconds();
+    const tlClock = document.getElementById('touchlineClock');
+    const tlPeriod = document.getElementById('touchlinePeriod');
+    if (tlClock) tlClock.textContent = formatMatchClock(seconds, matchClock.period);
+    if (tlPeriod) tlPeriod.textContent = PERIOD_LABELS[matchClock.period] || matchClock.period;
+    const tlScore = document.getElementById('touchlineScore');
+    if (tlScore) tlScore.textContent = `${matchClock.scoreFor} — ${matchClock.scoreAgainst}`;
+    const tlState = document.getElementById('touchlineScoreState');
+    if (tlState) { let s='draw',l='DRAW'; if(matchClock.scoreFor>matchClock.scoreAgainst){s='winning';l='WINNING';} else if(matchClock.scoreFor<matchClock.scoreAgainst){s='losing';l='LOSING';} tlState.textContent=l; tlState.className='touchline-score-state '+s; }
+    const tlOur=document.getElementById('tlBtnTeamOur'), tlOpp=document.getElementById('tlBtnTeamOpp');
+    if(tlOur)tlOur.classList.toggle('active',matchClock.selectedTeam==='our');
+    if(tlOpp)tlOpp.classList.toggle('active',matchClock.selectedTeam==='opponent');
+    const tlPS=document.getElementById('tlPlayerSelect');
+    if(tlPS){const cur=matchClock.selectedPlayerId||'';tlPS.innerHTML=['<option value="">— None —</option>'].concat(squad.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(p.number?`${p.number} ${p.name}`:p.name)}</option>`)).join('');tlPS.value=cur;}
+    const tlSS=document.getElementById('tlBtnStartSeq'),tlES=document.getElementById('tlBtnEndSeq'),tlAS=document.getElementById('tlActiveSeq');
+    if(tlSS)tlSS.disabled=!!matchClock.activeSequenceId; if(tlES)tlES.disabled=!matchClock.activeSequenceId; if(tlAS)tlAS.textContent=matchClock.activeSequenceId||'';
+    const tlBS=document.getElementById('tlBtnStart'),tlBP=document.getElementById('tlBtnPause'),tlBEH=document.getElementById('tlBtnEndHalf'),tlBNH=document.getElementById('tlBtnNextHalf');
+    if(tlBS)tlBS.disabled=matchClock.clockRunning||matchClock.period==='FT'; if(tlBP)tlBP.disabled=!matchClock.clockRunning;
+    if(tlBEH)tlBEH.disabled=matchClock.period==='PRE_MATCH'||matchClock.period==='HT'||matchClock.period==='FT'||matchClock.period==='ET_HT';
+    if(tlBNH){tlBNH.disabled=!(matchClock.period==='HT'||matchClock.period==='FT'||matchClock.period==='ET_HT');if(matchClock.period==='HT')tlBNH.textContent='Start 2nd Half';else if(matchClock.period==='FT')tlBNH.textContent='Start Extra Time';else if(matchClock.period==='ET_HT')tlBNH.textContent='Start ET 2nd Half';else tlBNH.textContent='Next Half';}
+    const tlBU=document.getElementById('tlBtnUndo');
+    if(tlBU)tlBU.disabled=lastLoggedEventId==null||!events.some(e=>e.id===lastLoggedEventId);
+    const tlR=document.getElementById('touchlineRecentEvents');
+    if(tlR){const recent=events.slice(-10).reverse();tlR.innerHTML=recent.map(ev=>{const p=resolvePlayer(ev.playerId);const pl=p?(p.number?`#${p.number} ${p.name}`:p.name):'';const tl=ev.team==='opponent'?'OPP':'';return `<div class="touchline-recent-item" data-event-id="${ev.id}"><span class="tl-time">${formatMatchClock(ev.matchTime||ev.time,ev.period)}</span><span class="tl-main">${escapeHtml(tl?tl+' '+ev.label:ev.label)}</span><span class="tl-player">${escapeHtml(pl)}</span></div>`;}).join('');tlR.querySelectorAll('.touchline-recent-item').forEach(item=>{item.addEventListener('click',()=>{const id=parseInt(item.dataset.eventId,10);const ev=events.find(e=>e.id===id);if(ev&&currentVideoPath&&ev.videoTime!==null)seekTo(ev.videoTime);});});}
+    const tlPitch=document.getElementById('touchlinePitchSvg'),tlReadout=document.getElementById('touchlinePitchReadout');
+    if(tlPitch){tlPitch.innerHTML=pitchMarkingsSvg();const last=[...events].reverse().find(e=>e.location);if(last&&last.location){tlPitch.innerHTML+=`<circle class="pitch-marker" cx="${(last.location.x*700).toFixed(1)}" cy="${(last.location.y*450).toFixed(1)}" r="8"/>`;if(tlReadout)tlReadout.textContent=locationZone(last.location.x,last.location.y);}else{if(tlReadout)tlReadout.textContent='No location set';}}
+  }
+
+  if (btnTouchlineToggle) btnTouchlineToggle.addEventListener('click', toggleTouchlineMode);
+  if (btnExitTouchline) btnExitTouchline.addEventListener('click', exitTouchlineMode);
+  const tlBtnStart=document.getElementById('tlBtnStart'),tlBtnPause=document.getElementById('tlBtnPause'),tlBtnEndHalf=document.getElementById('tlBtnEndHalf'),tlBtnNextHalf=document.getElementById('tlBtnNextHalf');
+  if(tlBtnStart)tlBtnStart.addEventListener('click',()=>{startMatchClock();renderTouchlineAll();});
+  if(tlBtnPause)tlBtnPause.addEventListener('click',()=>{pauseMatchClock();renderTouchlineAll();});
+  if(tlBtnEndHalf)tlBtnEndHalf.addEventListener('click',()=>{endHalf();renderTouchlineAll();});
+  if(tlBtnNextHalf)tlBtnNextHalf.addEventListener('click',()=>{startNextHalf();renderTouchlineAll();});
+  const tlBtnTeamOur=document.getElementById('tlBtnTeamOur'),tlBtnTeamOpp=document.getElementById('tlBtnTeamOpp'),tlPlayerSelect=document.getElementById('tlPlayerSelect'),tlBtnStartSeq=document.getElementById('tlBtnStartSeq'),tlBtnEndSeq=document.getElementById('tlBtnEndSeq'),tlBtnUndo=document.getElementById('tlBtnUndo');
+  if(tlBtnTeamOur)tlBtnTeamOur.addEventListener('click',()=>{selectTeam('our');renderTouchlineAll();});
+  if(tlBtnTeamOpp)tlBtnTeamOpp.addEventListener('click',()=>{selectTeam('opponent');renderTouchlineAll();});
+  if(tlPlayerSelect)tlPlayerSelect.addEventListener('change',()=>{selectPlayer(tlPlayerSelect.value);renderTouchlineAll();});
+  if(tlBtnStartSeq)tlBtnStartSeq.addEventListener('click',()=>{startSequence();renderTouchlineAll();});
+  if(tlBtnEndSeq)tlBtnEndSeq.addEventListener('click',()=>{endSequence();renderTouchlineAll();});
+  if(tlBtnUndo)tlBtnUndo.addEventListener('click',()=>{undoLastTag();renderTouchlineAll();});
+  const tlPitchSvg=document.getElementById('touchlinePitchSvg');
+  if(tlPitchSvg)tlPitchSvg.addEventListener('click',(e)=>{if(!lastLoggedEventId)return;const ev=events.find(x=>x.id===lastLoggedEventId);if(!ev)return;const rect=tlPitchSvg.getBoundingClientRect();ev.location={x:clamp01((e.clientX-rect.left)/rect.width),y:clamp01((e.clientY-rect.top)/rect.height)};markAutosaveDirty();renderTouchlineAll();});
+
+  // ---------- Wire up open-video buttons ----------
+
+  btnOpenVideo.addEventListener('click', openVideo);
+  btnOpenVideoEmpty.addEventListener('click', openVideo);
+
+  // ---------- Init ----------
+
+  video.style.display = 'none';
+  renderTagButtons();
+  populateEventTypeFilter();
+  renderEventList();
+  updateUndoButton();
+  renderMatchSummary();
+  renderDirtyIndicator();
+  renderMatchClock();
+  startClockDisplayTimer();
+  renderTeamSelector();
+  renderPlayerSelector();
+  renderSequenceControls();
+  renderScoreboard();
+  renderVideoOffset();
+
+  window.matchtag.loadSquad()
+    .then((loaded) => {
+      if (Array.isArray(loaded) && loaded.length) {
+        squad = loaded;
+        const maxId = squad.reduce((max, p) => {
+          const num = parseInt(String(p.id).replace('player_', ''), 10);
+          return isNaN(num) ? max : Math.max(max, num);
+        }, 0);
+        nextPlayerId = maxId + 1;
+      }
+      renderPlayerSelector();
+    })
+    .catch(() => {
+      // no squad file yet - fine, start empty
+    })
+    .finally(() => {
+      // Now that the squad is loaded (or we've decided to start empty),
+      // check for a recoverable autosave. This runs after the squad load
+      // so that recovery uses the local squad (which is always at least
+      // as up-to-date as the autosave's squad snapshot).
+      checkForRecoverableAutosave();
+    });
+})();

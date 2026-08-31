@@ -1,0 +1,38 @@
+{
+  "name": "matchtag",
+  "version": "0.1.0",
+  "description": "MatchTag - live match tactical tagging tool for EESC",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.eesc.matchtag",
+    "productName": "MatchTag",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MatchTag"
+    },
+    "files": [
+      "src/**/*"
+    ]
+  }
+}

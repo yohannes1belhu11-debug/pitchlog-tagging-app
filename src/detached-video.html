@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MatchTag — Video</title>
+  <!--
+    Content-Security-Policy for the detached video window.
+
+    This window is a minimal video player: one <video> element, one external
+    script (detached-video.js), and one inline <style> block. The policy is
+    stricter than the main window's because this window has no UI to protect:
+      - script-src 'self' — only detached-video.js, no inline, no eval
+      - style-src 'self' 'unsafe-inline' — for the inline <style> block below
+      - media-src 'self' file: blob: — video loads from file:// URLs
+      - everything else blocked
+
+    The window has no access to the squad, events, or any session data — it
+    only relays transport commands and video state via the main process — so
+    even a successful XSS here would have a very limited blast radius.
+
+    NOTE: The content attribute must be a single line (no backslash
+    continuations) — HTML attributes do not support line continuation,
+    and a literal '\' would corrupt the directive name.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' file: blob:; img-src 'self' data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none';" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" controls></video>
+  <script src="detached-video.js"></script>
+</body>
+</html>

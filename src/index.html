@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>MatchTag</title>
+  <!--
+    Content-Security-Policy for the main window.
+
+    This is the Electron-recommended defense against XSS and content
+    injection. The app loads:
+      - scripts:   only renderer.js (same origin, 'self')
+      - styles:    styles.css (same origin) + inline style= attributes
+                    on several elements (hence 'unsafe-inline' for styles)
+      - media:     video files via file:// URLs (and potentially blob: in
+                    future, so allowed defensively)
+      - images:    none currently, but 'self' + data: + blob: for future use
+      - fonts:     none currently (system fonts only)
+      - connect:   no fetch/XHR (all IPC goes through preload bridge)
+
+    Notable restrictions:
+      - script-src 'self' — no inline scripts, no eval, no remote scripts.
+        The app uses zero inline <script> blocks and zero eval(), so this
+        is safe and closes the attack surface entirely.
+      - style-src includes 'unsafe-inline' because the app uses inline
+        style="..." attributes. This is acceptable: CSS injection is much
+        lower risk than script injection. Removing the inline styles is a
+        future cleanup task.
+      - object-src 'none' and frame-src 'none' — no plugins, no iframes.
+      - base-uri 'self' — prevents <base> tag injection.
+      - form-action 'none' — no form submissions.
+
+    NOTE: The content attribute must be a single line (no backslash
+    continuations) — HTML attributes do not support line continuation,
+    and a literal '\' would corrupt the directive name.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' file: blob:; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none';" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span id="tally" class="tally"></span>
+      <span class="brand-name">MATCHTAG</span>
+      <span id="dirtyIndicator" class="dirty-indicator dirty-clean" title="No unsaved changes">
+        <span class="dirty-dot"></span>
+        <span class="dirty-label">Saved</span>
+      </span>
+      <span id="matchSummary" class="match-summary"></span>
+    </div>
+    <div class="topbar-actions">
+      <button id="btnOpenVideo" class="btn">Open video</button>
+      <button id="btnManageSquad" class="btn">Manage squad</button>
+      <button id="btnMatchSetup" class="btn">Match setup</button>
+      <button id="btnLoadSession" class="btn">Load session</button>
+      <button id="btnSaveSession" class="btn">Save session</button>
+      <button id="btnPitchMap" class="btn">Pitch map</button>
+      <button id="btnSeasonView" class="btn">Season view</button>
+      <button id="btnTouchlineToggle" class="btn">Touchline Mode</button>
+      <button id="btnExportCsv" class="btn">Export CSV</button>
+      <button id="btnExportClips" class="btn btn-accent">Export clip playlist</button>
+    </div>
+  </header>
+
+  <!-- Matchday control bar: scoreboard, team selector, player selector, sequence, video sync -->
+  <div class="matchday-bar">
+    <div class="scoreboard">
+      <span class="score-team-label">US</span>
+      <span id="scoreboardDisplay" class="score-display">0 — 0</span>
+      <span class="score-team-label">OPP</span>
+      <span id="scoreStateDisplay" class="score-state draw">DRAW</span>
+    </div>
+    <div class="team-selector">
+      <span class="selector-label">Team:</span>
+      <button id="btnTeamOur" class="btn btn-sm team-btn team-our active">Our Team</button>
+      <button id="btnTeamOpponent" class="btn btn-sm team-btn team-opp">Opponent</button>
+    </div>
+    <div class="player-selector">
+      <span class="selector-label">Player:</span>
+      <select id="selectedPlayerSelect" class="player-select"><option value="">— None —</option></select>
+    </div>
+    <div class="sequence-controls">
+      <span class="selector-label">Seq:</span>
+      <button id="btnStartSequence" class="btn btn-sm">Start Seq</button>
+      <button id="btnEndSequence" class="btn btn-sm" disabled>End Seq</button>
+      <span id="activeSequenceDisplay" class="active-sequence-display"></span>
+    </div>
+    <div class="video-sync-controls">
+      <span class="selector-label">Video Offset:</span>
+      <button id="btnOffsetMinus10" class="btn btn-sm">-10s</button>
+      <button id="btnOffsetMinus1" class="btn btn-sm">-1s</button>
+      <input id="videoOffsetInput" type="text" class="video-offset-input" value="+00:00" title="matchTime = videoTime + offset" />
+      <button id="btnOffsetPlus1" class="btn btn-sm">+1s</button>
+      <button id="btnOffsetPlus10" class="btn btn-sm">+10s</button>
+      <button id="btnSetOffset" class="btn btn-sm">Set</button>
+    </div>
+  </div>
+
+  <!-- Match clock bar in topbar -->
+  <div class="match-clock-bar">
+    <span id="matchClockDisplay" class="match-clock-display">00:00</span>
+    <span id="matchPeriodDisplay" class="match-period-display">Pre-match</span>
+    <button id="btnClockStart" class="btn btn-sm btn-accent">Start</button>
+    <button id="btnClockPause" class="btn btn-sm" disabled>Pause</button>
+    <button id="btnClockEndHalf" class="btn btn-sm" disabled>End Half</button>
+    <button id="btnClockNextHalf" class="btn btn-sm" disabled>Next Half</button>
+  </div>
+
+  <!-- Touchline Mode overlay -->
+  <div id="touchlineOverlay" class="touchline-overlay" style="display:none;">
+    <div class="touchline-header">
+      <div class="touchline-score">
+        <span class="touchline-team-name">US</span>
+        <span id="touchlineScore" class="touchline-score-value">0 — 0</span>
+        <span class="touchline-team-name">OPP</span>
+        <span id="touchlineScoreState" class="touchline-score-state draw">DRAW</span>
+      </div>
+      <div class="touchline-clock">
+        <span id="touchlineClock" class="touchline-clock-value">00:00</span>
+        <span id="touchlinePeriod" class="touchline-period-value">PRE-MATCH</span>
+      </div>
+      <div class="touchline-clock-controls">
+        <button id="tlBtnStart" class="btn btn-sm btn-accent">Start</button>
+        <button id="tlBtnPause" class="btn btn-sm" disabled>Pause</button>
+        <button id="tlBtnEndHalf" class="btn btn-sm" disabled>End Half</button>
+        <button id="tlBtnNextHalf" class="btn btn-sm" disabled>Next Half</button>
+      </div>
+      <div class="touchline-save-status"><span id="touchlineSaveStatus" class="save-status-saved">✓ SAVED</span></div>
+      <button id="btnExitTouchline" class="btn btn-sm">Exit Touchline</button>
+    </div>
+    <div class="touchline-selection-bar">
+      <div class="touchline-team-selector">
+        <span class="selector-label">Team:</span>
+        <button id="tlBtnTeamOur" class="btn team-btn team-our active">Our Team</button>
+        <button id="tlBtnTeamOpp" class="btn team-btn team-opp">Opponent</button>
+      </div>
+      <div class="touchline-player-selector">
+        <span class="selector-label">Player:</span>
+        <select id="tlPlayerSelect" class="player-select"><option value="">— None —</option></select>
+      </div>
+      <div class="touchline-sequence">
+        <button id="tlBtnStartSeq" class="btn btn-sm">Start Seq</button>
+        <button id="tlBtnEndSeq" class="btn btn-sm" disabled>End Seq</button>
+        <span id="tlActiveSeq" class="active-sequence-display"></span>
+      </div>
+    </div>
+    <div class="touchline-main">
+      <div class="touchline-pitch-section">
+        <div class="touchline-pitch-label">Pitch — tap to set location</div>
+        <svg id="touchlinePitchSvg" class="pitch-svg touchline-pitch-svg" viewBox="0 0 700 450"></svg>
+        <div id="touchlinePitchReadout" class="touchline-pitch-readout">No location set</div>
+      </div>
+      <div class="touchline-tags-section">
+        <div class="touchline-tags-label">Quick Tags</div>
+        <div id="touchlineQuickTags" class="touchline-quick-tags"></div>
+        <button id="tlBtnUndo" class="btn btn-ghost touchline-undo" disabled>↶ Undo last</button>
+      </div>
+    </div>
+    <div class="touchline-recent">
+      <div class="touchline-recent-label">Recent Events</div>
+      <div id="touchlineRecentEvents" class="touchline-recent-list"></div>
+    </div>
+  </div>
+
+  <main class="layout">
+
+    <section class="video-pane">
+      <div class="video-frame">
+        <video id="video"></video>
+        <button id="btnDetachVideo" class="btn btn-ghost btn-detach" title="Open video in its own window" disabled>⧉ Detach</button>
+        <div id="videoEmpty" class="video-empty">
+          <p>No video loaded.</p>
+          <button id="btnOpenVideoEmpty" class="btn btn-accent">Open a video file</button>
+        </div>
+        <div id="videoErrorMsg" class="video-error" style="display:none;">
+          <!-- The error message text + optional "Find video" button are injected
+               by renderer.js when the video fails to load. The button lets the
+               analyst re-link to a moved/renamed video file without losing
+               their tagged events. -->
+        </div>
+        <div id="videoDetachedMsg" class="video-detached-message" style="display:none;">
+          <p>Video is playing in a separate window.</p>
+          <button id="btnReattachVideo" class="btn btn-accent">Reattach</button>
+        </div>
+      </div>
+
+      <div class="timeline-strip-wrapper">
+        <div id="timelineStrip" class="timeline-strip">
+          <div id="timelineMarkers" class="timeline-markers"></div>
+          <div id="timelinePlayhead" class="timeline-playhead"></div>
+        </div>
+      </div>
+
+      <div class="transport">
+        <button id="btnPlayPause" class="btn btn-icon" disabled>▶</button>
+        <span id="timecode" class="timecode">00:00:00.0</span>
+        <input id="scrub" class="scrub" type="range" min="0" max="1000" value="0" step="1" disabled />
+        <span id="duration" class="duration">00:00:00</span>
+        <select id="speed" class="speed" disabled>
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1.0x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2.0x</option>
+        </select>
+        <span class="transport-hint">← → seek 5s · Shift + ← → seek 1s</span>
+      </div>
+
+      <div class="tagpanel">
+        <div class="tagpanel-header">
+          <div class="tagpanel-header-text">
+            <span>TAG EVENTS</span>
+            <span class="hint">Tap a button, or press its shortcut key. Tags with a • open extra detail options. Tags marked ⏱ are start/end — press once to start, again to stop.</span>
+          </div>
+          <button id="btnUndo" class="btn btn-ghost btn-undo" disabled>Undo last tag <span class="key-hint">Ctrl+Z</span></button>
+        </div>
+        <div id="tagButtons" class="tag-grid"></div>
+        <button id="btnAddCustom" class="btn btn-ghost btn-add-custom">+ Add custom tag</button>
+      </div>
+
+      <div id="detailPanel" class="detail-panel" style="display:none;"></div>
+    </section>
+
+    <aside class="events-pane">
+      <div class="events-header">
+        <div class="events-tabs">
+          <button id="tabEvents" class="events-tab active">Events <span id="eventCount" class="event-count">0</span></button>
+          <button id="tabStats" class="events-tab">Stats</button>
+        </div>
+      </div>
+      <div id="eventFilterBar" class="event-filter-bar">
+        <input id="eventSearchInput" type="search" class="event-search-input" placeholder="Search events…" />
+        <select id="eventTypeFilter" class="event-type-filter">
+          <option value="__all__">All types</option>
+        </select>
+      </div>
+      <div id="eventFilterCount" class="event-filter-count"></div>
+      <div id="eventList" class="event-list">
+        <div class="event-empty">No events tagged yet. Load a video and tap a tag button to start.</div>
+      </div>
+      <div id="statsPanel" class="stats-panel" style="display:none;">
+        <div id="statsContent"></div>
+      </div>
+    </aside>
+
+  </main>
+
+  <div id="addTagModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h3>Add custom tag</h3>
+      <label>Name
+        <input id="newTagName" type="text" placeholder="e.g. Tackle" />
+      </label>
+      <label>Shortcut key (0–9, optional — picked automatically if left blank)
+        <input id="newTagKey" type="text" maxlength="1" placeholder="e.g. 8" />
+      </label>
+      <label>Subtypes (comma-separated, optional)
+        <input id="newTagSubtypes" type="text" placeholder="e.g. Won, Lost" />
+      </label>
+      <label>Qualifiers (optional — one group per line, as Name: option1, option2)
+        <textarea id="newTagQualifiers" rows="3" placeholder="Zone: Defensive third, Middle third, Attacking third"></textarea>
+      </label>
+      <label class="checkbox-label">
+        <input id="newTagIsInterval" type="checkbox" />
+        This is a start/end phase (like Possession), not a single instant
+      </label>
+      <div class="modal-actions">
+        <button id="btnCancelAddTag" class="btn btn-ghost">Cancel</button>
+        <button id="btnConfirmAddTag" class="btn btn-accent">Add tag</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="clipExportModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h3>Export clip playlist</h3>
+      <label>Seconds before each tag
+        <input id="clipPreRoll" type="number" min="0" step="0.5" value="5" />
+      </label>
+      <label>Seconds after each tag
+        <input id="clipPostRoll" type="number" min="0" step="0.5" value="8" />
+      </label>
+      <p class="modal-note">
+        This creates a folder with a CSV reference and a script that uses <strong>ffmpeg</strong>
+        to cut and merge the clips into one highlight video. If ffmpeg isn't installed, the script
+        will tell you so — install it with <code>winget install ffmpeg</code> in Command Prompt.
+      </p>
+      <div class="modal-actions">
+        <button id="btnCancelClipExport" class="btn btn-ghost">Cancel</button>
+        <button id="btnConfirmClipExport" class="btn btn-accent">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="squadModal" class="modal-overlay" style="display:none;">
+    <div class="modal modal-wide">
+      <h3>Manage squad</h3>
+      <div id="squadList" class="squad-list"></div>
+      <label>Add players (one per line, as "Number, Name" — number optional)
+        <textarea id="squadBulkInput" rows="4" placeholder="10, Abebe Bikila&#10;7, Haile Gebrselassie&#10;Derartu Tulu"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button id="btnAddSquadBulk" class="btn btn-ghost">Add players</button>
+        <button id="btnCloseSquadModal" class="btn btn-accent">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="matchSetupModal" class="modal-overlay" style="display:none;">
+    <div class="modal modal-wide modal-matchsetup">
+      <h3>Match setup</h3>
+
+      <div class="match-setup-section-label">Match details</div>
+      <div class="match-info-grid">
+        <label>Competition
+          <input id="matchCompetition" type="text" placeholder="e.g. Ethiopian Premier League" />
+        </label>
+        <label>Date
+          <input id="matchDate" type="date" />
+        </label>
+        <label>Opponent
+          <input id="matchOpponent" type="text" placeholder="e.g. Bahir Dar City" />
+        </label>
+        <label>Venue
+          <input id="matchVenue" type="text" placeholder="e.g. Bahir Dar Stadium" />
+        </label>
+        <label>Home / Away
+          <select id="matchHomeAway">
+            <option value="home">Home</option>
+            <option value="away">Away</option>
+            <option value="neutral">Neutral venue</option>
+          </select>
+        </label>
+        <label>Final score
+          <div class="match-score-inputs">
+            <input id="matchOurScore" type="number" min="0" placeholder="Us" />
+            <span>–</span>
+            <input id="matchOpponentScore" type="number" min="0" placeholder="Them" />
+          </div>
+        </label>
+      </div>
+
+      <div class="match-setup-section-label">Formation &amp; starting XI</div>
+      <label>Formation
+        <select id="matchFormation">
+          <option value="">— No formation set —</option>
+          <option value="4-4-2">4-4-2</option>
+          <option value="4-3-3">4-3-3</option>
+          <option value="4-2-3-1">4-2-3-1</option>
+          <option value="3-5-2">3-5-2</option>
+          <option value="3-4-3">3-4-3</option>
+          <option value="5-3-2">5-3-2</option>
+          <option value="4-1-4-1">4-1-4-1</option>
+        </select>
+      </label>
+      <div id="lineupSlots" class="lineup-slots"></div>
+
+      <div class="modal-actions">
+        <button id="btnCancelMatchSetup" class="btn btn-ghost">Cancel</button>
+        <button id="btnSaveMatchSetup" class="btn btn-accent">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pitchMapModal" class="modal-overlay" style="display:none;">
+    <div class="modal modal-pitchmap">
+      <div class="pitchmap-header">
+        <h3>Pitch map</h3>
+        <button id="btnClosePitchMap" class="btn btn-ghost detail-panel-close">Done</button>
+      </div>
+      <div class="pitchmap-filters">
+        <label>Event type
+          <select id="pitchMapTagFilter"></select>
+        </label>
+        <label>Player
+          <select id="pitchMapPlayerFilter"></select>
+        </label>
+        <label>Side
+          <select id="pitchMapSideFilter">
+            <option value="__all__">All sides</option>
+            <option value="for">For</option>
+            <option value="against">Against</option>
+            <option value="neutral">Neutral</option>
+          </select>
+        </label>
+      </div>
+      <svg id="pitchMapSvg" class="pitch-svg pitch-map-svg" viewBox="0 0 700 450"></svg>
+      <div id="pitchMapLegend" class="pitchmap-legend"></div>
+      <div id="pitchMapCount" class="pitchmap-count"></div>
+    </div>
+  </div>
+
+  <div id="seasonModal" class="modal-overlay" style="display:none;">
+    <div class="modal modal-pitchmap">
+      <div class="pitchmap-header">
+        <h3>Season view</h3>
+        <button id="btnCloseSeasonModal" class="btn btn-ghost detail-panel-close">Done</button>
+      </div>
+
+      <div class="season-section-header">
+        <span class="stats-section-label">Loaded matches</span>
+        <button id="btnAddSeasonMatches" class="btn btn-ghost">+ Add match session(s)</button>
+      </div>
+      <div id="seasonMatchList" class="season-match-list"></div>
+
+      <div id="seasonStatsContent" class="season-stats-content"></div>
+
+      <div class="modal-actions">
+        <button id="btnExportSeasonCsv" class="btn btn-accent">Export season CSV</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recovery modal: shown on startup if userData/autosave.json exists.
+       The analyst must explicitly choose Recover or Discard; the modal is
+       not dismissible by Escape so the autosave is never accidentally lost. -->
+  <div id="recoveryModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h3>Recovered work found</h3>
+      <p class="recovery-description">
+        MatchTag found unsaved work from a previous session. Would you like to recover it?
+      </p>
+      <div id="recoveryDetails" class="recovery-details"></div>
+      <div class="modal-actions">
+        <button id="btnDiscardRecovery" class="btn btn-ghost">Discard</button>
+        <button id="btnRecoverAutosave" class="btn btn-accent">Recover work</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Non-blocking toast shown when an autosave write fails. Dismissible. -->
+  <div id="autosaveToast" class="autosave-toast" style="display:none;">
+    <span id="autosaveToastText"></span>
+    <button id="autosaveToastClose" class="autosave-toast-close" title="Dismiss">✕</button>
+  </div>
+
+  <!-- Unsaved-changes confirm modal: shown when the user closes the window
+       (or triggers any action that would discard unsaved work) while the
+       session is dirty. Three explicit choices — Save, Don't save, Cancel —
+       so the analyst is never forced into a destructive default. -->
+  <div id="unsavedConfirmModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h3>Unsaved changes</h3>
+      <p class="recovery-description">
+        You have unsaved changes in this session. Would you like to save before closing?
+      </p>
+      <div class="modal-actions modal-actions-left">
+        <button id="btnUnsavedCancel" class="btn btn-ghost">Cancel</button>
+      </div>
+      <div class="modal-actions">
+        <button id="btnUnsavedDiscard" class="btn btn-ghost">Don't save</button>
+        <button id="btnUnsavedSave" class="btn btn-accent">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
