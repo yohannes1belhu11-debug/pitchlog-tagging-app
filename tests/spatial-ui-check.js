@@ -50,6 +50,7 @@ const srcDir = path.join(__dirname, '..', 'src');
 const html = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf-8');
 const integritySrc = fs.readFileSync(path.join(srcDir, 'integrity.js'), 'utf-8');
 const analyticsSrc = fs.readFileSync(path.join(srcDir, 'analytics.js'), 'utf-8');
+const playerSeasonSrc = fs.readFileSync(path.join(srcDir, 'player-season.js'), 'utf-8');
 const rendererSrc = fs.readFileSync(path.join(srcDir, 'renderer.js'), 'utf-8');
 
 const results = [];
@@ -93,6 +94,7 @@ async function boot(autosave, squad) {
   });
   win.eval(integritySrc);
   win.eval(analyticsSrc);
+  win.eval(playerSeasonSrc);
   win.eval(rendererSrc);
   await sleep(250);
   return { dom, win, doc: win.document };

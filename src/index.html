@@ -471,6 +471,12 @@
        and never mutates them. -->
   <script src="integrity.js"></script>
   <script src="analytics.js"></script>
+  <!-- Player & Season Data Engine V1 (src/player-season.js): the deterministic
+       multi-match aggregation layer (player match records, team match records,
+       player/team season records, gated minutes, pooled percentages). Pure
+       consumer of the Analytics Engine; loaded after analytics.js, before
+       renderer.js. Used by the season view. -->
+  <script src="player-season.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

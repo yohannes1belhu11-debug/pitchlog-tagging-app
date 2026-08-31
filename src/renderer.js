@@ -2724,8 +2724,19 @@
   });
 
   // ---------- Season view (combine several saved sessions) ----------
+  //
+  // V1 migration point (Player & Season Data Engine): the season stats
+  // section now consumes PlayerSeasonEngine.computeSeason() — the
+  // deterministic player/season aggregation layer — instead of the legacy
+  // combined-totals panel (computeStatsFor over the concatenated event
+  // list). The legacy computation itself is untouched and still powers the
+  // live Stats tab for the current session; it is no longer duplicated
+  // here. Each loaded match keeps its OWN squad snapshot + matchClock +
+  // __savedAt (needed by the engine: per-session identity resolution,
+  // FT/minutes evidence, match identity) — the session files on disk are
+  // never modified.
 
-  let seasonMatches = []; // { id, sourceFile, matchInfo, events, tags }
+  let seasonMatches = []; // { id, sourceFile, savedAt, matchInfo, events, tags, squad, matchClock }
   let nextSeasonMatchId = 1;
 
   function seasonMatchLabel(m) {
@@ -2766,13 +2777,219 @@
     });
   }
 
+  // renderSeasonStats(): renders the Player & Season Data Engine output.
+  // The engine is a pure consumer of the Analytics Engine; all core season
+  // statistics are computed in src/player-season.js, never in this DOM code.
   function renderSeasonStats() {
-    const allEvents = seasonMatches.flatMap((m) => m.events);
-    if (allEvents.length === 0) {
+    if (seasonMatches.length === 0) {
       seasonStatsContentEl.innerHTML = '<div class="event-empty">Load one or more match sessions above to see combined totals.</div>';
       return;
     }
-    seasonStatsContentEl.innerHTML = buildStatsHtml(computeStatsFor(allEvents));
+    if (!window.PlayerSeasonEngine || typeof window.PlayerSeasonEngine.computeSeason !== 'function') {
+      seasonStatsContentEl.innerHTML = '<div class="event-empty">Season engine not loaded (src/player-season.js).</div>';
+      return;
+    }
+    let PS;
+    try {
+      PS = window.PlayerSeasonEngine.computeSeason(seasonMatches);
+    } catch (err) {
+      seasonStatsContentEl.innerHTML = `<div class="event-empty">Season engine error: ${escapeHtml(String(err && err.message || err))}</div>`;
+      return;
+    }
+    seasonStatsContentEl.innerHTML = buildSeasonDataHtml(PS);
+  }
+
+  // buildSeasonDataHtml(PS): minimal verification UI for the Player & Season
+  // Data Engine output (task Part 28 — deliberately NOT a full player
+  // intelligence dashboard). Renders only; every statistic comes from the
+  // engine. Column tags: [R] RECORDED (counted directly from tagged events),
+  // [D] DERIVED (computed from recorded counts), [U] UNAVAILABLE (shown with
+  // reason). A legend is printed with every table.
+  function seasonQualityTag(q) {
+    if (q === 'RELIABLE') return '<span class="sn-qual sn-qual-reliable">reliable</span>';
+    if (q === 'MIXED') return '<span class="sn-qual sn-qual-mixed">mixed</span>';
+    if (q === 'ESTIMATED') return '<span class="sn-qual sn-qual-estimated">estimated</span>';
+    return '<span class="sn-qual sn-qual-unavailable">unavailable</span>';
+  }
+
+  function seasonNum(v) {
+    return (v === null || v === undefined) ? '—' : String(v);
+  }
+
+  function seasonPct(env) {
+    if (!env || env.value === null || env.value === undefined) return '—';
+    return `${env.value}%`;
+  }
+
+  function buildSeasonDataHtml(PS) {
+    const cov = PS.coverage;
+    const T = PS.teamSeason;
+
+    let html = '';
+
+    // --- Coverage header (task Part 22) ---
+    html += `
+      <div class="sn-section-label">Season data — ${cov.uniqueMatches} match${cov.uniqueMatches === 1 ? '' : 'es'} (recorded)</div>
+      <div class="sn-coverage">
+        Matches in database: ${cov.sessionsLoaded} · Unique: ${cov.uniqueMatches} · Complete records: ${cov.completeMatchRecords} · Partial records: ${cov.partialMatchRecords}
+        ${cov.duplicateSessionsExcluded > 0 ? ` · Duplicate sessions excluded: ${cov.duplicateSessionsExcluded}` : ''}
+      </div>
+      <div class="sn-legend">
+        <span class="sn-legend-item"><b>[R]</b> RECORDED — counted directly from tagged events</span>
+        <span class="sn-legend-item"><b>[D]</b> DERIVED — computed from recorded counts (ratios, averages, per-90, minutes)</span>
+        <span class="sn-legend-item"><b>[U]/—</b> UNAVAILABLE — insufficient data (reason shown)</span>
+      </div>
+    `;
+
+    // --- TEAM SEASON DATA ---
+    const gk = (n) => seasonNum(n);
+    html += `
+      <div class="sn-section-label">Team season data</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Matches [R]</th><th>W</th><th>D</th><th>L</th><th>Goals for [R]</th><th>Goals against [R]</th><th>No result</th><th>Result flagged (X1)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>${T.matches}</td><td>${T.wins}</td><td>${T.draws}</td><td>${T.losses}</td>
+            <td>${gk(T.goalsFor)}</td><td>${gk(T.goalsAgainst)}</td>
+            <td>${gk(T.noResultMatches)}</td><td>${gk(T.resultFlaggedMatches)}</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Match result (W/D/L) comes from the final score (manual entry when set, otherwise the attributed goal chain); score-state buckets below use each event's recorded score BEFORE the event. ${T.resultFlaggedMatches > 0 ? 'Some results are flagged: manual score disagrees with the goal chain (X1 MISMATCH) — shown, never silently resolved.' : ''}</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Tagged event totals [R]</th><th>Us</th><th>Opponent</th></tr>
+        </thead>
+        <tbody>
+          ${[
+            ['Events', T.totals.our.events, T.totals.opponent.events],
+            ['Goals', T.totals.our.goals, T.totals.opponent.goals],
+            ['Shots', T.totals.our.shots, T.totals.opponent.shots],
+            ['Shots on target', T.totals.our.shotsOnTarget, T.totals.opponent.shotsOnTarget],
+            ['Chances', T.totals.our.chances, T.totals.opponent.chances],
+            ['Passes', T.totals.our.passes, T.totals.opponent.passes],
+            ['Successful passes', T.totals.our.successfulPasses, T.totals.opponent.successfulPasses],
+            ['Presses', T.totals.our.presses, T.totals.opponent.presses],
+            ['Press wins', T.totals.our.pressWins, T.totals.opponent.pressWins],
+            ['Recoveries', T.totals.our.recoveries, T.totals.opponent.recoveries],
+            ['Interceptions', T.totals.our.interceptions, T.totals.opponent.interceptions],
+            ['Turnovers', T.totals.our.turnovers, T.totals.opponent.turnovers],
+            ['Duels', T.totals.our.duels, T.totals.opponent.duels],
+            ['Fouls', T.totals.our.fouls, T.totals.opponent.fouls]
+          ].map((row) => `<tr><td>${row[0]}</td><td>${gk(row[1])}</td><td>${gk(row[2])}</td></tr>`).join('')}
+          <tr class="sn-row-derived"><td>Average per match [D]</td><td>${gk(T.averagesPerMatch.our.events)} events · ${gk(T.averagesPerMatch.our.goals)} goals</td><td>${gk(T.averagesPerMatch.opponent.events)} events · ${gk(T.averagesPerMatch.opponent.goals)} goals</td></tr>
+          <tr class="sn-row-derived"><td>Pass success (pooled) [D]</td><td>${seasonPct(T.percentages.our.passSuccess)}</td><td>${seasonPct(T.percentages.opponent.passSuccess)}</td></tr>
+          <tr class="sn-row-derived"><td>Press win ratio (pooled) [D]</td><td>${seasonPct(T.percentages.our.pressWinRatio)}</td><td>${seasonPct(T.percentages.opponent.pressWinRatio)}</td></tr>
+          <tr class="sn-row-derived"><td>Tagged possession seconds [R]</td><td>${gk(Math.round(T.possession.ourSecondsExact * 10) / 10)}s (${T.possession.ourIntervals} intervals)</td><td>${gk(Math.round(T.possession.opponentSecondsExact * 10) / 10)}s (${T.possession.opponentIntervals} intervals)</td></tr>
+          <tr class="sn-row-derived"><td>Tagged Possession Share — season [D]</td><td colspan="2">${T.possession.share && T.possession.share.value !== null && T.possession.share.value !== undefined ? `${T.possession.share.value}%` : '— (insufficient tagged possession data)'}</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">${escapeHtml(T.possession.basis)}.</div>
+      <div class="sn-note">Located tagged events [R]: Us ${T.spatial.located.our} located / ${T.spatial.unlocated.our} unlocated · Opponent ${T.spatial.located.opponent} located / ${T.spatial.unlocated.opponent} unlocated. ${escapeHtml(T.spatial.note)}.</div>
+    `;
+
+    // --- PLAYER SEASON DATA ---
+    html += `
+      <div class="sn-section-label">Player season data (tagged events)</div>
+      <div class="sn-table-scroll sn-player-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr>
+            <th>Player</th><th>Apps [R]</th><th>Starts [R]</th><th>Sub apps [R]</th><th>Unused [R]</th>
+            <th>Minutes [D]</th><th>Minutes quality</th>
+            <th>Goals [R]</th><th>Shots [R]</th><th>SoT [R]</th><th>Chances [R]</th><th>Key P [R]</th>
+            <th>Passes [R]</th><th>Pass% [D]</th><th>Rec [R]</th><th>Int [R]</th><th>Press [R]</th><th>Press W [R]</th>
+            <th>TO [R]</th><th>Rec/90 [D]</th><th>TO/90 [D]</th><th>Press W/90 [D]</th><th>Goals/90 [D]</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    if (PS.playerOrder.length === 0) {
+      html += '<tr><td colspan="24" class="sn-empty">No player records.</td></tr>';
+    }
+    PS.playerOrder.forEach((pid) => {
+      const p = PS.players[pid];
+      const mins = p.appearances > 0 || p.minutes.quality !== 'UNAVAILABLE'
+        ? `${seasonNum(p.minutes.reliableMinutes + p.minutes.estimatedMinutes > 0 ? p.minutes.reliableMinutes + p.minutes.estimatedMinutes : null)}`
+        : '—';
+      const per90 = (k) => {
+        const m = p.per90.metrics[k];
+        if (!m || m.value === null) return '—';
+        return String(m.value);
+      };
+      const nameLabel = escapeHtml(p.name) + (p.number ? ` (${escapeHtml(p.number)})` : '');
+      html += `
+        <tr${p.dataQuality.status !== 'VALID' ? ' class="sn-row-partial"' : ''}>
+          <td title="${escapeHtml(p.playerId)}${p.nameVariants.length > 1 ? ' · name varies between matches (flagged)' : ''}">${nameLabel}</td>
+          <td>${p.appearances}</td><td>${p.starts}</td><td>${p.substituteAppearances}</td><td>${p.unusedSubstitutions}</td>
+          <td>${mins}</td><td>${seasonQualityTag(p.minutes.quality)}</td>
+          <td>${p.totals.goals}</td><td>${p.totals.shots}</td><td>${p.totals.shotsOnTarget}</td><td>${p.totals.chances}</td><td>${p.totals.keyPasses}</td>
+          <td>${p.totals.passes}</td><td>${seasonPct(p.percentages.passSuccess)}</td>
+          <td>${p.totals.recoveries}</td><td>${p.totals.interceptions}</td><td>${p.totals.presses}</td><td>${p.totals.pressWins}</td>
+          <td>${p.totals.turnovers}</td>
+          <td>${per90('recoveries')}</td><td>${per90('turnovers')}</td><td>${per90('pressWins')}</td><td>${per90('goals')}</td>
+        </tr>
+      `;
+    });
+    html += `
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Minutes are ${escapeHtml(p0minutesBasis(PS))}</div>
+      <div class="sn-note">Per-90 values [D] use reliable minutes only; totals and denominator cover the same matches (per-90 is null when no reliable minutes exist). Unused = squad-listed, never started, never substituted on — PitchLog has no bench list, so unused counts may include players outside the matchday squad. Unused substitutes are not appearances.</div>
+    `;
+
+    // --- Data quality / gates (task Part 23) ---
+    const G = PS.gates;
+    const gateLines = [];
+    if (G.PSD_X1_duplicates.length) {
+      gateLines.push(`Duplicate / identity warnings: ${G.PSD_X1_duplicates.length} (same saved match loaded more than once is excluded from totals; look-alike matches are flagged, never merged)`);
+    }
+    if (G.PSD_X2_startingXI.length) {
+      gateLines.push(`Starting XI missing or incomplete: ${G.PSD_X2_startingXI.length} match(es) — participation "unknown" for non-starters; unused-substitute evidence degraded`);
+    }
+    if (G.PSD_X3_ftMarker.length) {
+      gateLines.push(`No full-time marker: ${G.PSD_X3_ftMarker.length} match(es) — minutes fall back to last-known evidence (ESTIMATED, never per-90)`);
+    }
+    if (G.PSD_X7_x1Mismatch.length) {
+      gateLines.push(`Score-chain inconsistency (X1 MISMATCH): ${G.PSD_X7_x1Mismatch.length} match(es) — result flagged; score-state partitions suppressed for those matches`);
+    }
+    if (G.PSD_X8_emptyMetadata.length) {
+      gateLines.push(`Missing date/opponent metadata: ${G.PSD_X8_emptyMetadata.length} match(es)`);
+    }
+    if (G.PSD_X6_subAttributionNoise.length) {
+      gateLines.push(`Substitution attribution noise: ${G.PSD_X6_subAttributionNoise.length} match(es) (opponent-team subs referencing our players, un-timed or duplicate sub markers)`);
+    }
+    if (PS.identityAudit.drift.length) {
+      gateLines.push(`Player name drift: ${PS.identityAudit.drift.length} player(s) — same playerId with different names across matches (kept as ONE identity; flagged for review)`);
+    }
+    if (PS.identityAudit.possibleDuplicates.length) {
+      gateLines.push(`Possible duplicate persons: ${PS.identityAudit.possibleDuplicates.length} name(s) shared by different playerIds (never merged)`);
+    }
+
+    html += `
+      <div class="sn-section-label">Data quality</div>
+      <div class="sn-gates">
+        ${gateLines.length ? gateLines.map((l) => `<div class="sn-gate-line">⚠ ${escapeHtml(l)}</div>`).join('') : '<div class="sn-gate-ok">No data-quality warnings for the loaded matches.</div>'}
+        <div class="sn-gate-summary">Minutes quality across player-match records: reliable ${PS.coverage.minutesReliableRecords} · estimated ${PS.coverage.minutesEstimatedRecords} · unavailable ${PS.coverage.minutesUnavailableRecords}${PS.coverage.gameStateSuppressedMatches > 0 ? ` · score-state suppressed matches: ${PS.coverage.gameStateSuppressedMatches}` : ''}</div>
+      </div>
+      <div class="sn-footer">
+        Player &amp; Season Data Engine ${escapeHtml(PS.engine.version)} · spec ${escapeHtml(PS.spec)} · Analytics Engine ${escapeHtml(PS.engine.analyticsEngineVersion || '')} · deterministic — recomputing the same matches yields identical output.
+      </div>
+    `;
+
+    return html;
+  }
+
+  function p0minutesBasis(PS) {
+    return (PS.protocol && PS.protocol.minutesStandards && PS.protocol.minutesStandards.basis) || 'gated estimates from recorded participation boundaries; never official minutes.';
   }
 
   btnSeasonView.addEventListener('click', () => {
@@ -2796,9 +3013,12 @@
       seasonMatches.push({
         id: nextSeasonMatchId++,
         sourceFile: data.sourceFile || null,
+        savedAt: data.__savedAt || null,
         matchInfo: data.matchInfo || null,
         events: Array.isArray(data.events) ? data.events : [],
-        tags: Array.isArray(data.tags) ? data.tags : []
+        tags: Array.isArray(data.tags) ? data.tags : [],
+        squad: Array.isArray(data.squad) ? data.squad : [],
+        matchClock: data.matchClock && typeof data.matchClock === 'object' ? data.matchClock : null
       });
     });
 
