@@ -453,6 +453,10 @@
     </div>
   </div>
 
+  <!-- integrity.js must load before renderer.js: it provides the shared
+       player-id generation and missing-player-reference helpers
+       (window.Integrity) used by the squad bulk-add and autosave recovery. -->
+  <script src="integrity.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

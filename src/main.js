@@ -239,7 +239,15 @@ function migrateSessionData(data) {
       if (!('officialMinute' in v3)) v3.officialMinute = Math.ceil(time / 60);
       if (!('second' in v3)) v3.second = Math.floor(time) % 60;
       if (!('period' in v3)) v3.period = '2H';
-      if (!('team' in v3)) v3.team = ev.side === 'for' ? 'our' : ev.side === 'against' ? 'opponent' : 'our';
+      // Team ownership is only assigned when the legacy `side` evidence
+      // supports it: 'for' → 'our', 'against' → 'opponent'. A neutral,
+      // unknown, or missing side yields team = null — the schema's explicit
+      // "unknown" value (new events already carry team:null via the
+      // defensive branch in buildEventBase, and every consumer — full-
+      // analysis CSV `ev.team||''`, touchline `ev.team==='opponent'` —
+      // treats null as unknown). The original legacy `side` value is
+      // always preserved; migration never invents team ownership.
+      if (!('team' in v3)) v3.team = ev.side === 'for' ? 'our' : (ev.side === 'against' ? 'opponent' : null);
       if (!('sequenceId' in v3)) v3.sequenceId = null;
       if (!('scoreForBefore' in v3)) v3.scoreForBefore = 0;
       if (!('scoreAgainstBefore' in v3)) v3.scoreAgainstBefore = 0;
@@ -337,12 +345,20 @@ ipcMain.handle('file:saveSession', async (_event, sessionData) => {
     __schemaVersion: CURRENT_SCHEMA_VERSION,
     __savedAt: new Date().toISOString()
   });
+  // Atomic write (same strategy as the autosave/squad writers): write the
+  // new content to a temp file in the same directory, then rename it over
+  // the destination. If the write or rename fails, the existing session
+  // file is left untouched and the temp file is cleaned up.
   try {
-    await fs.promises.writeFile(result.filePath, JSON.stringify(stamped, null, 2), 'utf-8');
+    await writeFileAtomic(result.filePath + '.tmp', result.filePath, JSON.stringify(stamped, null, 2));
     return { canceled: false, filePath: result.filePath };
   } catch (err) {
     dialog.showErrorBox('Save failed', err && err.message ? err.message : 'Could not write the session file.');
-    return { canceled: true };
+    // The renderer treats this exactly like the pre-fix failure result
+    // (canceled => session stays dirty, autosave stays intact). The extra
+    // `error` field makes an actual write failure distinguishable from a
+    // user cancel without changing any renderer behavior.
+    return { canceled: true, error: err && err.message ? err.message : 'Could not write the session file.' };
   }
 });
 
@@ -467,6 +483,26 @@ function squadTempPath() {
   return path.join(app.getPath('userData'), 'squad.json.tmp');
 }
 
+// writeFileAtomic(tmpPath, dstPath, content): the single shared atomic-write
+// helper (write temp file, then rename over the destination). Used by the
+// manual session save, squad persistence, and the async autosave writer —
+// previously each of those carried its own inline copy of this pattern.
+// If the temp write fails, the destination is untouched (nothing was
+// renamed). If the rename fails, the destination is untouched and the temp
+// file is removed (best effort) so no stale .tmp files accumulate.
+// Note: exactly like the original writers, it awaits writeFile (data handed
+// to the OS) but does not fsync — same durability guarantees as before;
+// the existing autosave/squad behavior is neither weakened nor strengthened.
+async function writeFileAtomic(tmpPath, dstPath, content) {
+  await fs.promises.writeFile(tmpPath, content, 'utf-8');
+  try {
+    await fs.promises.rename(tmpPath, dstPath);
+  } catch (renameErr) {
+    try { await fs.promises.unlink(tmpPath); } catch (e) { /* best effort */ }
+    throw renameErr;
+  }
+}
+
 ipcMain.handle('squad:load', async () => {
   try {
     const raw = await fs.promises.readFile(squadFilePath(), 'utf-8');
@@ -483,10 +519,7 @@ async function writeSquadAsync(squad) {
     __schemaVersion: CURRENT_SCHEMA_VERSION,
     players: Array.isArray(squad) ? squad : []
   };
-  const tmp = squadTempPath();
-  const dst = squadFilePath();
-  await fs.promises.writeFile(tmp, JSON.stringify(wrapped, null, 2), 'utf-8');
-  await fs.promises.rename(tmp, dst);
+  await writeFileAtomic(squadTempPath(), squadFilePath(), JSON.stringify(wrapped, null, 2));
 }
 
 ipcMain.handle('squad:save', async (_event, squad) => {
@@ -540,14 +573,11 @@ function writeAutosaveSync(data) {
 }
 
 async function writeAutosaveAsync(data) {
-  const tmp = autosaveTempPath();
-  const dst = autosaveFilePath();
   const stamped = Object.assign({}, data, {
     __schemaVersion: CURRENT_SCHEMA_VERSION,
     __savedAt: new Date().toISOString()
   });
-  await fs.promises.writeFile(tmp, JSON.stringify(stamped, null, 2), 'utf-8');
-  await fs.promises.rename(tmp, dst);
+  await writeFileAtomic(autosaveTempPath(), autosaveFilePath(), JSON.stringify(stamped, null, 2));
 }
 
 function deleteAutosaveSync() {
@@ -713,3 +743,11 @@ ipcMain.on('detach-video:state', (_event, state) => {
     mainWindow.webContents.send('detach-video:state', state);
   }
 });
+
+// Exposed for the focused integrity test harness (tests/integrity-harness.js).
+// Electron ignores module.exports when main.js is loaded as the app entry
+// point; this block only enables plain-Node testing of the migration and
+// atomic-write logic without launching Electron.
+if (typeof module === 'object' && module.exports) {
+  module.exports = { CURRENT_SCHEMA_VERSION, migrateSessionData, migrateSquadData };
+}

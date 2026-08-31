@@ -315,6 +315,17 @@
   let squad = []; // { id, number, name }
   let nextPlayerId = 1;
 
+  // generatePlayerId(): returns a `player_<n>` id guaranteed unique
+  // against ALL existing squad ids — any format, including imported ids
+  // outside the player_<digits> pattern — and advances nextPlayerId.
+  // (Uniqueness no longer relies solely on the one-time numeric recompute
+  // at startup; it is re-checked against the live squad at every add.)
+  function generatePlayerId() {
+    const result = window.Integrity.nextFreePlayerId(squad.map((p) => String(p.id)), nextPlayerId);
+    nextPlayerId = result.next;
+    return result.id;
+  }
+
   // persistSquad(): writes the squad to disk via the main process and
   // surfaces failures via the autosave toast (reused for squad errors).
   async function persistSquad() {
@@ -373,7 +384,7 @@
         name = line.slice(commaIdx + 1).trim();
       }
       if (!name) return;
-      squad.push({ id: `player_${nextPlayerId++}`, number, name });
+      squad.push({ id: generatePlayerId(), number, name });
     });
     squadBulkInput.value = '';
     renderSquadList();
@@ -1982,7 +1993,12 @@
 
   // ---------- CSV export ----------
 
-  btnExportCsv.addEventListener('click', async () => {
+  btnExportCsv.addEventListener('click', async (e) => {
+    // Shift+Click is owned exclusively by the full-analysis listener attached
+    // further below; bail out here so exactly ONE export runs per click.
+    // (Previously both listeners fired on Shift+Click, opening two save
+    // dialogs / two exports.)
+    if (e.shiftKey) return;
     const header = 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y';
     const rows = events.map((ev) => {
       const qualifiersStr = Object.entries(ev.qualifiers || {})
@@ -2394,6 +2410,25 @@
     // Count events
     const eventCount = Array.isArray(autosave.events) ? autosave.events.length : 0;
 
+    // Pre-recovery warning: cross-check the autosave's events against the
+    // currently loaded squad (the local squad wins over the autosave's squad
+    // snapshot, so references can go missing if the squad changed since the
+    // autosave was written). Surfaced here so the analyst knows BEFORE
+    // choosing whether to recover.
+    const missingRefs = window.Integrity.findMissingPlayerRefs(
+      autosave.events,
+      squad.map((p) => String(p.id))
+    );
+    let missingPlayersRow = '';
+    if (missingRefs.affectedEvents > 0) {
+      missingPlayersRow = `
+        <div class="detail-row">
+          <span class="detail-label">⚠ Missing players:</span>
+          <span class="detail-value">${missingRefs.affectedEvents} recovered ${missingRefs.affectedEvents === 1 ? 'event' : 'events'} reference${missingRefs.affectedEvents === 1 ? 's' : ''} ${missingRefs.missingIds.length === 1 ? 'a player' : missingRefs.missingIds.length + ' players'} not currently in your squad.</span>
+        </div>
+      `;
+    }
+
     if (recoveryDetails) {
       recoveryDetails.innerHTML = `
         <div class="detail-row">
@@ -2408,6 +2443,7 @@
           <span class="detail-label">Events:</span>
           <span class="detail-value">${eventCount}</span>
         </div>
+        ${missingPlayersRow}
       `;
     }
 
@@ -2428,6 +2464,12 @@
   //     rather than the autosave's squad snapshot, because the local
   //     squad.json is always at least as up-to-date (the squad is
   //     auto-persisted on every change).
+  //   - Because the local squad may have changed since the autosave was
+  //     written, we cross-check every player reference in the recovered
+  //     events against the current squad and warn explicitly when events
+  //     reference missing players (instead of silently showing "Unknown
+  //     player" later). The current squad is never replaced; event ids and
+  //     event data are preserved untouched.
   async function recoverFromAutosave(autosave) {
     // Restore tags (only if the autosave's tags array is non-empty;
     // otherwise keep the defaults, same as loadSession).
@@ -2452,6 +2494,23 @@
       events = [];
     }
     nextEventId = events.reduce((max, ev) => Math.max(max, (ev.id || 0) + 1), 1);
+
+    // Reconciliation check: recovered events may reference players that are
+    // no longer in the current squad (the squad can change between the
+    // autosave being written and the recovery). Detect it now and surface an
+    // explicit warning — the events (and their ids) are restored untouched.
+    const missingRefs = window.Integrity.findMissingPlayerRefs(
+      events,
+      squad.map((p) => String(p.id))
+    );
+    if (missingRefs.affectedEvents > 0) {
+      showAutosaveToast(
+        missingRefs.affectedEvents + ' recovered ' + (missingRefs.affectedEvents === 1 ? 'event' : 'events') +
+        ' reference' + (missingRefs.affectedEvents === 1 ? 's' : '') +
+        ' ' + (missingRefs.missingIds.length === 1 ? 'a player' : missingRefs.missingIds.length + ' players') +
+        ' not currently in your squad.'
+      );
+    }
 
     activeIntervals = {};
 
