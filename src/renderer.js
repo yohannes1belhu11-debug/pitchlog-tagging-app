@@ -841,20 +841,35 @@
   }
 
   function startInterval(tag) {
-    activeIntervals[tag.label] = { startTime: getCurrentTime() };
+    // Capture BOTH clocks at the START: the video clock (used when a video
+    // is loaded — existing behavior) and the independent match clock (used
+    // when no video is available, so interval events carry real match times
+    // instead of 0 — F2 fix).
+    activeIntervals[tag.label] = {
+      startTime: getCurrentTime(),
+      startMatchSeconds: getCurrentMatchSeconds(),
+      startPeriod: matchClock.period
+    };
     renderTagButtons();
   }
 
   // buildEventTimestamps(): creates the match-time fields for an event.
-  function buildEventTimestamps() {
+  // `anchor` (optional): { matchSeconds, period } captured at an earlier
+  // moment — used by no-video interval events (F2) so their match-time
+  // fields describe the interval START and stay mutually consistent with
+  // the interval bounds (matchTime == startTime, matchSeconds ==
+  // floor(startTime)) instead of mixing a zero video clock with the match
+  // clock. When omitted (all instant events, and video-linked intervals),
+  // behavior is exactly as before.
+  function buildEventTimestamps(anchor) {
     // videoTime is null when no video is loaded OR when the video failed to load
     // (video.readyState === 0 means no data has loaded, which happens when the
     // video file is missing/corrupt). This prevents storing videoTime=0 for
     // events tagged while a broken video path is set.
     const videoLoaded = currentVideoPath && video.readyState >= 2;
     const videoTime = videoLoaded ? getCurrentTime() : null;
-    const matchSeconds = getCurrentMatchSeconds();
-    const period = matchClock.period;
+    const matchSeconds = anchor ? anchor.matchSeconds : getCurrentMatchSeconds();
+    const period = anchor ? anchor.period : matchClock.period;
     return {
       videoTime: videoTime,
       matchTime: matchSeconds,
@@ -868,8 +883,9 @@
   // buildEventBase(tag): creates the common event fields shared by instant
   // and interval events. Includes the v3 match-time fields plus the legacy
   // `time` field (aliased to matchTime) for backward compatibility.
-  function buildEventBase(tag) {
-    const ts = buildEventTimestamps();
+  // `anchor` is only provided for no-video interval events (see F2 above).
+  function buildEventBase(tag, anchor) {
+    const ts = buildEventTimestamps(anchor);
     return {
       id: nextEventId++,
       time: ts.matchTime,          // legacy alias for matchTime
@@ -899,10 +915,29 @@
     if (!active) return;
     delete activeIntervals[tag.label];
 
-    const currentTime = getCurrentTime();
-    const startTime = Math.min(active.startTime, currentTime);
-    const endTime = Math.max(active.startTime, currentTime);
-    const event = Object.assign(buildEventBase(tag), {
+    // F2 fix: decide which clock owns the interval bounds using the SAME
+    // "is the video actually usable" test as buildEventTimestamps(), so the
+    // two never disagree (both run in this synchronous block).
+    const videoLoaded = currentVideoPath && video.readyState >= 2;
+    let startTime, endTime, anchor = null;
+    if (videoLoaded) {
+      // Video linked (existing behavior, preserved): interval bounds are
+      // video times, and the match-time fields describe the FINISH moment.
+      const currentTime = getCurrentTime();
+      startTime = Math.min(active.startTime, currentTime);
+      endTime = Math.max(active.startTime, currentTime);
+    } else {
+      // No usable video: use the independent match clock for the interval
+      // bounds (captured at START and FINISH), and anchor the event's
+      // match-time fields to the START so the whole event is internally
+      // consistent: time == matchTime == startTime, matchSeconds ==
+      // floor(startTime), officialMinute/second derived from startTime.
+      const endMatchSeconds = getCurrentMatchSeconds();
+      startTime = Math.min(active.startMatchSeconds, endMatchSeconds);
+      endTime = Math.max(active.startMatchSeconds, endMatchSeconds);
+      anchor = { matchSeconds: startTime, period: active.startPeriod };
+    }
+    const event = Object.assign(buildEventBase(tag, anchor), {
       time: startTime, isInterval: true, startTime, endTime, matchTime: startTime
     });
     events.push(event);
@@ -945,15 +980,89 @@
 
   let lastLoggedEventId = null;
 
+  // F3 fix — shared score-correction for goal removal (single system, used by
+  // BOTH the undo button and the per-event delete button; NOT a second undo
+  // system). Called AFTER the goal event has been removed from `events`.
+  //
+  // How it works (no blind subtraction):
+  //   1. Restore the live score to the exact pre-goal state recorded on the
+  //      removed event itself (scoreForBefore/scoreAgainstBefore were
+  //      captured at tag time = "reliable previous state").
+  //   2. Every remaining event that was logged AFTER the removed goal
+  //      (event ids are assigned monotonically at log time, so id >
+  //      removed.id means "logged later") carries score fields that include
+  //      the removed goal's increment. Shift their stored
+  //      scoreForBefore/scoreAgainstBefore (and After, on goals) by the
+  //      removed goal's delta so the whole chain stays consistent.
+  //   3. Re-apply the deltas of the remaining goals logged after the removed
+  //      one ("derive the restored score from the remaining goal events") so
+  //      the live score lands on the correct final value for mid-stream
+  //      deletions too.
+  // For the undo path the removed goal is by definition the most recently
+  // logged event, so steps 2/3 find nothing and the result is exactly the
+  // pre-goal match state. Own goals / penalties follow the existing goal
+  // representation (team selection alone decides which side increments), so
+  // no special cases are needed.
+  function applyGoalRemovalScoreCorrection(removedEvent) {
+    if (!removedEvent || typeof removedEvent !== 'object') return false;
+    if (removedEvent.label !== 'Goal' && removedEvent.label !== 'GOAL') return false;
+    // scoreForAfter/scoreAgainstAfter are only set by logEvent() when the
+    // goal actually incremented the score. A goal tagged with no team
+    // selected never changed the score, and removing it must not either.
+    if (removedEvent.scoreForAfter == null || removedEvent.scoreAgainstAfter == null) return false;
+    const beforeF = Number(removedEvent.scoreForBefore);
+    const beforeA = Number(removedEvent.scoreAgainstBefore);
+    const dF = Number(removedEvent.scoreForAfter) - beforeF;
+    const dA = Number(removedEvent.scoreAgainstAfter) - beforeA;
+    // Sanity gate: logEvent() always increments exactly one side by 1.
+    // Anything else is not a score-changing goal in the current model —
+    // leave the score untouched rather than corrupt it.
+    if (!Number.isFinite(beforeF) || !Number.isFinite(beforeA)) return false;
+    if (!((dF === 0 && dA === 1) || (dF === 1 && dA === 0))) return false;
+
+    matchClock.scoreFor = beforeF;
+    matchClock.scoreAgainst = beforeA;
+
+    events.forEach((ev) => {
+      if (!(ev && typeof ev === 'object') || ev.id == null || !(ev.id > removedEvent.id)) return;
+      // This event was logged after the removed goal: its score fields
+      // include the removed goal's increment.
+      if (ev.scoreForBefore != null) ev.scoreForBefore -= dF;
+      if (ev.scoreAgainstBefore != null) ev.scoreAgainstBefore -= dA;
+      if (ev.scoreForAfter != null) ev.scoreForAfter -= dF;
+      if (ev.scoreAgainstAfter != null) ev.scoreAgainstAfter -= dA;
+      // If it is itself a score-changing goal, re-apply its own increment to
+      // the live score so the final value reflects the remaining goals.
+      if ((ev.label === 'Goal' || ev.label === 'GOAL') &&
+          ev.scoreForAfter != null && ev.scoreAgainstAfter != null) {
+        matchClock.scoreFor += Number(ev.scoreForAfter) - Number(ev.scoreForBefore);
+        matchClock.scoreAgainst += Number(ev.scoreAgainstAfter) - Number(ev.scoreAgainstBefore);
+      }
+    });
+
+    renderScoreboard();
+    return true;
+  }
+
   function updateUndoButton() {
     btnUndo.disabled = lastLoggedEventId == null || !events.some((e) => e.id === lastLoggedEventId);
   }
 
   function undoLastTag() {
     if (lastLoggedEventId == null) return;
+    const undoneEvent = events.find((e) => e.id === lastLoggedEventId);
     if (activeDetailEvent && activeDetailEvent.id === lastLoggedEventId) closeDetailPanel();
     events = events.filter((e) => e.id !== lastLoggedEventId);
     lastLoggedEventId = null;
+
+    // F3 fix: if the undone event was a goal that changed the live score,
+    // restore the exact pre-goal match state (see
+    // applyGoalRemovalScoreCorrection). For undo this is precise: the goal is
+    // the most recently logged event, so no event was logged after it and
+    // every remaining event's score fields were captured before the goal —
+    // already consistent with the restored state.
+    applyGoalRemovalScoreCorrection(undoneEvent);
+
     updateUndoButton();
     renderEventList();
     markAutosaveDirty();
@@ -1635,8 +1744,12 @@
       });
       row.querySelector('.event-delete').addEventListener('click', (e) => {
         e.stopPropagation();
+        const deleted = ev;
         events = events.filter((x) => x.id !== ev.id);
         if (ev.id === lastLoggedEventId) lastLoggedEventId = null;
+        // F3 fix: deleting a goal (possibly with events logged after it) must
+        // also revert/correct the live score — same shared correction as undo.
+        applyGoalRemovalScoreCorrection(deleted);
         updateUndoButton();
         renderEventList();
         markAutosaveDirty();
