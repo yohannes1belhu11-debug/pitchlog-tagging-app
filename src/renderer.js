@@ -2780,7 +2780,12 @@
   // renderSeasonStats(): renders the Player & Season Data Engine output.
   // The engine is a pure consumer of the Analytics Engine; all core season
   // statistics are computed in src/player-season.js, never in this DOM code.
+  // Recent Form (Phase C): the same PS output is consumed ONCE by the Recent
+  // Form Engine (window.RecentFormEngine.computeRecentForm) and rendered as
+  // an additional read-only section — no Recent Form figure is recalculated
+  // here, and neither PS nor RF is ever mutated.
   function renderSeasonStats() {
+    seasonRecentForm = null;
     if (seasonMatches.length === 0) {
       seasonStatsContentEl.innerHTML = '<div class="event-empty">Load one or more match sessions above to see combined totals.</div>';
       return;
@@ -2796,7 +2801,18 @@
       seasonStatsContentEl.innerHTML = `<div class="event-empty">Season engine error: ${escapeHtml(String(err && err.message || err))}</div>`;
       return;
     }
-    seasonStatsContentEl.innerHTML = buildSeasonDataHtml(PS);
+    let rfError = null;
+    if (window.RecentFormEngine && typeof window.RecentFormEngine.computeRecentForm === 'function') {
+      try {
+        seasonRecentForm = window.RecentFormEngine.computeRecentForm(PS, {});
+      } catch (err) {
+        seasonRecentForm = null;
+        rfError = err;
+      }
+    }
+    seasonStatsContentEl.innerHTML = buildSeasonDataHtml(PS) + buildRecentFormSectionHtml(rfError);
+    wireRecentFormPlayerSelect();
+    renderRecentFormPlayerDetail();
   }
 
   // buildSeasonDataHtml(PS): minimal verification UI for the Player & Season
@@ -2990,6 +3006,623 @@
 
   function p0minutesBasis(PS) {
     return (PS.protocol && PS.protocol.minutesStandards && PS.protocol.minutesStandards.basis) || 'gated estimates from recorded participation boundaries; never official minutes.';
+  }
+
+  // ---------- Recent Form UI (Phase C — read-only engine output) ----------
+  //
+  // Minimal read-only integration of the Recent Form Engine V1
+  // (src/recent-form.js → window.RecentFormEngine). The engine entry point
+  // is invoked exactly once per season render inside renderSeasonStats()
+  // above; every figure below comes from that engine output (RF object).
+  // This block NEVER reads raw sessions or events, NEVER recomputes totals,
+  // pooled percentages, per-90 values, differences or tolerances, and NEVER
+  // mutates PS or RF. Null engine values are rendered as neutral labels (—,
+  // or "N/A — insufficient reliable minutes" for per-90), never as zero.
+  //
+  // Terminology and presentation follow the engine/spec exactly:
+  //   Recent Form · Recent Activity · Last 3 / Last 5 / Last 10 ·
+  //   Season Baseline · Baseline Excluding Recent Window · Observed Change ·
+  //   Difference · HIGHER / LOWER / WITHIN-TOLERANCE / INCONCLUSIVE ·
+  //   Observed Variability · Sample Size · Reliable minutes.
+  // No form scores, ratings, momentum or causal language — classifications
+  // describe numbers, never players.
+
+  let seasonRecentForm = null;   // latest Recent Form engine output (read-only)
+  let rfSelectedPlayerId = null; // player selected for the Recent Form detail
+
+  const RF_METRIC_LABELS = {
+    events: 'Events', goals: 'Goals', shots: 'Shots', shotsOnTarget: 'Shots on target',
+    chances: 'Chances', keyPasses: 'Key passes', crosses: 'Crosses', corners: 'Corners',
+    passes: 'Passes', successfulPasses: 'Successful passes', unsuccessfulPasses: 'Unsuccessful passes',
+    passesUnknownOutcome: 'Passes with unknown outcome', presses: 'Presses', pressWins: 'Press wins',
+    interceptions: 'Interceptions', recoveries: 'Recoveries', turnovers: 'Turnovers',
+    duels: 'Duels', fouls: 'Fouls', yellowCards: 'Yellow cards', redCards: 'Red cards',
+    substitutions: 'Substitutions',
+    positiveEvents: 'Positive events', negativeEvents: 'Negative events', neutralEvents: 'Neutral events',
+    transitionsPositive: 'Positive transitions', transitionsNegative: 'Negative transitions',
+    positiveTransitions: 'Positive transitions', negativeTransitions: 'Negative transitions',
+    goalsFor: 'Goals for', goalsAgainst: 'Goals against',
+    passSuccess: 'Pass success (pooled)', pressWinRatio: 'Press win ratio (pooled)', locatedShare: 'Located share'
+  };
+
+  // Display subsets (presentation choice only — every value is engine output).
+  const RF_UI_COUNT_KEYS = [
+    'events', 'goals', 'shots', 'shotsOnTarget', 'chances', 'keyPasses', 'crosses',
+    'passes', 'successfulPasses', 'unsuccessfulPasses', 'presses', 'pressWins',
+    'interceptions', 'recoveries', 'turnovers', 'duels', 'fouls', 'yellowCards', 'redCards'
+  ];
+  const RF_UI_PER90_KEYS = [
+    'events', 'goals', 'shots', 'shotsOnTarget', 'chances', 'keyPasses', 'crosses',
+    'passes', 'presses', 'pressWins', 'interceptions', 'recoveries', 'turnovers',
+    'duels', 'fouls'
+  ];
+  const RF_UI_AVG_KEYS = ['events', 'goals', 'passes', 'recoveries', 'turnovers'];
+  const RF_UI_TEAM_KEYS = [
+    'events', 'goals', 'shots', 'shotsOnTarget', 'chances', 'crosses', 'corners',
+    'passes', 'successfulPasses', 'unsuccessfulPasses', 'presses', 'pressWins',
+    'interceptions', 'recoveries', 'turnovers', 'duels', 'fouls', 'yellowCards', 'redCards'
+  ];
+  const RF_UI_WW_KEYS = [
+    'goalsFor', 'goalsAgainst', 'events', 'goals', 'shots', 'shotsOnTarget', 'chances',
+    'passes', 'successfulPasses', 'presses', 'pressWins', 'interceptions', 'recoveries',
+    'turnovers', 'duels', 'fouls'
+  ];
+  const RF_PERIODS = ['1H', '2H', 'ET1', 'ET2', 'Non-play', 'Unknown'];
+  const RF_SCORE_STATES = ['WINNING', 'DRAW', 'LOSING'];
+  const RF_THIRDS = ['Defensive third', 'Middle third', 'Attacking third'];
+
+  // ---- null-safe formatters (engine values only; null is never 0) ----------
+
+  function rfNum(v) {
+    return (v === null || v === undefined) ? '—' : String(v);
+  }
+
+  function rfMinutesFromSeconds(sec) {
+    if (sec === null || sec === undefined) return '—';
+    return String(Math.round(sec / 60));
+  }
+
+  function rfPctEnv(env) {
+    if (!env || env.value === null || env.value === undefined) return '—';
+    return `${env.value}% (${rfNum(env.num)}/${rfNum(env.den)})`;
+  }
+
+  function rfPer90Cell(m) {
+    if (!m || m.value === null || m.value === undefined) {
+      return '<span class="rf-na">N/A — insufficient reliable minutes</span>';
+    }
+    return String(m.value);
+  }
+
+  function rfDiffCell(c) {
+    if (!c || c.absoluteDifference === null || c.absoluteDifference === undefined) return '—';
+    const d = c.absoluteDifference;
+    return (d > 0 ? '+' : '') + String(d);
+  }
+
+  function rfPctDiffCell(c) {
+    if (!c || c.percentageDifference === null || c.percentageDifference === undefined) return '—';
+    return (c.percentageDifference > 0 ? '+' : '') + String(c.percentageDifference) + '%';
+  }
+
+  function rfClassCell(c) {
+    if (!c || c.classification === null || c.classification === undefined) return '—';
+    const cls = `<span class="rf-class">${escapeHtml(String(c.classification))}</span>`;
+    return c.reason ? `${cls} <span class="rf-reason">(${escapeHtml(String(c.reason))})</span>` : cls;
+  }
+
+  function rfTolCell(c) {
+    if (!c || c.tolerance === null || c.tolerance === undefined) return '—';
+    const suffix = c.toleranceRule === 'FIXED_5PP' ? ' pp' : '';
+    return '±' + String(c.tolerance) + suffix;
+  }
+
+  function rfSampleCell(c) {
+    if (!c) return '—';
+    return `${rfNum(c.recentSample)} / ${rfNum(c.baselineSample)}`;
+  }
+
+  function rfWindowKeys(RF) {
+    const w = (RF.input && RF.input.optionsEcho && RF.input.optionsEcho.windows) || [3, 5, 10];
+    return w.map((n) => String(n));
+  }
+
+  function rfWindowLabel(n) {
+    return `Last ${n}`;
+  }
+
+  function rfSelectedPlayerIdOf(RF) {
+    if (rfSelectedPlayerId && RF.playerOrder.indexOf(rfSelectedPlayerId) !== -1) return rfSelectedPlayerId;
+    return RF.playerOrder[0] || null;
+  }
+
+  function rfReasonCounts(list) {
+    const counts = {};
+    (list || []).forEach((e) => {
+      const r = (e && e.reason) || 'UNKNOWN';
+      counts[r] = (counts[r] || 0) + 1;
+    });
+    return Object.keys(counts).sort().map((r) => `${r}${counts[r] > 1 ? ' ×' + counts[r] : ''}`).join(', ');
+  }
+
+  function rfExcludedRecordsSummary(win) {
+    const s = rfReasonCounts(win.excludedRecords);
+    return s || '—';
+  }
+
+  function rfExcludedMatchesSummary(win) {
+    const s = rfReasonCounts(win.excludedMatches);
+    return s || '—';
+  }
+
+  // ---- comparison row builders (engine comparison objects only) ------------
+
+  function rfComparisonRow(label, c, kind) {
+    let recentCell;
+    let baselineCell;
+    if (kind === 'pct') {
+      recentCell = (c.recentValue === null || c.recentValue === undefined)
+        ? '—' : `${c.recentValue}% (${rfNum(c.recentNum)}/${rfNum(c.recentDen)})`;
+      baselineCell = (c.baselineValue === null || c.baselineValue === undefined)
+        ? '—' : `${c.baselineValue}% (${rfNum(c.baselineNum)}/${rfNum(c.baselineDen)})`;
+    } else if (kind === 'per90') {
+      recentCell = (c.recentValue === null || c.recentValue === undefined)
+        ? '<span class="rf-na">N/A — insufficient reliable minutes</span>' : String(c.recentValue);
+      baselineCell = rfNum(c.baselineValue);
+    } else {
+      recentCell = rfNum(c.recentValue);
+      baselineCell = rfNum(c.baselineValue);
+    }
+    return `<tr><td>${label}</td><td>${recentCell}</td><td>${baselineCell}</td><td>${rfDiffCell(c)}</td><td>${rfPctDiffCell(c)}</td><td>${rfClassCell(c)}</td><td>${rfSampleCell(c)}</td><td>${rfTolCell(c)}</td></tr>`;
+  }
+
+  function rfComparisonRows(compSet) {
+    let rows = '';
+    RF_UI_COUNT_KEYS.forEach((k) => { rows += rfComparisonRow(RF_METRIC_LABELS[k] || k, compSet.counts[k], 'count'); });
+    ['passSuccess', 'pressWinRatio', 'locatedShare'].forEach((k) => { rows += rfComparisonRow(RF_METRIC_LABELS[k], compSet.percentages[k], 'pct'); });
+    RF_UI_PER90_KEYS.forEach((k) => { rows += rfComparisonRow((RF_METRIC_LABELS[k] || k) + '/90', compSet.per90[k], 'per90'); });
+    return rows;
+  }
+
+  function rfComparisonTable(compSet) {
+    return `
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Metric</th><th>Recent</th><th>Baseline</th><th>Difference</th><th>% Difference</th><th>Classification</th><th>Sample Size (recent / baseline)</th><th>Tolerance</th></tr>
+        </thead>
+        <tbody>${compSet ? rfComparisonRows(compSet) : '<tr><td colspan="8" class="sn-empty">No comparison data.</td></tr>'}</tbody>
+      </table>
+      </div>
+    `;
+  }
+
+  // ---- section skeleton -----------------------------------------------------
+
+  function buildRecentFormSectionHtml(rfError) {
+    let html = '';
+    if (rfError) {
+      return `
+        <div id="rfSection" class="rf-section">
+          <div class="sn-section-label">Recent Form</div>
+          <div class="sn-note">Recent Form engine error: ${escapeHtml(String((rfError && rfError.message) || rfError))}</div>
+        </div>`;
+    }
+    if (!window.RecentFormEngine || typeof window.RecentFormEngine.computeRecentForm !== 'function') {
+      return `
+        <div id="rfSection" class="rf-section">
+          <div class="sn-section-label">Recent Form</div>
+          <div class="sn-note">Recent Form engine not loaded (src/recent-form.js).</div>
+        </div>`;
+    }
+    const RF = seasonRecentForm;
+    if (!RF) {
+      return `
+        <div id="rfSection" class="rf-section">
+          <div class="sn-section-label">Recent Form</div>
+          <div class="sn-note">Recent Form engine output unavailable for the loaded matches.</div>
+        </div>`;
+    }
+    const wk = rfWindowKeys(RF);
+    const sel = rfSelectedPlayerIdOf(RF);
+
+    html += `
+      <div id="rfSection" class="rf-section">
+      <div class="sn-section-label">Recent Form — recent activity windows</div>
+      <div class="sn-note">Descriptive windows over each player's most recent appearances and the team's most recent completed matches. All figures come from the Recent Form engine output (read-only); windows use actual appearances and are never padded. Column tags: [R] recorded · [D] derived.</div>
+      <div class="sn-coverage">Recent Form input: ${RF.input.orderedMatchCount} ordered match(es) · ${RF.input.completedMatchCount} completed · windows ${wk.join(' / ')} · selected window ${RF.input.selectedWindow}</div>
+    `;
+
+    if (!RF.playerOrder.length) {
+      html += `<div class="sn-note">No player records — load matches with tagged player events to see player Recent Form.</div>`;
+    } else {
+      html += `
+        <div class="rf-player-picker">
+          <label for="rfPlayerSelect">Player</label>
+          <select id="rfPlayerSelect" class="rf-player-select">
+            ${RF.playerOrder.map((pid) => {
+              const p = RF.players[pid];
+              const label = escapeHtml(p.name) + (p.number ? ` (${escapeHtml(p.number)})` : '');
+              return `<option value="${escapeHtml(pid)}"${pid === sel ? ' selected' : ''}>${label}</option>`;
+            }).join('')}
+          </select>
+        </div>
+        <div id="rfPlayerDetail"></div>
+      `;
+    }
+
+    html += buildRecentFormTeamHtml(RF);
+    html += buildRecentFormDqHtml(RF);
+    html += `
+      <div class="sn-footer">
+        Recent Form Engine ${escapeHtml(RF.engine.version)} · spec ${escapeHtml(RF.engine.spec)} · consumes Player &amp; Season Data Engine ${escapeHtml(rfNum(RF.engine.psEngineVersion))} output · deterministic — this view renders engine output only; no figures are recalculated here.
+      </div>
+      </div>
+    `;
+    return html;
+  }
+
+  function wireRecentFormPlayerSelect() {
+    const sel = seasonStatsContentEl.querySelector('#rfPlayerSelect');
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      rfSelectedPlayerId = sel.value || null;
+      renderRecentFormPlayerDetail();
+    });
+  }
+
+  function renderRecentFormPlayerDetail() {
+    const RF = seasonRecentForm;
+    const el = seasonStatsContentEl.querySelector('#rfPlayerDetail');
+    if (!RF || !el) return;
+    const pid = rfSelectedPlayerIdOf(RF);
+    if (!pid || !RF.players[pid]) {
+      el.innerHTML = '<div class="sn-note">No player records.</div>';
+      return;
+    }
+    el.innerHTML = buildRecentFormPlayerDetailHtml(RF, RF.players[pid]);
+  }
+
+  // ---- player detail (selected player; engine output verbatim) -------------
+
+  function buildRecentFormPlayerDetailHtml(RF, PRF) {
+    const wk = rfWindowKeys(RF);
+    const selWin = String(RF.input.selectedWindow);
+    const nameLabel = escapeHtml(PRF.name) + (PRF.number ? ` (${escapeHtml(PRF.number)})` : '');
+
+    let html = `
+      <div class="rf-note">Player: <b>${nameLabel}</b> — appearances in season: ${rfNum(PRF.appearancesTotal)} · match records in season: ${rfNum(PRF.recordsInSeason)} · data quality: ${escapeHtml(String(PRF.dataQuality.status))}${PRF.dataQuality.flags.length ? ' (' + PRF.dataQuality.flags.map(escapeHtml).join(', ') + ')' : ''}${PRF.dataQuality.unresolvedPlayerMatches ? ' · unresolved player-match references: ' + rfNum(PRF.dataQuality.unresolvedPlayerMatches) : ''}</div>
+    `;
+
+    // A. window sample sizes
+    html += `
+      <div class="rf-block-label">Window sample sizes</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Window</th><th>Sample Size (appearances)</th><th>Available appearances</th><th>Excluded records in window (reasons)</th></tr>
+        </thead>
+        <tbody>
+          ${wk.map((n) => {
+            const w = PRF.windows[n];
+            const sample = w.included < w.requested ? `${w.included} of ${w.requested} requested` : String(w.included);
+            return `<tr><td>${rfWindowLabel(n)}</td><td>${sample}</td><td>${rfNum(w.available)}</td><td>${rfExcludedRecordsSummary(w)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Windows slice the season's deterministic match order and are never padded — the true Sample Size is always shown. Excluded records are non-appearance player records (e.g. UNUSED_SUB) from the first window match onward.</div>
+    `;
+
+    // B + C. Recent Activity totals and per-appearance averages
+    html += `
+      <div class="rf-block-label">Recent Activity — tagged totals per window [R]</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Metric</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${RF_UI_COUNT_KEYS.map((k) => `<tr><td>${RF_METRIC_LABELS[k] || k}</td>${wk.map((n) => `<td>${rfNum(PRF.windows[n].totals[k])}</td>`).join('')}</tr>`).join('')}
+          ${RF_UI_AVG_KEYS.map((k) => `<tr class="sn-row-derived"><td>${RF_METRIC_LABELS[k] || k} per appearance [D]</td>${wk.map((n) => `<td>${rfNum(PRF.windows[n].averagesPerAppearance[k])}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+    `;
+
+    // D. pooled percentages (engine value/num/den; never averaged in the UI)
+    html += `
+      <div class="rf-block-label">Pooled percentages [D]</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Percentage</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          <tr><td>Pass success (pooled)</td>${wk.map((n) => `<td>${rfPctEnv(PRF.windows[n].percentages.passSuccess)}</td>`).join('')}</tr>
+          <tr><td>Press win ratio (pooled)</td>${wk.map((n) => `<td>${rfPctEnv(PRF.windows[n].percentages.pressWinRatio)}</td>`).join('')}</tr>
+          <tr><td>Located share</td>${wk.map((n) => `<td>${rfPctEnv(PRF.windows[n].percentages.locatedShare)}</td>`).join('')}</tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Pooled percentages sum the numerator and denominator across the window's appearances first (num/den shown); match percentages are never averaged.</div>
+    `;
+
+    // E. per-90 metrics with reliability disclosure (task Part 6)
+    html += `
+      <div class="rf-block-label">Per-90 metrics [D]</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Metric</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${RF_UI_PER90_KEYS.map((k) => `<tr><td>${(RF_METRIC_LABELS[k] || k)}/90</td>${wk.map((n) => `<td>${rfPer90Cell(PRF.windows[n].per90.metrics[k])}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Per-90 reliability</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          <tr><td>Appearances in window</td>${wk.map((n) => `<td>${rfNum(PRF.windows[n].per90.appearancesInWindow)}</td>`).join('')}</tr>
+          <tr><td>Appearances included in per-90</td>${wk.map((n) => `<td>${rfNum(PRF.windows[n].per90.appearancesIncludedInPer90)} of ${rfNum(PRF.windows[n].per90.appearancesInWindow)}</td>`).join('')}</tr>
+          <tr><td>Reliable minutes</td>${wk.map((n) => `<td>${rfMinutesFromSeconds(PRF.windows[n].per90.reliableSeconds)} min (${rfNum(PRF.windows[n].per90.reliableSeconds)} s)</td>`).join('')}</tr>
+          <tr><td>Minutes quality</td>${wk.map((n) => `<td>${seasonQualityTag(PRF.windows[n].per90.minutesQuality)}</td>`).join('')}</tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">${escapeHtml(String((PRF.windows[wk[0]] && PRF.windows[wk[0]].per90.basis) || 'Per-90 values use reliable minutes only; matches with estimated or unavailable minutes are excluded and reported.'))} A null per-90 value is shown as "N/A — insufficient reliable minutes", never as zero.</div>
+    `;
+
+    // F. period information
+    html += `
+      <div class="rf-block-label">Period information [R]</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Events per period</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${RF_PERIODS.map((p) => `<tr><td>${p}</td>${wk.map((n) => `<td>${rfNum((PRF.windows[n].periods[p] || {}).events)}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+    `;
+
+    // G. game-state information (suppression surfaced, never hidden)
+    html += `<div class="rf-block-label">Game state [R]</div>`;
+    const gsAllSuppressed = wk.every((n) => PRF.windows[n].gameState === null);
+    if (gsAllSuppressed) {
+      html += `<div class="sn-note">Game-state detail is unavailable — score-state partitions were suppressed for every appearance in every window (score-chain inconsistency, X1 MISMATCH).</div>`;
+    } else {
+      html += `
+        <div class="sn-table-scroll">
+        <table class="sn-table">
+          <thead>
+            <tr><th>Events per score state</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${RF_SCORE_STATES.map((s) => `<tr><td>${s}</td>${wk.map((n) => {
+              const gs = PRF.windows[n].gameState;
+              return `<td>${gs ? rfNum(gs[s].events) : '—'}</td>`;
+            }).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+        </div>
+      `;
+    }
+    const gsSuppressedCounts = wk.filter((n) => (PRF.windows[n].gameStateSuppressedMatches || 0) > 0);
+    if (gsSuppressedCounts.length) {
+      html += `<div class="sn-note">Game state suppressed in some appearances (X1 MISMATCH — score-state partitions suppressed for those matches): ${gsSuppressedCounts.map((n) => `${rfWindowLabel(n)}: ${rfNum(PRF.windows[n].gameStateSuppressedMatches)}`).join(' · ')}.</div>`;
+    }
+    html += `<div class="sn-note">Score state uses each event's recorded score BEFORE the event (WINNING / DRAW / LOSING).</div>`;
+
+    // H. spatial information
+    html += `
+      <div class="rf-block-label">Spatial — located tagged events [R]</div>
+      <div class="sn-note">${wk.map((n) => {
+        const sp = PRF.windows[n].spatial;
+        return `${rfWindowLabel(n)}: ${rfNum(sp.located)} located / ${rfNum(sp.unlocated)} unlocated`;
+      }).join(' · ')}.</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Located events per third</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${RF_THIRDS.map((t) => `<tr><td>${t}</td>${wk.map((n) => `<td>${rfNum(PRF.windows[n].spatial.thirds[t])}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+      </div>
+    `;
+
+    // J + K. Observed Change — comparisons for the selected window
+    const cmpA = PRF.comparisons[selWin] && PRF.comparisons[selWin].vsBaselineA;
+    html += `
+      <div class="rf-block-label">Observed Change — ${rfWindowLabel(selWin)} vs Season Baseline [D]</div>
+      <div class="sn-note">Season Baseline = the full-season record for this player. Differences, percentage differences, tolerances and classifications come from the engine; classifications (HIGHER / LOWER / WITHIN-TOLERANCE / INCONCLUSIVE) describe numbers, never players. Boundary is INCLUSIVE.</div>
+      ${rfComparisonTable(cmpA)}
+    `;
+
+    html += `<div class="rf-block-label">Observed Change — ${rfWindowLabel(selWin)} vs Baseline Excluding Recent Window [D]</div>`;
+    const cmpB = PRF.comparisons[selWin] && PRF.comparisons[selWin].vsBaselineB;
+    if (!cmpB) {
+      html += `<div class="sn-note">Baseline Excluding Recent Window is provided only for the selected window (Last ${RF.input.selectedWindow}).</div>`;
+    } else {
+      const probe = cmpB.counts.events || {};
+      const suppression = (probe.reason === 'WHOLE_SEASON_IN_WINDOW' || probe.reason === 'NO_DATA') ? probe.reason : null;
+      if (suppression === 'WHOLE_SEASON_IN_WINDOW') {
+        html += `<div class="rf-suppressed">Baseline Excluding Recent Window: unavailable — WHOLE_SEASON_IN_WINDOW. The selected window covers the entire season, so no records remain outside it; the unavailable baseline is never replaced with a fabricated value. Every comparison returns INCONCLUSIVE.</div>`;
+      } else if (suppression === 'NO_DATA') {
+        html += `<div class="rf-suppressed">Baseline Excluding Recent Window: unavailable — NO_DATA (no player records outside the window). The unavailable baseline is never replaced with a fabricated value.</div>`;
+      } else {
+        html += `<div class="sn-note">Baseline Excluding Recent Window = the season with the selected window's matches removed (window + baseline reconciles to the season for additive metrics).</div>`;
+      }
+      html += rfComparisonTable(cmpB);
+    }
+
+    // L. Recent 5 vs Previous 5 (task Part 10)
+    const r5p5 = PRF.recentVsPrevious5;
+    html += `<div class="rf-block-label">Recent 5 vs Previous 5 [D]</div>`;
+    if (r5p5.eligibility === 'COMPARISON' && r5p5.comparisons) {
+      html += `
+        <div class="sn-note">Eligibility: ${escapeHtml(String(r5p5.eligibility))} — Sample Size: Recent 5 = ${rfNum(r5p5.recent5 && r5p5.recent5.included)} appearances · Previous 5 = ${rfNum(r5p5.previous5 && r5p5.previous5.included)} appearances.</div>
+        <div class="sn-table-scroll">
+        <table class="sn-table">
+          <thead>
+            <tr><th>Metric</th><th>Recent 5</th><th>Previous 5</th><th>Difference</th><th>% Difference</th><th>Classification</th><th>Sample Size (recent / previous)</th><th>Tolerance</th></tr>
+          </thead>
+          <tbody>${rfComparisonRows(r5p5.comparisons)}</tbody>
+        </table>
+        </div>
+      `;
+    } else {
+      html += `<div class="sn-note">INCONCLUSIVE — ${escapeHtml(String(r5p5.reason))}. Sample size: ${rfNum(r5p5.appearancesTotal)} appearances recorded — at least 10 valid appearances are required for the Recent 5 vs Previous 5 comparison. Previous 5 is not fabricated; the Recent 5 activity itself is shown in the window tables above.</div>`;
+    }
+
+    // M. Observed Variability (min / max / range / mean / median only)
+    html += `
+      <div class="rf-block-label">Observed Variability — ${rfWindowLabel(selWin)} [D]</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Metric</th><th>Min</th><th>Max</th><th>Range</th><th>Mean</th><th>Median</th><th>Sample Size (matches)</th></tr>
+        </thead>
+        <tbody>
+          ${RF_UI_COUNT_KEYS.map((k) => {
+            const v = PRF.variability[selWin][k];
+            return `<tr><td>${RF_METRIC_LABELS[k] || k}</td><td>${rfNum(v.min)}</td><td>${rfNum(v.max)}</td><td>${rfNum(v.range)}</td><td>${rfNum(v.mean)}</td><td>${rfNum(v.median)}</td><td>${rfNum(v.matches)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Observed Variability lists min / max / range / mean / median only, over the appearances in the selected window.</div>
+    `;
+
+    // N. With / Without (observational; task Part 11)
+    const ww = PRF.withWithout;
+    html += `
+      <div class="rf-block-label">With / Without — team record by tagged participation (observational) [D]</div>
+      <div class="sn-note">WITH: ${rfNum(ww.with.matches)} completed matches (${rfNum(ww.with.wins)}W ${rfNum(ww.with.draws)}D ${rfNum(ww.with.losses)}L · goals for ${rfNum(ww.with.goalsFor)} · goals against ${rfNum(ww.with.goalsAgainst)}) · WITHOUT: ${rfNum(ww.without.matches)} completed matches (${rfNum(ww.without.wins)}W ${rfNum(ww.without.draws)}D ${rfNum(ww.without.losses)}L · goals for ${rfNum(ww.without.goalsFor)} · goals against ${rfNum(ww.without.goalsAgainst)})${ww.unresolved ? ' · UNRESOLVED participation matches: ' + rfNum(ww.unresolved) : ''}</div>
+    `;
+    if (ww.status === 'COMPARISON' && ww.comparisons) {
+      html += `
+        <div class="sn-note">Comparison basis: ${escapeHtml(String(ww.comparisonBasis))} — per-match averages for the WITH and WITHOUT groups (at least 3 completed matches required in both groups).</div>
+        <div class="sn-table-scroll">
+        <table class="sn-table">
+          <thead>
+            <tr><th>Team metric</th><th>WITH (per match)</th><th>WITHOUT (per match)</th><th>Difference</th><th>Classification</th><th>Tolerance</th></tr>
+          </thead>
+          <tbody>
+            ${RF_UI_WW_KEYS.map((k) => {
+              const c = ww.comparisons[k];
+              if (!c) return '';
+              return `<tr><td>${RF_METRIC_LABELS[k] || k}</td><td>${rfNum(c.withValue)}</td><td>${rfNum(c.withoutValue)}</td><td>${rfDiffCell(c)}</td><td>${rfClassCell(c)}</td><td>${rfTolCell(c)}</td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        </div>
+      `;
+    } else if (ww.status === 'INSUFFICIENT_SAMPLE') {
+      html += `<div class="sn-note">INSUFFICIENT_SAMPLE — the comparison requires at least 3 completed matches in BOTH groups; the observed group sizes above are the actual sample sizes and are never replaced with fabricated values.</div>`;
+    } else {
+      html += `<div class="sn-note">UNRESOLVED — no completed matches with resolved participation information for this player.</div>`;
+    }
+    html += `<div class="sn-note">${escapeHtml(String(ww.standingNote))}</div>`;
+
+    // I. data-quality flags for this player (task Part 13)
+    html += `
+      <div class="rf-block-label">Recent Form data quality — ${nameLabel}</div>
+      <div class="sn-note">Player-level: ${escapeHtml(String(PRF.dataQuality.status))}${PRF.dataQuality.flags.length ? ' — flags: ' + PRF.dataQuality.flags.map(escapeHtml).join(', ') : ' — no flags'}.</div>
+      <div class="sn-note">Window-level: ${wk.map((n) => {
+        const w = PRF.windows[n].dataQuality;
+        return `${rfWindowLabel(n)}: ${escapeHtml(String(w.status))}${w.flags.length ? ' (' + w.flags.map(escapeHtml).join(', ') + ')' : ''}`;
+      }).join(' · ')}.</div>
+      <div class="sn-note">Flags are propagated from the Player &amp; Season records; missing data is displayed as unavailable (— or N/A), never converted to zero.</div>
+    `;
+
+    return html;
+  }
+
+  // ---- team Recent Form (task Part 12) ---------------------------------------
+
+  function buildRecentFormTeamHtml(RF) {
+    const T = RF.team;
+    const wk = rfWindowKeys(RF);
+
+    let html = `
+      <div class="rf-block-label">Team Recent Form — completed matches</div>
+      <div class="sn-note">Team windows count COMPLETED matches only (records with a valid result, full-time marker and complete starting XI); incomplete or no-result matches inside a window are excluded with reasons. Completed matches: ${rfNum(T.completedMatchesTotal)} of ${rfNum(RF.input.orderedMatchCount)} ordered.</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Window</th><th>Sample Size (completed matches)</th><th>Available completed</th><th>Excluded matches in window (reasons)</th></tr>
+        </thead>
+        <tbody>
+          ${wk.map((n) => {
+            const w = T.windows[n];
+            const sample = w.included < w.requested ? `${w.included} of ${w.requested} requested` : String(w.included);
+            return `<tr><td>${rfWindowLabel(n)}</td><td>${sample}</td><td>${rfNum(w.available)}</td><td>${rfExcludedMatchesSummary(w)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Window</th><th>W</th><th>D</th><th>L</th><th>Goals for</th><th>Goals against</th><th>No result</th><th>Result flagged (X1)</th></tr>
+        </thead>
+        <tbody>
+          ${wk.map((n) => {
+            const w = T.windows[n];
+            return `<tr><td>${rfWindowLabel(n)}</td><td>${rfNum(w.results.wins)}</td><td>${rfNum(w.results.draws)}</td><td>${rfNum(w.results.losses)}</td><td>${rfNum(w.goalsFor)}</td><td>${rfNum(w.goalsAgainst)}</td><td>${rfNum(w.results.noResult)}</td><td>${rfNum(w.results.flaggedResults)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Match result (W/D/L) comes from the final score (manual entry when set, otherwise the attributed goal chain); flagged results are shown, never silently resolved.</div>
+      <div class="sn-table-scroll">
+      <table class="sn-table">
+        <thead>
+          <tr><th>Tagged activity [R] (Us / Opp)</th>${wk.map((n) => `<th>${rfWindowLabel(n)}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+          ${RF_UI_TEAM_KEYS.map((k) => `<tr><td>${RF_METRIC_LABELS[k] || k}</td>${wk.map((n) => {
+            const w = T.windows[n];
+            return `<td>${rfNum(w.totals.our[k])} / ${rfNum(w.totals.opponent[k])}</td>`;
+          }).join('')}</tr>`).join('')}
+          <tr class="sn-row-derived"><td>Average events per match [D] (Us)</td>${wk.map((n) => `<td>${rfNum(T.windows[n].averagesPerMatch.our.events)}</td>`).join('')}</tr>
+          <tr class="sn-row-derived"><td>Average goals per match [D] (Us)</td>${wk.map((n) => `<td>${rfNum(T.windows[n].averagesPerMatch.our.goals)}</td>`).join('')}</tr>
+          <tr class="sn-row-derived"><td>Pass success (pooled) [D] (Us / Opp)</td>${wk.map((n) => `<td>${rfPctEnv(T.windows[n].percentages.our.passSuccess)} / ${rfPctEnv(T.windows[n].percentages.opponent.passSuccess)}</td>`).join('')}</tr>
+          <tr class="sn-row-derived"><td>Press win ratio (pooled) [D] (Us / Opp)</td>${wk.map((n) => `<td>${rfPctEnv(T.windows[n].percentages.our.pressWinRatio)} / ${rfPctEnv(T.windows[n].percentages.opponent.pressWinRatio)}</td>`).join('')}</tr>
+          <tr class="sn-row-derived"><td>Tagged Possession Share [D]</td>${wk.map((n) => {
+            const s = T.windows[n].taggedPossessionShare;
+            if (!s || s.value === null || s.value === undefined) {
+              return `<td><span class="rf-na">— (${escapeHtml(String(s && s.reason || 'NO_TAGGED_POSSESSION_INTERVALS'))})</span></td>`;
+            }
+            return `<td>${s.value}% (${rfNum(s.num)}/${rfNum(s.den)} tagged seconds)</td>`;
+          }).join('')}</tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="sn-note">Tagged activity totals are counted from tagged events in each window's completed matches. Tagged Possession Share uses tagged possession intervals only — not an official match possession statistic (NC-1). ${escapeHtml(String((T.windows[wk[0]] || {}).taggedPossessionShare && T.windows[wk[0]].taggedPossessionShare.basis || 'tagged possession intervals'))}</div>
+      <div class="rf-note">Team Recent Form data quality: ${escapeHtml(String(T.dataQuality.status))} — completed ${rfNum(T.dataQuality.matchesValid)} of ${rfNum(RF.input.orderedMatchCount)} ordered matches${T.dataQuality.flags.length ? ' · flags: ' + T.dataQuality.flags.map(escapeHtml).join(', ') : ' · no flags'}.</div>
+    `;
+    return html;
+  }
+
+  // ---- top-level Recent Form data quality (task Part 13) --------------------
+
+  function buildRecentFormDqHtml(RF) {
+    const dq = RF.dataQuality;
+    return `
+      <div class="rf-block-label">Recent Form data quality</div>
+      <div class="sn-note">Status: ${escapeHtml(String(dq.status))} · Propagated flags: ${dq.propagatedFlags.length ? dq.propagatedFlags.map(escapeHtml).join(', ') : 'none — no data-quality flags propagated from the loaded matches'} · Structural flags: ${dq.structuralFlags.length ? dq.structuralFlags.map(escapeHtml).join(', ') : 'none'}.</div>
+      <div class="sn-note">Structural flags (duplicate-session exclusions, identity drift, possible duplicate persons, inconsistent goal chain, missing substitution information, unreliable minutes, X1 suppression where surfaced) affect window reliability and are shown, never silently suppressed. Location-coverage flags are informational. Missing data is never converted to zero.</div>
+    `;
   }
 
   btnSeasonView.addEventListener('click', () => {

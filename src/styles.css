@@ -791,6 +791,87 @@ button {
   color: var(--text-dim);
 }
 
+/* ---------- Recent Form V1 (season view Recent Form section) ----------
+   Read-only presentation of the Recent Form Engine output (Phase C).
+   .rf-* styles only lay out engine values — no statistics are computed
+   in the renderer, and classification badges are deliberately neutral
+   (no color implies a performance judgment). */
+
+.rf-section {
+  margin-top: 10px;
+}
+
+.rf-player-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.rf-player-picker label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.rf-player-select {
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  min-width: 220px;
+  max-width: 340px;
+}
+
+.rf-class {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.rf-reason {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.rf-na {
+  color: var(--text-dim);
+}
+
+.rf-block-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 12px 0 4px 0;
+}
+
+.rf-note {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 4px 0 6px 0;
+  line-height: 1.45;
+}
+
+.rf-suppressed {
+  font-size: 11px;
+  color: #f0a35e;
+  margin: 4px 0 6px 0;
+  line-height: 1.45;
+}
+
 .stats-type-list {
   display: flex;
   flex-direction: column;

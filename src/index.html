@@ -477,6 +477,14 @@
        consumer of the Analytics Engine; loaded after analytics.js, before
        renderer.js. Used by the season view. -->
   <script src="player-season.js"></script>
+  <!-- Recent Form Engine V1 (src/recent-form.js): the deterministic
+       recent-activity window layer (player windows over appearances, team
+       windows over completed matches, dual baselines, observed variability).
+       Pure consumer of the Player & Season Core output (computeSeason);
+       raw events are never reread here. Loaded AFTER player-season.js and
+       BEFORE renderer.js — the season view renderer consumes
+       window.RecentFormEngine.computeRecentForm(PS) read-only. -->
+  <script src="recent-form.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
