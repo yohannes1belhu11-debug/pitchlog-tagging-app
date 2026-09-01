@@ -1267,7 +1267,7 @@
       });
       CHANNELS.forEach(function (c) {
         spatialChannels.our[c] += m.spatial.our.channels[c] || 0;
-        spatialChannels.opponent[c] += m.spatial.our.channels[c] || 0;
+        spatialChannels.opponent[c] += m.spatial.opponent.channels[c] || 0;
       });
       spatialLocated.our += m.spatial.our.located || 0;
       spatialLocated.opponent += m.spatial.opponent.located || 0;

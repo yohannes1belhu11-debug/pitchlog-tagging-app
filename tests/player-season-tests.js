@@ -24,7 +24,8 @@
 //   PM-T19 source objects not mutated (purity)
 //   PM-T20 realistic multi-match fixture with hand-computed totals
 // Plus: cross-engine reconciliation invariants (Part 34), minutes edge cases,
-// ordering, empty input, performance measurements (Part 35).
+// ordering, empty input, performance measurements (Part 35), team-season
+// opponent-channel bucket regression (PM-T21).
 
 'use strict';
 
@@ -614,6 +615,77 @@ eq('season order by date', PS.matches.map((m) => m.matchKey.label).slice(0, 2),
   // p8 located events: M1 12, M2 5, M3 4 -> 21
   eq('PM-T12d p8 season located = 21', p8.spatial.located, 21);
   eq('PM-T12e p8 season unlocated = 9 (incl. unlocated Press/Press Win)', p8.spatial.unlocated, 9);
+}
+
+// --- PM-T21: team-season OPPONENT channel aggregation reads the opponent bucket ---
+// Regression for the defect where the season opponent-channel sum read the
+// OUR channel bucket (m.spatial.our.channels) instead of the OPPONENT bucket
+// (m.spatial.opponent.channels). Fixture: OUR and OPPONENT channel
+// distributions are deliberately different in every channel key, across two
+// matches, so a mirrored read cannot pass by coincidence. Channel binning
+// (analytics.js): y → floor(y*3): [0,1/3) Left, [1/3,2/3) Central, [2/3,1] Right.
+{
+  const ftClock00 = () => ({
+    clockStartedAt: null, clockBaseSeconds: 5400, clockRunning: false, period: 'FT',
+    scoreFor: 0, scoreAgainst: 0, videoSyncOffset: 0, selectedTeam: 'our',
+    selectedPlayerId: null, activeSequenceId: null, nextSequenceNumber: 1
+  });
+  const channelMatch = (idx, date, ourYs, oppYs) => {
+    const events = [];
+    let t = 600;
+    ourYs.forEach((y) => events.push(ev({ time: (t += 100), label: 'Recovery', team: 'our', playerId: 'p8', location: { x: 0.5, y } })));
+    oppYs.forEach((y) => events.push(ev({ time: (t += 100), label: 'Recovery', team: 'opponent', location: { x: 0.5, y } })));
+    return {
+      sourceFile: '/ch-' + idx + '.json',
+      __savedAt: '2026-07-' + String(idx + 1).padStart(2, '0') + 'T20:00:00Z',
+      __schemaVersion: 3,
+      videoPath: null,
+      tags: [],
+      events,
+      squad: SQUAD.map((p) => ({ ...p })),
+      matchInfo: {
+        competition: 'League', date, opponent: 'Channel Opp ' + idx, venue: 'V', homeAway: 'home',
+        ourScore: '0', opponentScore: '0', formation: '4-3-3', startingXI: startingXI()
+      },
+      matchClock: ftClock00()
+    };
+  };
+  // Match A: OUR {Left 1, Central 2, Right 0}; OPPONENT {Left 0, Central 7, Right 3}
+  const chA = channelMatch(0, '2026-07-01', [0.2, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.8, 0.8, 0.8]);
+  // Match B: OUR {Left 0, Central 0, Right 2}; OPPONENT {Left 4, Central 1, Right 0}
+  const chB = channelMatch(1, '2026-07-08', [0.8, 0.9], [0.1, 0.1, 0.1, 0.1, 0.4]);
+  const PSch = PSE.computeSeason([chA, chB]);
+
+  // fixture sanity — the distributions must differ, or the test proves nothing
+  ok('PM-T21 fixture sanity: our and opponent channels differ (match A)',
+    JSON.stringify(PSch.matches[0].spatial.our.channels) !== JSON.stringify(PSch.matches[0].spatial.opponent.channels), '');
+  ok('PM-T21 fixture sanity: our and opponent channels differ (match B)',
+    JSON.stringify(PSch.matches[1].spatial.our.channels) !== JSON.stringify(PSch.matches[1].spatial.opponent.channels), '');
+
+  // per-match ground truth (consumed from the analytics engine grids)
+  eq('PM-T21a match A our channels', PSch.matches[0].spatial.our.channels,
+    { 'Left channel': 1, 'Central channel': 2, 'Right channel': 0 });
+  eq('PM-T21b match A opponent channels', PSch.matches[0].spatial.opponent.channels,
+    { 'Left channel': 0, 'Central channel': 7, 'Right channel': 3 });
+  eq('PM-T21c match B our channels', PSch.matches[1].spatial.our.channels,
+    { 'Left channel': 0, 'Central channel': 0, 'Right channel': 2 });
+  eq('PM-T21d match B opponent channels', PSch.matches[1].spatial.opponent.channels,
+    { 'Left channel': 4, 'Central channel': 1, 'Right channel': 0 });
+
+  // season aggregation — exact expected values, all three channel keys
+  eq('PM-T21e season our channels == Σ per-match OUR bucket', PSch.teamSeason.spatial.channels.our,
+    { 'Left channel': 1, 'Central channel': 2, 'Right channel': 2 });
+  eq('PM-T21f season OPPONENT channels == Σ per-match OPPONENT bucket (exact values)',
+    PSch.teamSeason.spatial.channels.opponent,
+    { 'Left channel': 4, 'Central channel': 8, 'Right channel': 3 });
+  const oppSum = { 'Left channel': 0, 'Central channel': 0, 'Right channel': 0 };
+  PSch.matches.forEach((m) => {
+    Object.keys(oppSum).forEach((c) => { oppSum[c] += m.spatial.opponent.channels[c]; });
+  });
+  eq('PM-T21g invariant: season opponent channels == Σ m.spatial.opponent.channels',
+    PSch.teamSeason.spatial.channels.opponent, oppSum);
+  ok('PM-T21h season opponent channels do not mirror the our bucket',
+    JSON.stringify(PSch.teamSeason.spatial.channels.opponent) !== JSON.stringify(PSch.teamSeason.spatial.channels.our), '');
 }
 
 // --- PM-T13: team totals reconcile with Match Analytics -------------------------
