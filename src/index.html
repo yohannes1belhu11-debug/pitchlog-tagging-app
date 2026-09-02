@@ -413,7 +413,14 @@
       <div id="seasonStatsContent" class="season-stats-content"></div>
 
       <div class="modal-actions">
+        <!-- Legacy season event-dump export (one row per raw event, 19
+             columns). PSD §12.3 default: kept alongside the new player×match
+             export — intentionally byte-unchanged (Phase E scope). -->
         <button id="btnExportSeasonCsv" class="btn btn-accent">Export season CSV</button>
+        <!-- Season Player CSV export (PSD-V2, Phase E): one row per
+             player×match + one SEASON_SUMMARY row per player, 63 exact
+             columns from the Player & Season Core output (read-only). -->
+        <button id="btnExportSeasonPlayerCsv" class="btn btn-ghost">Export player×match CSV</button>
       </div>
     </div>
   </div>
@@ -485,6 +492,12 @@
        BEFORE renderer.js — the season view renderer consumes
        window.RecentFormEngine.computeRecentForm(PS) read-only. -->
   <script src="recent-form.js"></script>
+  <!-- Season Player CSV export (PSD-V2, Phase E): pure presentation module
+       for the Player & Season Core output — one row per player×match plus a
+       SEASON_SUMMARY row per player, exact 63-column PSD-V2 layout. Consumes
+       the recomputed PS read-only; no engine is modified. Loaded AFTER
+       player-season.js/recent-form.js and BEFORE renderer.js. -->
+  <script src="season-csv.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -298,6 +298,7 @@
   const seasonMatchListEl = document.getElementById('seasonMatchList');
   const seasonStatsContentEl = document.getElementById('seasonStatsContent');
   const btnExportSeasonCsv = document.getElementById('btnExportSeasonCsv');
+  const btnExportSeasonPlayerCsv = document.getElementById('btnExportSeasonPlayerCsv');
 
   // Recovery modal + autosave toast elements
   const recoveryModal = document.getElementById('recoveryModal');
@@ -3702,6 +3703,36 @@
     });
 
     const csv = [header, ...rows].join('\n');
+    await window.matchtag.exportCsv(csv);
+  });
+
+  // ---------- Season player×match CSV export (PSD-V2, Phase E) ----------
+  // Pure presentation export of the Player & Season Core output: one row per
+  // player×match + one SEASON_SUMMARY row per player, exact 63-column PSD-V2
+  // layout (src/season-csv.js — window.SeasonCsvEngine). The PS object is
+  // recomputed from the loaded seasonMatches (same deterministic engine the
+  // season view renders from) and consumed READ-ONLY; nothing is recomputed
+  // here and no engine is modified. The legacy event-dump export above is
+  // intentionally untouched (PSD §12.3 default: add alongside, never replace).
+  btnExportSeasonPlayerCsv.addEventListener('click', async () => {
+    if (seasonMatches.length === 0) return;
+    if (!window.SeasonCsvEngine || typeof window.SeasonCsvEngine.buildSeasonPlayerCsv !== 'function') return;
+    if (!window.PlayerSeasonEngine || typeof window.PlayerSeasonEngine.computeSeason !== 'function') return;
+    let PS;
+    try {
+      PS = window.PlayerSeasonEngine.computeSeason(seasonMatches);
+    } catch (err) {
+      console.error('Season player CSV export: season engine error', err);
+      return;
+    }
+    let csv;
+    try {
+      csv = window.SeasonCsvEngine.buildSeasonPlayerCsv(PS);
+    } catch (err) {
+      console.error('Season player CSV export: export module error', err);
+      return;
+    }
+    if (!csv) return;
     await window.matchtag.exportCsv(csv);
   });
 
