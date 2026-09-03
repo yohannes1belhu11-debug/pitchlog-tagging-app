@@ -318,6 +318,12 @@
   const btnUnsavedDiscard = document.getElementById('btnUnsavedDiscard');
   const btnUnsavedCancel = document.getElementById('btnUnsavedCancel');
 
+  // Load-session confirm modal (data-loss guard on btnLoadSession — see the
+  // guard and modal wiring in the Session save/load section below).
+  const loadConfirmModal = document.getElementById('loadConfirmModal');
+  const btnLoadConfirmCancel = document.getElementById('btnLoadConfirmCancel');
+  const btnLoadConfirmProceed = document.getElementById('btnLoadConfirmProceed');
+
   // ---------- Squad roster (persists across matches, separate from tags/events) ----------
 
   let squad = []; // { id, number, name }
@@ -3755,7 +3761,15 @@
 
   btnSaveSession.addEventListener('click', saveSession);
 
-  btnLoadSession.addEventListener('click', async () => {
+  // doLoadSession(): the actual load flow (file dialog via IPC, then state
+  // replacement). Extracted from the btnLoadSession click handler so the
+  // handler can guard it with the unsaved-changes confirmation below. The
+  // flow itself is the pre-guard load behavior, preserved: parse and
+  // restore events / matchInfo / matchClock (stopped on load) / video /
+  // filters, then mark the session clean and clear the autosave (the
+  // loaded file is the new source of truth). The squad-reconciliation
+  // block in the middle is new with the guard change — see its comment.
+  async function doLoadSession() {
     const data = await window.matchtag.loadSession();
     if (!data) return;
 
@@ -3776,6 +3790,53 @@
     nextEventId = events.reduce((max, ev) => Math.max(max, ev.id + 1), 1);
 
     activeIntervals = {};
+
+    // --- Squad reconciliation (manual load) -----------------------------
+    // The session file embeds the squad it was saved with. The local squad
+    // normally wins — it is auto-persisted on every change and at least as
+    // up-to-date on this machine (same policy as autosave recovery, which
+    // also never replaces the current squad). But a session saved on
+    // another machine, or before a squad edit here, can reference players
+    // the current squad no longer has — those events would silently
+    // render as "Unknown player". When that happens, restore the missing
+    // REFERENCED players from the embedded squad (strictly additive: no
+    // local player is replaced or removed, unreferenced embedded players
+    // are not merged), and warn about any references still unresolvable
+    // afterwards, using the same integrity helper and toast channel as
+    // the recovery path. Notices are shown at the END of the load (below)
+    // because clearAutosave() hides the autosave toast.
+    let restoredCount = 0;
+    let stillMissing = null;
+    const embeddedSquad = Array.isArray(data.squad) ? data.squad : [];
+    if (embeddedSquad.length > 0) {
+      const missing = window.Integrity.findMissingPlayerRefs(
+        events,
+        squad.map((p) => String(p.id))
+      );
+      if (missing.missingIds.length > 0) {
+        const localIds = new Set(squad.map((p) => String(p.id)));
+        const embeddedById = new Map();
+        embeddedSquad.forEach((p) => {
+          if (p && typeof p === 'object' && typeof p.id === 'string' && p.id) {
+            embeddedById.set(String(p.id), { id: String(p.id), number: p.number || '', name: p.name || '' });
+          }
+        });
+        missing.missingIds.forEach((pid) => {
+          if (localIds.has(pid)) return;
+          const player = embeddedById.get(pid);
+          if (player) {
+            squad.push(player);
+            localIds.add(pid);
+            restoredCount++;
+          }
+        });
+        stillMissing = window.Integrity.findMissingPlayerRefs(
+          events,
+          squad.map((p) => String(p.id))
+        );
+      }
+    }
+    // ---------------------------------------------------------------------
 
     matchInfo = data.matchInfo && typeof data.matchInfo === 'object'
       ? { ...blankMatchInfo(), ...data.matchInfo }
@@ -3817,7 +3878,75 @@
     // write and delete the autosave file.)
     setClean();
     await clearAutosave();
+
+    // End-of-load notices, shown AFTER clearAutosave() (which hides the
+    // autosave toast) so they stay visible. Restored players are persisted
+    // here too — also after the autosave clear — so a persist failure
+    // keeps its own toast from persistSquad().
+    const notices = [];
+    if (restoredCount > 0) {
+      const persisted = await persistSquad();
+      if (persisted) {
+        notices.push(
+          restoredCount + (restoredCount === 1 ? ' missing player was' : ' missing players were') +
+          ' restored from the loaded session\u2019s squad.'
+        );
+      }
+      // If persistSquad() failed it already showed its own error toast;
+      // the still-missing warning below still applies.
+    }
+    if (stillMissing && stillMissing.affectedEvents > 0) {
+      notices.push(
+        stillMissing.affectedEvents + ' loaded ' + (stillMissing.affectedEvents === 1 ? 'event references' : 'events reference') +
+        ' ' + (stillMissing.missingIds.length === 1 ? 'a player' : stillMissing.missingIds.length + ' players') +
+        ' not currently in your squad.'
+      );
+    }
+    if (notices.length > 0) showAutosaveToast(notices.join(' '));
+  }
+
+  // btnLoadSession — data-loss guard. Loading replaces the current tags,
+  // events, match info and score AND clears the autosave safety net, so
+  // clicking it while the session has unsaved changes must be an explicit,
+  // confirmed choice instead of a silent destroy. Same predicate as the
+  // safe-close guard (sessionDirty alone — deliberately conservative: a
+  // dirty-but-trivial state still gets the prompt rather than a silent
+  // replace).
+  btnLoadSession.addEventListener('click', async () => {
+    if (sessionDirty) {
+      showLoadConfirmModal();
+      return;
+    }
+    await doLoadSession();
   });
+
+  // ---------- Load-session confirmation modal ----------
+
+  function showLoadConfirmModal() {
+    if (loadConfirmModal) loadConfirmModal.style.display = 'flex';
+  }
+
+  function hideLoadConfirmModal() {
+    if (loadConfirmModal) loadConfirmModal.style.display = 'none';
+  }
+
+  // Cancel: keep the current session exactly as it is. The dirty flag, the
+  // pending debounced autosave and the autosave file are all untouched —
+  // the autosave safety net keeps protecting the unsaved work.
+  if (btnLoadConfirmCancel) {
+    btnLoadConfirmCancel.addEventListener('click', () => {
+      hideLoadConfirmModal();
+    });
+  }
+
+  // Proceed: the user explicitly accepted discarding the unsaved work —
+  // run the load flow (same behavior as loading from a clean session).
+  if (btnLoadConfirmProceed) {
+    btnLoadConfirmProceed.addEventListener('click', async () => {
+      hideLoadConfirmModal();
+      await doLoadSession();
+    });
+  }
 
   // ---------- CSV export ----------
 

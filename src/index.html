@@ -468,6 +468,28 @@
     </div>
   </div>
 
+  <!-- Load-session confirm modal: shown when the analyst clicks Load session
+       while the current session has unsaved changes. Loading replaces the
+       current tags, events, match info and score AND clears the autosave
+       safety net, so discarding the unsaved work must be an explicit,
+       confirmed choice. Cancel keeps everything exactly as it is. Not
+       dismissible by Escape (same policy as the recovery modal) so the
+       destructive choice is never made by accident. -->
+  <div id="loadConfirmModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h3>Load a different session?</h3>
+      <p class="recovery-description">
+        You have unsaved changes in the current session. Loading another session
+        will replace the current tags, events, match info and score, and clear
+        the autosave. Save first if you want to keep them.
+      </p>
+      <div class="modal-actions">
+        <button id="btnLoadConfirmCancel" class="btn btn-ghost">Cancel</button>
+        <button id="btnLoadConfirmProceed" class="btn btn-accent">Discard and load</button>
+      </div>
+    </div>
+  </div>
+
   <!-- integrity.js must load before renderer.js: it provides the shared
        player-id generation and missing-player-reference helpers
        (window.Integrity) used by the squad bulk-add and autosave recovery. -->
