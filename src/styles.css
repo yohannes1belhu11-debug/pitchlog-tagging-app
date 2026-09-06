@@ -1746,6 +1746,31 @@ button {
 .touchline-recent-item .tl-time { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
 .touchline-recent-item .tl-main { font-weight: 600; }
 .touchline-recent-item .tl-player { font-size: 11px; color: var(--text-dim); }
+
+/* ---------- F2.2: inline event correction (Recent Events feed) ---------- */
+/* Recent cards carry a team badge (tap toggles our ↔ opponent) and a player
+   button (tap opens the quick picker). While the picker is open the feed
+   rebuild is frozen (see renderTouchlineAll), so the popover is stable. */
+.touchline-recent-item .tl-row-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.tl-corr-team { flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 8px; min-height: 24px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text-dim); cursor: pointer; }
+.tl-corr-team:hover { border-color: var(--accent); }
+.tl-corr-team-our { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.tl-corr-team-opp { border-color: #8a94a0; background: var(--panel-alt); color: var(--text); }
+.tl-corr-team-none { border-style: dashed; }
+.tl-corr-team.locked { opacity: 0.55; cursor: not-allowed; }
+.tl-corr-player { font-size: 11px; color: var(--text-dim); background: transparent; border: 1px dashed var(--border); border-radius: 6px; padding: 2px 6px; min-height: 24px; text-align: left; cursor: pointer; }
+.tl-corr-player:hover { color: var(--text); border-color: var(--accent); }
+
+/* Quick player-correction picker — floats above the recent strip inside the
+   touchline overlay (z-index local to the overlay's stacking context, so it
+   stays under the F1.1 detail panel which lives outside at z-index 300). */
+.tl-player-picker { position: absolute; left: 16px; right: 16px; bottom: 128px; z-index: 210; background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius); padding: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.tl-player-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 8px; }
+.tl-player-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; max-height: 34vh; overflow-y: auto; }
+.tl-player-picker-grid .touchline-tag-btn { min-height: 40px; }
+.tl-player-picker-grid .touchline-tag-btn.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 700; }
+.tl-player-picker-grid .detail-empty-note { grid-column: 1 / -1; font-size: 12px; color: var(--text-dim); padding: 6px; }
+
 .touchline-overlay .btn-sm { min-height: 36px; min-width: 44px; padding: 6px 10px; }
 .touchline-overlay .team-btn { min-height: 40px; min-width: 80px; }
 .touchline-overlay .player-select { min-height: 40px; font-size: 13px; }

@@ -4924,7 +4924,10 @@
   // layering — the .touchline-detail class is touchline-only and is removed
   // here even if the panel is still open (it stays open, exactly as before,
   // now at its normal desktop position/layer).
-  function exitTouchlineMode() { touchlineMode = false; if (touchlineOverlay) touchlineOverlay.style.display = 'none'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Touchline Mode'; if (detailPanel) detailPanel.classList.remove('touchline-detail'); }
+  // F2.2: exiting also closes any open inline player-picker session (the
+  // picker lives inside the overlay; the session id would otherwise freeze
+  // the recent feed on the next touchline entry).
+  function exitTouchlineMode() { touchlineMode = false; if (touchlineOverlay) touchlineOverlay.style.display = 'none'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Touchline Mode'; if (detailPanel) detailPanel.classList.remove('touchline-detail'); closeTouchlinePlayerPicker(); }
   function toggleTouchlineMode() { if (touchlineMode) exitTouchlineMode(); else enterTouchlineMode(); }
 
   function renderTouchlineQuickTags() {
@@ -4966,6 +4969,152 @@
     });
   }
 
+  // ---------- F2.2: inline event correction from the Recent Events feed ----------
+  // A live analyst who tags an event against the wrong team or player needs
+  // a correction that is faster than leaving Touchline Mode. Every recent
+  // card now carries a TEAM badge (tap = toggle our ↔ opponent, instant
+  // visual flip) and a PLAYER button (tap = quick picker popover over the
+  // feed). Corrections mutate the SAME `events` array through the SAME
+  // dispatcher pattern as the detail-panel chips (field mutation →
+  // renderEventList → markAutosaveDirty) — no parallel state, no schema
+  // change, no new event kinds; analytics/exports/desktop read the same
+  // model and therefore reflect the correction immediately.
+  // While the player picker is open, renderTouchlineAll() SKIPS the recent
+  // feed rebuild (freeze) so the popover and the analyst's scroll position
+  // survive the 250ms clock tick; the freeze ends automatically on
+  // selection, Done, event removal (undo/delete), or leaving Touchline Mode.
+  let touchlineRecentEditEventId = null;
+
+  function touchlineTeamBadgeState(team) {
+    return team === 'our' ? 'our' : team === 'opponent' ? 'opp' : 'none';
+  }
+  function touchlineTeamBadgeText(state) {
+    return state === 'our' ? 'US' : state === 'opp' ? 'OPP' : '—';
+  }
+
+  function touchlineRecentItemHtml(ev) {
+    const p = resolvePlayer(ev.playerId);
+    const playerLabel = p ? (p.number ? `#${p.number} ${p.name}` : p.name) : '— no player';
+    const teamState = touchlineTeamBadgeState(ev.team);
+    // Goal events keep a LOCKED team badge: a goal writes scoreFor/Against
+    // snapshots + the live scoreboard at log time (F3 domain); flipping its
+    // team inline, without the full score-correction cascade, would corrupt
+    // score state. The safe correction path for a misattributed goal is
+    // undo (which restores the exact pre-goal score) + re-tag, or the
+    // desktop detail panel.
+    const isGoal = ev.label === 'Goal' || ev.label === 'GOAL';
+    const teamBtn = `<button class="tl-corr-team tl-corr-team-${teamState}${isGoal ? ' locked' : ''}" data-corr="team"${isGoal ? ' title="Goal team is fixed inline (score integrity) — undo + re-tag or use the panel" disabled' : ''}>${touchlineTeamBadgeText(teamState)}</button>`;
+    return `<div class="touchline-recent-item" data-event-id="${ev.id}">`
+      + `<div class="tl-row-top">${teamBtn}<span class="tl-time">${formatMatchClock(ev.matchTime || ev.time, ev.period)}</span></div>`
+      + `<span class="tl-main">${escapeHtml(ev.label)}</span>`
+      + `<button class="tl-corr-player" data-corr="player">${escapeHtml(playerLabel)}</button>`
+      + `</div>`;
+  }
+
+  function applyTouchlineTeamCorrection(ev, btn) {
+    if (!ev) return;
+    if (ev.label === 'Goal' || ev.label === 'GOAL') return; // locked: score integrity (see touchlineRecentItemHtml)
+    const next = ev.team === 'our' ? 'opponent' : 'our';
+    ev.team = next;
+    // Re-derive `side` with the exact creation-time rule from buildEventBase
+    // so the two fields can never disagree (analytics partitions by `team`;
+    // `side` tints the desktop event rows). Fine-grained side control
+    // (for/against/neutral, panel-only) remains available in the detail panel.
+    ev.side = next === 'our' ? 'for' : 'against';
+    markAutosaveDirty();
+    renderEventList();
+    renderTouchlineAll();
+    // Instant badge feedback even when the feed is frozen (picker session
+    // open): update the tapped button in place as well.
+    if (btn) {
+      const state = touchlineTeamBadgeState(ev.team);
+      btn.textContent = touchlineTeamBadgeText(state);
+      btn.className = 'tl-corr-team tl-corr-team-' + state;
+    }
+  }
+
+  function closeTouchlinePlayerPicker() {
+    touchlineRecentEditEventId = null;
+    const el = document.getElementById('touchlinePlayerPicker');
+    if (el) el.remove();
+  }
+
+  function applyTouchlinePlayerCorrection(ev, playerId) {
+    if (!ev) return;
+    // Same toggle-to-clear semantics as the detail-panel player chips: tapping
+    // the already-selected player (or the "None" button) clears the
+    // attribution instead of re-selecting it. The field mutated is the exact
+    // `playerId` string the tagging-time player selector writes (reference by
+    // ID, Phase 1E) — squad membership is resolved at display time.
+    ev.playerId = (playerId && ev.playerId !== playerId) ? playerId : null;
+    markAutosaveDirty();
+    renderEventList();
+    closeTouchlinePlayerPicker();
+    renderTouchlineAll();
+  }
+
+  function openTouchlinePlayerPicker(ev) {
+    if (!ev) return;
+    closeTouchlinePlayerPicker();
+    touchlineRecentEditEventId = ev.id;
+    const overlay = document.getElementById('touchlineOverlay');
+    if (!overlay) { touchlineRecentEditEventId = null; return; }
+
+    const picker = document.createElement('div');
+    picker.id = 'touchlinePlayerPicker';
+    picker.className = 'tl-player-picker';
+
+    const p = resolvePlayer(ev.playerId);
+    const head = document.createElement('div');
+    head.className = 'tl-player-picker-head';
+    const currentLabel = p ? (p.number ? `#${p.number} ${p.name}` : p.name) : 'none';
+    head.innerHTML = `<span>Correct player · ${escapeHtml(ev.label)} · current: ${escapeHtml(currentLabel)}</span>`;
+    const done = document.createElement('button');
+    done.className = 'btn btn-ghost tl-player-picker-done';
+    done.textContent = 'Done';
+    done.addEventListener('click', () => { closeTouchlinePlayerPicker(); renderTouchlineAll(); });
+    head.appendChild(done);
+    picker.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'tl-player-picker-grid';
+    if (squad.length === 0) {
+      const note = document.createElement('div');
+      note.className = 'detail-empty-note';
+      note.textContent = 'No players added — use "Manage squad" in the top bar.';
+      grid.appendChild(note);
+    } else {
+      const noneBtn = document.createElement('button');
+      noneBtn.className = 'touchline-tag-btn' + (ev.playerId ? '' : ' selected');
+      noneBtn.textContent = '— None —';
+      noneBtn.addEventListener('click', () => applyTouchlinePlayerCorrection(ev, null));
+      grid.appendChild(noneBtn);
+      squad.forEach((pl) => {
+        const b = document.createElement('button');
+        b.className = 'touchline-tag-btn' + (ev.playerId === pl.id ? ' selected' : '');
+        b.textContent = pl.number ? `#${pl.number} ${pl.name}` : pl.name;
+        b.addEventListener('click', () => applyTouchlinePlayerCorrection(ev, pl.id));
+        grid.appendChild(b);
+      });
+    }
+    picker.appendChild(grid);
+    overlay.appendChild(picker);
+  }
+
+  function wireTouchlineRecentItem(item) {
+    const id = parseInt(item.dataset.eventId, 10);
+    const ev = events.find((e) => e.id === id);
+    if (!ev) return;
+    const teamBtn = item.querySelector('[data-corr="team"]');
+    if (teamBtn) teamBtn.addEventListener('click', (e) => { e.stopPropagation(); applyTouchlineTeamCorrection(ev, teamBtn); });
+    const playerBtn = item.querySelector('[data-corr="player"]');
+    if (playerBtn) playerBtn.addEventListener('click', (e) => { e.stopPropagation(); openTouchlinePlayerPicker(ev); });
+    // Preserved pre-F2.2 behavior: tapping the card body seeks the video to
+    // the event (video domain, F1.2) when a video is loaded; the correction
+    // buttons above stop propagation so they never trigger a seek.
+    item.addEventListener('click', () => { if (currentVideoPath && ev.videoTime !== null) seekTo(ev.videoTime); });
+  }
+
   function renderTouchlineAll() {
     if (!touchlineMode) return;
     const seconds = getCurrentMatchSeconds();
@@ -4991,7 +5140,23 @@
     const tlBU=document.getElementById('tlBtnUndo');
     if(tlBU)tlBU.disabled=lastLoggedEventId==null||!events.some(e=>e.id===lastLoggedEventId);
     const tlR=document.getElementById('touchlineRecentEvents');
-    if(tlR){const recent=events.slice(-10).reverse();tlR.innerHTML=recent.map(ev=>{const p=resolvePlayer(ev.playerId);const pl=p?(p.number?`#${p.number} ${p.name}`:p.name):'';const tl=ev.team==='opponent'?'OPP':'';return `<div class="touchline-recent-item" data-event-id="${ev.id}"><span class="tl-time">${formatMatchClock(ev.matchTime||ev.time,ev.period)}</span><span class="tl-main">${escapeHtml(tl?tl+' '+ev.label:ev.label)}</span><span class="tl-player">${escapeHtml(pl)}</span></div>`;}).join('');tlR.querySelectorAll('.touchline-recent-item').forEach(item=>{item.addEventListener('click',()=>{const id=parseInt(item.dataset.eventId,10);const ev=events.find(e=>e.id===id);if(ev&&currentVideoPath&&ev.videoTime!==null)seekTo(ev.videoTime);});});}
+    if(tlR){
+      // F2.2: while a player-picker session is open the feed rebuild is
+      // FROZEN — the popover and the analyst's scroll position survive the
+      // 250ms tick (new tags appear the moment the session ends). If the
+      // event under correction vanished (undo/delete), the session ends
+      // automatically here and the feed rebuilds.
+      let editActive=false;
+      if(touchlineRecentEditEventId!=null){
+        if(events.some((e)=>e.id===touchlineRecentEditEventId)) editActive=true;
+        else closeTouchlinePlayerPicker();
+      }
+      if(!editActive){
+        const recent=events.slice(-10).reverse();
+        tlR.innerHTML=recent.map(touchlineRecentItemHtml).join('');
+        tlR.querySelectorAll('.touchline-recent-item').forEach(wireTouchlineRecentItem);
+      }
+    }
     const tlPitch=document.getElementById('touchlinePitchSvg'),tlReadout=document.getElementById('touchlinePitchReadout');
     if(tlPitch){tlPitch.innerHTML=pitchMarkingsSvg();const last=[...events].reverse().find(e=>e.location);if(last&&last.location){tlPitch.innerHTML+=`<circle class="pitch-marker" cx="${(last.location.x*700).toFixed(1)}" cy="${(last.location.y*450).toFixed(1)}" r="8"/>`;if(tlReadout)tlReadout.textContent=locationZone(last.location.x,last.location.y);}else{if(tlReadout)tlReadout.textContent='No location set';}}
   }
