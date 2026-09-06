@@ -4214,6 +4214,33 @@
     }
   }
 
+  // ---------- F2.4: Touchline autosave telemetry (read-only binding) ----------
+  // renderTouchlineSaveStatus() (see the Touchline Mode section below) has
+  // existed since the original build but was never invoked — the header
+  // status was decorative (previously deferred defect #8). F2.4 wires it to
+  // the REAL autosave lifecycle as a pure observer:
+  //   saving = sessionDirty — debounce armed or a write is in flight
+  //            → "SAVING..." (pending: data not yet on disk)
+  //   saved  = the debounced autosave write landed OK (data safely on disk)
+  //            → "✓ SAVED". Also used when the session is clean / has no
+  //            autosavable work (nothing pending, nothing at risk) and
+  //            after a manual save / load / discard (new source of truth).
+  //   error  = the last write failed (the toast already explains why)
+  //            → "⚠ SAVE ERROR"
+  // The debounce timer, write IPC, epoch guards, and failure toast are
+  // untouched — this only OBSERVES lifecycle transitions and paints one
+  // <span> in the Touchline header. The equality guard means rapid-fire
+  // tagging (setDirty fires on every logged event) performs ZERO DOM work
+  // after the first saving transition, and no Touchline grid is ever
+  // rebuilt by telemetry: only the indicator's own text/class change.
+  let touchlineSaveStatusState = 'saved'; // matches the static markup at boot
+
+  function updateTouchlineSaveStatus(status) {
+    if (touchlineSaveStatusState === status) return; // no DOM work unless changed
+    touchlineSaveStatusState = status;
+    renderTouchlineSaveStatus(status);
+  }
+
   // setDirty(): mark the session as having unsaved changes. Called from
   // every state mutation point. Also schedules the debounced autosave.
   // Idempotent: calling it when already dirty just reschedules the
@@ -4224,6 +4251,7 @@
     const wasClean = !sessionDirty;
     sessionDirty = true;
     if (wasClean) renderDirtyIndicator();
+    updateTouchlineSaveStatus('saving'); // F2.4 telemetry (no-op unless changed)
     scheduleAutosave();
   }
 
@@ -4235,6 +4263,7 @@
     sessionDirty = false;
     clearAutosaveTimer();
     if (wasDirty) renderDirtyIndicator();
+    updateTouchlineSaveStatus('saved'); // F2.4: clean — nothing pending / at risk
   }
 
   // Build the data payload that gets written to autosave.json. Same shape
@@ -4299,6 +4328,10 @@
       // session. Async delete; failure is non-fatal.
       // F1.3: routed through clearStaleAutosaveFile() so the delete drains
       // any in-flight async write first (never races it in main).
+      // F2.4: dirty but nothing worth persisting — the autosave channel
+      // holds nothing at risk, so the status reads saved rather than
+      // getting stuck on "SAVING..." (no write is ever armed here).
+      updateTouchlineSaveStatus('saved');
       clearStaleAutosaveFile();
       return;
     }
@@ -4354,12 +4387,14 @@
     // a session the user already left, no flag changes, no reschedule).
     if (epochAtStart !== autosaveEpoch) return;
     if (result && result.ok) {
+      updateTouchlineSaveStatus('saved'); // F2.4: disk I/O landed — data is safe
       if (autosaveLastWriteFailed) {
         autosaveLastWriteFailed = false;
         autosaveLastWriteError = '';
         hideAutosaveToast();
       }
     } else {
+      updateTouchlineSaveStatus('error'); // F2.4: reflect the failure without crashing
       const err = (result && result.error) || 'Unknown error';
       if (!autosaveLastWriteFailed || err !== autosaveLastWriteError) {
         autosaveLastWriteFailed = true;
@@ -4424,7 +4459,11 @@
     // the belt: it records the failure state and shows the toast if the
     // window somehow stays alive. Both success and failure return values
     // from main are consumed; a stub returning undefined is tolerated.
+    // F2.4 telemetry: if the window somehow survives this attempted close,
+    // the Touchline header status reflects the flush outcome.
+    if (result && result.ok) updateTouchlineSaveStatus('saved');
     if (result && result.ok === false) {
+      updateTouchlineSaveStatus('error');
       const err = (result && result.error) || 'Unknown error';
       autosaveLastWriteFailed = true;
       autosaveLastWriteError = err;
@@ -4895,6 +4934,10 @@
   }
 
   // ---------- Save status for Touchline ----------
+  // F2.4: now driven by updateTouchlineSaveStatus() above — a read-only
+  // telemetry binding on the autosave lifecycle. This painter touches ONLY
+  // this one element (never the quick-tag grid) and is idempotent per
+  // status value thanks to the equality guard in the caller.
   function renderTouchlineSaveStatus(status) {
     const el = document.getElementById('touchlineSaveStatus');
     if (!el) return;

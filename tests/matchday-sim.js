@@ -427,8 +427,11 @@ function recEvent(o) {
     ok('T4 team selector mirrors current selection (opponent active, matching desktop)', id('tlBtnTeamOpp').className.includes('active') && !id('tlBtnTeamOur').className.includes('active') && id('btnTeamOpponent').className.includes('active'));
     ok('T5 16 quick tag buttons rendered (15 + Possession, F1.4)', B.doc.querySelectorAll('#touchlineQuickTags .touchline-tag-btn').length === 16);
     ok('T6 pitch readout + sequence controls present', id('touchlinePitchReadout') && id('tlBtnStartSeq') && id('tlBtnEndSeq') && id('tlBtnUndo'));
-    ok('T7 save indicator shows static SAVED (deferred defect 8: decorative)', txt('touchlineSaveStatus') === '✓ SAVED');
-    finding('F5', 'LOW', 'Touchline save-status indicator is decorative: renderTouchlineSaveStatus() is never invoked anywhere (grep: 1 occurrence = its definition). Always shows "✓ SAVED" regardless of actual autosave state. This is the previously deferred LOW defect #8, correctly untouched by the integrity fixes.');
+    ok('T7 save indicator shows live SAVING state during the debounce window (F2.4: telemetry wired)', txt('touchlineSaveStatus') === 'SAVING...', txt('touchlineSaveStatus'));
+    // F5 (decorative save-status indicator, deferred defect #8) is RESOLVED
+    // by F2.4: renderTouchlineSaveStatus() is now driven by
+    // updateTouchlineSaveStatus(), a read-only observer on the autosave
+    // lifecycle. T7/V7b/V11b/A2b/A4b below verify the live binding.
 
     click(id('tlBtnTeamOur'));
     const tlSel = id('tlPlayerSelect');
@@ -590,6 +593,7 @@ function recEvent(o) {
     ok('V5 payload squad (14, id-referenced)', P1.squad.length === 14 && P1.squad[9].id === 'player_10');
     ok('V6 payload tags (incl. touchline-created)', P1.tags.length > 8);
     ok('V7 after save: indicator Saved + autosave cleared', /Saved/.test(txt('dirtyIndicator')) && B.stub._calls.autosaveDelete >= 1);
+    ok('V7b touchline save indicator reflects SAVED immediately upon manual save success (F2.4)', txt('touchlineSaveStatus') === '✓ SAVED');
     globalThis.__P1 = P1;
 
     B.stub._setLoadSession(Object.assign(clone(P1), { __schemaVersion: 3, __videoExists: false }));
@@ -605,6 +609,7 @@ function recEvent(o) {
     const cont = recEvent({ label: 'Pass', team: 'our', playerId: 'player_2' });
     detailDone();
     ok('V11 new event after load continues id sequence (max ' + prevMax + ' -> ' + cont.id + ')', cont.id === prevMax + 1);
+    ok('V11b touchline save indicator back to SAVING after the post-load tag (F2.4)', txt('touchlineSaveStatus') === 'SAVING...');
   }
 
   // =====================================================================
@@ -615,6 +620,7 @@ function recEvent(o) {
     const P2 = B.stub._calls.autosaveWrite[B.stub._calls.autosaveWrite.length - 1];
     ok('A1 debounced autosave fired and captured state', P2 && P2.events.length === ledger.length, P2 ? P2.events.length : 'none');
     ok('A2 autosave payload matches events + score', P2 && P2.events.length === ledger.length && P2.matchClock.scoreFor === 5);
+    ok('A2b touchline save indicator shows SAVED once the debounced write lands (F2.4)', txt('touchlineSaveStatus') === '✓ SAVED');
 
     advanceMatchSeconds(1);
     click(tagBtn('Foul'));
@@ -626,6 +632,7 @@ function recEvent(o) {
     const P3 = B.stub._calls.autosaveFlushSync[B.stub._calls.autosaveFlushSync.length - 1];
     ok('A3 beforeunload flush captured the latest state synchronously', P3 && P3.events.length === ledger.length, P3 ? P3.events.length : 'none');
     ok('A4 flush payload includes the last event just tagged', P3 && P3.events[P3.events.length - 1].label === 'Corner');
+    ok('A4b touchline save indicator flips to SAVED the moment the sync close-flush lands (F2.4)', txt('touchlineSaveStatus') === '✓ SAVED');
     globalThis.__P3 = P3;
 
     const closeCb = B.stub._getCloseCallback();
