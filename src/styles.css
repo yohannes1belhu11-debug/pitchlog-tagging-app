@@ -1052,6 +1052,21 @@ button {
   overflow-y: auto;
 }
 
+/* F1.1 — Touchline Mode layering for the detail panel.
+   The touchline overlay (z-index 200) used to fully cover the detail
+   panel's normal layer (z-index 20), so the detail UI opened by a
+   touchline quick tag was unreachable. While Touchline Mode is active
+   the renderer adds .touchline-detail to the SAME #detailPanel element;
+   this re-anchors it to the viewport above the overlay (300 sits above
+   the touchline overlay's 200 and below the save toast's 1000) as a
+   bottom sheet reusing the exact same panel, markup and controls.
+   Desktop layering is unchanged: the class is never applied outside
+   Touchline Mode. */
+.detail-panel.touchline-detail {
+  position: fixed;
+  z-index: 300;
+}
+
 .detail-panel-header {
   display: flex;
   align-items: center;

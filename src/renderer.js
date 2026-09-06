@@ -1107,10 +1107,21 @@
     activeDetailEvent = event;
     renderDetailPanel();
     detailPanel.style.display = 'block';
+    // F1.1: in Touchline Mode the full-screen overlay (z-index 200) sits
+    // above the detail panel's normal layer (z-index 20), so the detail UI
+    // opened after a quick tag was unreachable. Raise the SAME panel above
+    // the overlay while touchline is active (styles: .detail-panel
+    // .touchline-detail). Desktop behavior is untouched: the class is only
+    // applied here while touchlineMode is true, and closeDetailPanel() /
+    // exitTouchlineMode() remove it.
+    if (touchlineMode) detailPanel.classList.add('touchline-detail');
   }
 
   function closeDetailPanel() {
     detailPanel.style.display = 'none';
+    // F1.1: remove the touchline layering class so a later desktop open
+    // uses the normal layer (pure visibility change, no data impact).
+    detailPanel.classList.remove('touchline-detail');
     activeDetailTag = null;
     activeDetailEvent = null;
   }
@@ -1769,7 +1780,16 @@
       `;
       row.addEventListener('click', (e) => {
         if (e.target.classList.contains('event-delete') || e.target.classList.contains('event-edit')) return;
-        seekTo(ev.time);
+        // F1.2: seek in the VIDEO-time domain, not the match-time domain.
+        // ev.time is the legacy alias of matchTime (the independent match
+        // clock) — feeding it to the video player sends the picture to the
+        // wrong moment whenever the two clocks are not aligned (non-zero
+        // video sync offset, or tagging with the match clock while the
+        // video plays independently). ev.videoTime is the exact video
+        // timestamp captured when the event was tagged; only events with
+        // no video time (tagged without a usable video) fall back to
+        // ev.time, preserving the previous behavior for those.
+        seekTo(ev.videoTime != null ? ev.videoTime : ev.time);
       });
       row.querySelector('.event-edit').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -4132,6 +4152,17 @@
   let sessionDirty = false;
   let autosaveTimer = null;
   let autosaveWriteInFlight = false;
+  // F1.3: promise of the async autosave write that is currently in flight
+  // (null when none). clearAutosave() drains it before sending the delete so
+  // the delete can never land in main before a pending write settles.
+  let autosaveWritePromise = null;
+  // F1.3: session-replacement counter. Bumped by clearAutosave() — the
+  // "autosave is being cleared because the session was saved/loaded/"
+  // discarded" barrier. performAutosave() captures the epoch when it starts
+  // a write; if the epoch changed by the time the write settles, the
+  // completion belongs to an obsolete session and is discarded (no flags,
+  // no toast, no reschedule).
+  let autosaveEpoch = 0;
   let autosaveLastWriteFailed = false;
   let autosaveLastWriteError = '';
   let recoveryModalVisible = false;
@@ -4240,10 +4271,24 @@
     if (!hasAutosavableWork()) {
       // Dirty but no actual work — clear any stale autosave from a previous
       // session. Async delete; failure is non-fatal.
-      window.matchtag.autosaveDelete().catch(() => {});
+      // F1.3: routed through clearStaleAutosaveFile() so the delete drains
+      // any in-flight async write first (never races it in main).
+      clearStaleAutosaveFile();
       return;
     }
     autosaveTimer = setTimeout(performAutosave, AUTOSAVE_DEBOUNCE_MS);
+  }
+
+  // F1.3: delete the autosave file (stale-cleanup path used by
+  // scheduleAutosave when dirty-but-no-work). Waits for any in-flight async
+  // write to settle BEFORE sending the delete, so the write's rename can
+  // never land after the delete in main (no resurrection of stale data).
+  // Best-effort: failures are non-fatal, same as before.
+  async function clearStaleAutosaveFile() {
+    if (autosaveWritePromise) {
+      try { await autosaveWritePromise; } catch (e) { /* settled with a failure — fine */ }
+    }
+    try { await window.matchtag.autosaveDelete(); } catch (e) { /* best effort */ }
   }
 
   // Actually write the autosave. Async. Updates the failure flag for the
@@ -4251,20 +4296,37 @@
   // toast, not as exceptions.
   async function performAutosave() {
     autosaveTimer = null;
+    const epochAtStart = autosaveEpoch;
     if (autosaveWriteInFlight) {
-      // Another write is in progress; reschedule for later.
+      // Another write is in progress; reschedule for later — unless the
+      // autosave was cleared meanwhile (F1.3): a cleared session must not
+      // re-arm a write of the dead session's state.
+      if (epochAtStart !== autosaveEpoch) return;
       autosaveTimer = setTimeout(performAutosave, AUTOSAVE_DEBOUNCE_MS);
       return;
     }
     autosaveWriteInFlight = true;
     const data = buildAutosaveData();
-    let result;
-    try {
-      result = await window.matchtag.autosaveWrite(data);
-    } catch (err) {
-      result = { ok: false, error: err && err.message ? err.message : String(err) };
-    }
+    // F1.3: keep the write's promise so clearAutosave()/
+    // clearStaleAutosaveFile() can drain it before deleting the file. The
+    // inner catch normalizes a rejected IPC into a {ok:false} result, so
+    // the drain never throws.
+    const writePromise = (async () => {
+      try {
+        return await window.matchtag.autosaveWrite(data);
+      } catch (err) {
+        return { ok: false, error: err && err.message ? err.message : String(err) };
+      }
+    })();
+    autosaveWritePromise = writePromise;
+    const result = await writePromise;
     autosaveWriteInFlight = false;
+    autosaveWritePromise = null;
+    // F1.3: if the autosave was cleared while this write was in flight (the
+    // session was saved, loaded, or discarded), the completion belongs to
+    // the obsolete session: perform NO state effects (no failure toast for
+    // a session the user already left, no flag changes, no reschedule).
+    if (epochAtStart !== autosaveEpoch) return;
     if (result && result.ok) {
       if (autosaveLastWriteFailed) {
         autosaveLastWriteFailed = false;
@@ -4283,8 +4345,22 @@
 
   // Clear the autosave entirely (after manual save or load). Cancels any
   // pending debounced write and deletes the autosave file.
+  //
+  // F1.3 race guards (write/delete race, stale-completion race):
+  //   1. The epoch bump invalidates any in-flight async write: when it
+  //      settles, performAutosave() sees a stale epoch and performs NO state
+  //      effects (no failure toast for the session the user just left, no
+  //      reschedule).
+  //   2. The write drain waits for the in-flight write to settle BEFORE the
+  //      delete is sent, so in main the delete is applied strictly after
+  //      the write — the write's rename can never resurrect the autosave
+  //      file after the delete removed it.
   async function clearAutosave() {
+    autosaveEpoch++; // invalidate in-flight write completions (stale = no-op)
     clearAutosaveTimer();
+    if (autosaveWritePromise) {
+      try { await autosaveWritePromise; } catch (e) { /* normalized inside — never throws */ }
+    }
     autosaveLastWriteFailed = false;
     autosaveLastWriteError = '';
     hideAutosaveToast();
@@ -4306,13 +4382,27 @@
   function flushAutosaveSync() {
     if (recoveryModalVisible) return; // don't touch autosave while recovery prompt is up
     clearAutosaveTimer();
+    let result = null;
     if (sessionDirty && hasAutosavableWork()) {
       const data = buildAutosaveData();
-      window.matchtag.autosaveFlushSync(data);
+      result = window.matchtag.autosaveFlushSync(data);
     } else {
       // No unsaved work — clear any stale autosave so it doesn't surface a
       // spurious recovery prompt next startup.
-      window.matchtag.autosaveFlushSync(null);
+      result = window.matchtag.autosaveFlushSync(null);
+    }
+    // F1.3: the flush result was previously discarded — a close-time write
+    // failure silently lost the analyst's unsaved work. Main now also shows
+    // a native error dialog on flush failure (the renderer is being torn
+    // down, so a toast is unreliable there); this in-renderer handling is
+    // the belt: it records the failure state and shows the toast if the
+    // window somehow stays alive. Both success and failure return values
+    // from main are consumed; a stub returning undefined is tolerated.
+    if (result && result.ok === false) {
+      const err = (result && result.error) || 'Unknown error';
+      autosaveLastWriteFailed = true;
+      autosaveLastWriteError = err;
+      showAutosaveToast('Autosave on close failed: ' + err + '. Unsaved tagging work may be lost — please save your work manually.');
     }
   }
 
@@ -4795,7 +4885,11 @@
   const QUICK_TAGS = ['Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub'];
 
   function enterTouchlineMode() { touchlineMode = true; if (touchlineOverlay) touchlineOverlay.style.display = 'flex'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Desktop Mode'; renderTouchlineQuickTags(); renderTouchlineAll(); }
-  function exitTouchlineMode() { touchlineMode = false; if (touchlineOverlay) touchlineOverlay.style.display = 'none'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Touchline Mode'; }
+  // F1.1: exiting Touchline Mode restores the detail panel's normal desktop
+  // layering — the .touchline-detail class is touchline-only and is removed
+  // here even if the panel is still open (it stays open, exactly as before,
+  // now at its normal desktop position/layer).
+  function exitTouchlineMode() { touchlineMode = false; if (touchlineOverlay) touchlineOverlay.style.display = 'none'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Touchline Mode'; if (detailPanel) detailPanel.classList.remove('touchline-detail'); }
   function toggleTouchlineMode() { if (touchlineMode) exitTouchlineMode(); else enterTouchlineMode(); }
 
   function renderTouchlineQuickTags() {

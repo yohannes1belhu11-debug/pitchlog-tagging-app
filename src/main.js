@@ -557,12 +557,42 @@ function autosaveTempPath() {
   return path.join(app.getPath('userData'), 'autosave.json.tmp');
 }
 
+// F1.3: the synchronous flush uses its OWN temp file so a flush can never
+// collide on the same temp path with an async autosave write that is still
+// in flight in the process (both rename onto the same destination — the
+// later rename, i.e. the flush with the freshest state, wins).
+function autosaveFlushTempPath() {
+  return path.join(app.getPath('userData'), 'autosave.json.flush.tmp');
+}
+
+// F1.3: serialize the ASYNC autosave file operations (write, delete) in
+// arrival order. ipcMain.handle starts handlers in IPC arrival order, but
+// async handlers interleave at their await points — a delete handler could
+// run its unlink between an older write's writeFile and rename, letting the
+// write's rename "resurrect" the autosave file after the delete removed it
+// (stale data offered for recovery on next startup). Routing every async op
+// through this queue guarantees each op's fs work completes before the next
+// begins. The sync flush handler cannot use the queue (sendSync must set
+// event.returnValue synchronously); it is safe instead because the renderer
+// drains in-flight async writes before clearing (renderer F1.3 epoch/drain
+// guards) and uses its own temp file, so it can only interleave with an
+// async write of the SAME still-dirty session (benign staleness ≤ the
+// debounce window, never a different session's data).
+let autosaveAsyncOpQueue = Promise.resolve();
+function enqueueAutosaveOp(op) {
+  const run = autosaveAsyncOpQueue.then(op, op);
+  // Keep the queue alive regardless of the op's outcome so a failure can
+  // never wedge later autosaves.
+  autosaveAsyncOpQueue = run.then(() => {}, () => {});
+  return run;
+}
+
 // Atomic write: write to temp, then rename. If the write or rename fails,
 // the previous autosave.json (if any) is left untouched. Stamps the current
 // schema version so the autosave is always self-describing.
 // Two variants: sync (for flush-sync handler) and async (for autosave:write)
 function writeAutosaveSync(data) {
-  const tmp = autosaveTempPath();
+  const tmp = autosaveFlushTempPath();
   const dst = autosaveFilePath();
   const stamped = Object.assign({}, data, {
     __schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -583,8 +613,10 @@ async function writeAutosaveAsync(data) {
 function deleteAutosaveSync() {
   const dst = autosaveFilePath();
   const tmp = autosaveTempPath();
+  const flushTmp = autosaveFlushTempPath();
   try { if (fs.existsSync(dst)) fs.unlinkSync(dst); } catch (e) { /* best effort */ }
   try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (e) { /* best effort */ }
+  try { if (fs.existsSync(flushTmp)) fs.unlinkSync(flushTmp); } catch (e) { /* best effort */ }
 }
 
 // Read the autosave file. Returns null if the file doesn't exist or is
@@ -629,9 +661,13 @@ ipcMain.handle('autosave:read', async () => {
 });
 
 // Async write (used by the debounced autosave in the renderer).
+// F1.3: the fs work runs through enqueueAutosaveOp so it is strictly
+// serialized with autosave:delete (arrival order) — no interleave window.
 ipcMain.handle('autosave:write', async (_event, data) => {
   try {
-    await writeAutosaveAsync(data);
+    await enqueueAutosaveOp(async () => {
+      await writeAutosaveAsync(data);
+    });
     return { ok: true, path: autosaveFilePath() };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -640,12 +676,17 @@ ipcMain.handle('autosave:write', async (_event, data) => {
 
 // Async delete (used after manual save/load to clear the autosave so it
 // never clobbers a deliberately-saved session).
+// F1.3: serialized with autosave:write through the same queue.
 ipcMain.handle('autosave:delete', async () => {
   try {
-    const dst = autosaveFilePath();
-    const tmp = autosaveTempPath();
-    try { await fs.promises.unlink(dst); } catch (e) { /* best effort */ }
-    try { await fs.promises.unlink(tmp); } catch (e) { /* best effort */ }
+    await enqueueAutosaveOp(async () => {
+      const dst = autosaveFilePath();
+      const tmp = autosaveTempPath();
+      const flushTmp = autosaveFlushTempPath();
+      try { await fs.promises.unlink(dst); } catch (e) { /* best effort */ }
+      try { await fs.promises.unlink(tmp); } catch (e) { /* best effort */ }
+      try { await fs.promises.unlink(flushTmp); } catch (e) { /* best effort */ }
+    });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err && err.message ? err.message : String(err) };
@@ -655,6 +696,14 @@ ipcMain.handle('autosave:delete', async () => {
 // Synchronous flush used by the renderer's beforeunload handler. The
 // renderer process is about to be torn down, so the write must complete
 // before this call returns. If data is null, the autosave is deleted.
+//
+// F1.3: a flush failure is no longer silent. The renderer is mid-teardown
+// and cannot reliably show UI, so THIS process shows a native modal error
+// dialog (dialog.showErrorBox) before returning {ok:false} — the analyst
+// is told that unsaved tagging work may be lost (write case) or that a
+// stale autosave may resurface as a recovery prompt (delete case). The
+// dialog is shown before event.returnValue is set so the window stays on
+// screen behind it while it is acknowledged.
 ipcMain.on('autosave:flush-sync', (event, data) => {
   try {
     if (data === null) {
@@ -664,7 +713,27 @@ ipcMain.on('autosave:flush-sync', (event, data) => {
     }
     event.returnValue = { ok: true };
   } catch (err) {
-    event.returnValue = { ok: false, error: err && err.message ? err.message : String(err) };
+    const message = err && err.message ? err.message : String(err);
+    try {
+      if (data === null) {
+        dialog.showErrorBox(
+          'MatchTag — autosave cleanup failed on close',
+          'The stale autosave file could not be removed on close.\n' +
+          'You may be offered a recovery prompt the next time the app starts.\n\n' +
+          'Error: ' + message
+        );
+      } else {
+        dialog.showErrorBox(
+          'MatchTag — autosave failed on close',
+          'Unsaved tagging work could not be written to the autosave file on close.\n' +
+          'Recent tags made since the last autosave may be LOST.\n\n' +
+          'Error: ' + message + '\n\n' +
+          'If the video and match files are still available, the last successful\n' +
+          'autosave (if any) can be recovered the next time the app starts.'
+        );
+      }
+    } catch (dialogErr) { /* never let a dialog failure mask the return value */ }
+    event.returnValue = { ok: false, error: message };
   }
 });
 
