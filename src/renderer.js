@@ -4930,6 +4930,25 @@
   function exitTouchlineMode() { touchlineMode = false; if (touchlineOverlay) touchlineOverlay.style.display = 'none'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Touchline Mode'; if (detailPanel) detailPanel.classList.remove('touchline-detail'); closeTouchlinePlayerPicker(); }
   function toggleTouchlineMode() { if (touchlineMode) exitTouchlineMode(); else enterTouchlineMode(); }
 
+  // F2.3 — cancel (abort) an active interval directly from Touchline Mode.
+  // An analyst who accidentally starts a possession interval needs an
+  // instant "abort" that discards the in-progress state WITHOUT logging a
+  // junk event. Deleting the activeIntervals entry IS the complete cleanup:
+  // the interval state is in-memory only (the autosave payload contains
+  // only completed events — see buildAutosaveData), so cancel performs NO
+  // autosave write and leaves the undo stack untouched (lastLoggedEventId
+  // only ever points at LOGGED events; nothing was logged here). The system
+  // is immediately ready to tag again — startInterval simply writes a fresh
+  // entry on the next tap. This mirrors the exact state-clearing idiom of
+  // the load-session / autosave-recovery paths (activeIntervals = {} there,
+  // a single-key delete here).
+  function cancelTouchlineInterval(label) {
+    if (!Object.prototype.hasOwnProperty.call(activeIntervals, label)) return; // already gone — no-op
+    delete activeIntervals[label];
+    renderTouchlineQuickTags(); // clear the recording state + this ✕ button
+    renderTagButtons();         // keep the desktop grid mirror-consistent (F1.4 mirror rule)
+  }
+
   function renderTouchlineQuickTags() {
     const c = document.getElementById('touchlineQuickTags'); if (!c) return; c.innerHTML = '';
     QUICK_TAGS.forEach((label) => {
@@ -4965,7 +4984,31 @@
         if (tag.interval) renderTouchlineQuickTags();
         renderTouchlineAll();
       });
-      c.appendChild(btn);
+      // F2.3: a RECORDING quick-tag button is wrapped in a cell with a small
+      // ✕ cancel button at its corner — the instant "abort" for an
+      // accidentally-started interval. The ✕ is deliberately secondary to
+      // the primary action (tapping the big button itself = finish/stop);
+      // no confirmation modal — speed is critical, and an accidental cancel
+      // is instantly recoverable (just start the interval again). The
+      // wrapper keeps the button a direct grid-size participant, so the
+      // 4×4 grid layout and all existing .touchline-tag-btn selectors are
+      // unchanged; the ✕ carries its own class.
+      if (recording) {
+        const cell = document.createElement('div');
+        cell.className = 'tl-tag-cell';
+        const cancel = document.createElement('button');
+        cancel.className = 'tl-tag-cancel';
+        cancel.type = 'button';
+        cancel.textContent = '✕';
+        cancel.title = 'Cancel — discard this interval without logging an event';
+        cancel.setAttribute('aria-label', 'Cancel ' + label + ' interval');
+        cancel.addEventListener('click', (e) => { e.stopPropagation(); cancelTouchlineInterval(label); });
+        cell.appendChild(btn);
+        cell.appendChild(cancel);
+        c.appendChild(cell);
+      } else {
+        c.appendChild(btn);
+      }
     });
   }
 

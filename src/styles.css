@@ -1738,6 +1738,25 @@ button {
   color: #fff !important;
   animation: pulse 1.4s ease-in-out infinite;
 }
+/* F2.3 — cancel (abort) affordance for an active quick-tag interval. A
+   recording quick-tag button sits inside a relative cell with a small ✕
+   pinned to its top-right corner (kept INSIDE the button's box so the
+   scrollable grid never clips it): tapping the big button finishes the
+   interval (primary action); tapping the ✕ discards the in-progress
+   interval without logging an event (secondary action, deliberately
+   smaller). */
+.tl-tag-cell { position: relative; display: flex; min-height: 48px; }
+.tl-tag-cell .touchline-tag-btn { flex: 1 1 auto; min-height: 48px; }
+.tl-tag-cancel {
+  position: absolute; top: 2px; right: 2px; z-index: 1;
+  width: 26px; height: 26px; min-height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; border-radius: 999px;
+  border: 2px solid var(--accent); background: var(--panel); color: var(--text);
+  font-size: 12px; font-weight: 700; line-height: 1;
+  cursor: pointer; touch-action: manipulation;
+}
+.tl-tag-cancel:active { background: var(--accent); color: #fff; }
 .touchline-undo { margin-top: 6px; min-height: 40px; }
 .touchline-recent { height: 120px; background: var(--panel); border-top: 1px solid var(--border); padding: 6px 16px; overflow: hidden; }
 .touchline-recent-label { font-size: 10px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
