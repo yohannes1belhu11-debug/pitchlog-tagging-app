@@ -425,7 +425,7 @@ function recEvent(o) {
     ok('T2 scoreboard mirrors 2 — 1 WINNING', txt('touchlineScore') === '2 — 1' && txt('touchlineScoreState') === 'WINNING', txt('touchlineScore') + '/' + txt('touchlineScoreState'));
     ok('T3 clock + period mirror 61:15 / 2nd Half', txt('touchlineClock') === '61:15' && txt('touchlinePeriod') === '2nd Half', txt('touchlineClock') + '/' + txt('touchlinePeriod'));
     ok('T4 team selector mirrors current selection (opponent active, matching desktop)', id('tlBtnTeamOpp').className.includes('active') && !id('tlBtnTeamOur').className.includes('active') && id('btnTeamOpponent').className.includes('active'));
-    ok('T5 15 quick tag buttons rendered', B.doc.querySelectorAll('#touchlineQuickTags .touchline-tag-btn').length === 15);
+    ok('T5 16 quick tag buttons rendered (15 + Possession, F1.4)', B.doc.querySelectorAll('#touchlineQuickTags .touchline-tag-btn').length === 16);
     ok('T6 pitch readout + sequence controls present', id('touchlinePitchReadout') && id('tlBtnStartSeq') && id('tlBtnEndSeq') && id('tlBtnUndo'));
     ok('T7 save indicator shows static SAVED (deferred defect 8: decorative)', txt('touchlineSaveStatus') === '✓ SAVED');
     finding('F5', 'LOW', 'Touchline save-status indicator is decorative: renderTouchlineSaveStatus() is never invoked anywhere (grep: 1 occurrence = its definition). Always shows "✓ SAVED" regardless of actual autosave state. This is the previously deferred LOW defect #8, correctly untouched by the integrity fixes.');

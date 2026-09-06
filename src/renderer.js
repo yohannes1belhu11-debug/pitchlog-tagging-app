@@ -49,7 +49,33 @@
       qualifierGroups: [
         { name: 'Ended by', options: ['Shot', 'Turnover', 'Foul won', 'Out of play'] }
       ]
-    }
+    },
+    // F1.5: the remaining analytics-canonical labels (metric-spec §1.2,
+    // analytics.js TEAM_LABELS) now ship as DEFAULT tags. Before F1.5 they
+    // existed only as touchline quick tags that auto-created flat tags on
+    // first use — so a desktop-only analyst could never tag them (Press,
+    // Duel, Turnover, Chance… metrics silently read zero unless custom tags
+    // were hand-built). The metric specification defines every one of these
+    // labels as a FLAT tag with no subtypes and no qualifier groups (§1.5
+    // outcome table: "none — flat tags"), so each entry below is exactly
+    // { label, key } — the same shape the touchline auto-create path
+    // produced, now available from both UIs with zero behavioral delta.
+    // Key assignments: the original 8 keep keys 1-8 (muscle memory, spec
+    // §1.1 table); Press takes '9' and Duel takes '0' (the only free digit
+    // keys, giving the two highest-frequency out-of-possession actions
+    // keyboard parity with the core eight); the rest are keyless, like
+    // user-created custom tags without a key.
+    { label: 'Chance', key: '' },
+    { label: 'Cross', key: '' },
+    { label: 'Key Pass', key: '' },
+    { label: 'Press', key: '9' },
+    { label: 'Press Win', key: '' },
+    { label: 'Turnover', key: '' },
+    { label: 'Recovery', key: '' },
+    { label: 'Interception', key: '' },
+    { label: 'Duel', key: '0' },
+    { label: 'Positive Transition', key: '' },
+    { label: 'Negative Transition', key: '' }
   ];
 
   // Captured at startup so hasAutosavableWork() can detect whether the
@@ -4882,7 +4908,16 @@
   const touchlineOverlay = document.getElementById('touchlineOverlay');
   const btnTouchlineToggle = document.getElementById('btnTouchlineToggle');
   const btnExitTouchline = document.getElementById('btnExitTouchline');
-  const QUICK_TAGS = ['Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub'];
+  // F1.4: 'Possession' leads the touchline quick tags. It is the most
+  // frequent courtside action and — as the only interval tag in the default
+  // set — the substrate for every possession metric (Tagged Possession
+  // Share, zone durations). Excluding it (the pre-F1.4 state) silently
+  // zeroed those metrics for touchline-only matches. handleTagPress()
+  // already implements the interval toggle (start → finish), so possession
+  // tagging from touchline uses the exact same code path as the desktop
+  // tag button; only the button entry point and its recording indicator
+  // were missing.
+  const QUICK_TAGS = ['Possession','Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub'];
 
   function enterTouchlineMode() { touchlineMode = true; if (touchlineOverlay) touchlineOverlay.style.display = 'flex'; if (btnTouchlineToggle) btnTouchlineToggle.textContent = 'Desktop Mode'; renderTouchlineQuickTags(); renderTouchlineAll(); }
   // F1.1: exiting Touchline Mode restores the detail panel's normal desktop
@@ -4895,13 +4930,37 @@
   function renderTouchlineQuickTags() {
     const c = document.getElementById('touchlineQuickTags'); if (!c) return; c.innerHTML = '';
     QUICK_TAGS.forEach((label) => {
+      // F1.4: interval quick tags (Possession) must show their recording
+      // state in Touchline Mode — the analyst needs to see that an interval
+      // is running and which button stops it. Mirrors the desktop
+      // .tag-btn-recording pattern (accent styling + ⏱ glyph), computed
+      // from the LIVE tag definition and activeIntervals so an interval
+      // started on the desktop button is reflected here too (e.g. after
+      // exiting and re-entering Touchline Mode mid-recording).
+      const tagDef = tags.find((t) => t.label === label);
+      const recording = !!(tagDef && tagDef.interval && isRecordingInterval(tagDef));
       const btn = document.createElement('button');
-      btn.className = 'touchline-tag-btn' + (label === 'Goal' ? ' goal-tag' : '');
-      btn.textContent = label;
+      btn.className = 'touchline-tag-btn' + (label === 'Goal' ? ' goal-tag' : '') + (recording ? ' recording' : '');
+      btn.textContent = label + (recording ? ' ⏱' : '');
       btn.addEventListener('click', () => {
         let tag = tags.find((t) => t.label === label);
-        if (!tag) { tag = { label: label, key: '' }; tags.push(tag); renderTagButtons(); populateEventTypeFilter(); }
-        handleTagPress(tag); renderTouchlineAll();
+        if (!tag) {
+          tag = { label: label, key: '' };
+          // F1.4: a Possession quick tag that is auto-created because a
+          // loaded session's tag array lacks the default definition must
+          // stay an INTERVAL tag — as a flat tag it would log an instant
+          // event instead of an interval and silently corrupt possession
+          // duration metrics (interval bounds are the possession substrate).
+          if (label === 'Possession') tag.interval = true;
+          tags.push(tag); renderTagButtons(); populateEventTypeFilter();
+        }
+        handleTagPress(tag);
+        // F1.4: re-render the quick-tag grid ONLY for interval tags so the
+        // recording state appears/clears immediately after the tap. Instant
+        // tags skip the re-render (cheaper, keeps the grid stable); the
+        // 250ms renderTouchlineAll timer must never rebuild this grid.
+        if (tag.interval) renderTouchlineQuickTags();
+        renderTouchlineAll();
       });
       c.appendChild(btn);
     });

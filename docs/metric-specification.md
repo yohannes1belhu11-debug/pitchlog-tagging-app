@@ -25,7 +25,7 @@
 
 All statements in this section were read directly from the source. Line references are to `src/renderer.js` at commit `65a1980` unless noted.
 
-### 1.1 Canonical event/tag types (default tag set, lines 15–53)
+### 1.1 Canonical event/tag types (default tag set, lines 15–79)
 
 | # | Label | Key | Structure | Details available at tagging time |
 |---|-------|-----|-----------|------------------------------------|
@@ -37,6 +37,19 @@ All statements in this section were read directly from the source. Line referenc
 | 6 | `Corner` | 6 | flat | none |
 | 7 | `Sub` | 7 | substitution | playerOffId / playerOnId (set in detail panel) |
 | 8 | `Possession` | 8 | **interval** + qualifiers | Ended by: `Shot` / `Turnover` / `Foul won` / `Out of play` |
+| 9 | `Chance` | — | flat | none |
+| 10 | `Cross` | — | flat | none |
+| 11 | `Key Pass` | — | flat | none |
+| 12 | `Press` | 9 | flat | none |
+| 13 | `Press Win` | — | flat | none |
+| 14 | `Turnover` | — | flat | none |
+| 15 | `Recovery` | — | flat | none |
+| 16 | `Interception` | — | flat | none |
+| 17 | `Duel` | 0 | flat | none |
+| 18 | `Positive Transition` | — | flat | none |
+| 19 | `Negative Transition` | — | flat | none |
+
+**Implementation-status delta (F1.5):** entries 9–19 were added to the default tag set by the F1.5 change (they previously existed in practice only via the touchline auto-create path described in §1.2). All eleven remain flat tags per this specification — no subtypes, no qualifier groups, no interval flag; only `Press` (key 9) and `Duel` (key 0) carry keyboard shortcuts (the remaining free digit keys).
 
 The tag set is **user-extensible** (custom tags with arbitrary label, subtypes, qualifier groups, and optional interval flag; lines 1552–1581) and **persists per session**.
 
@@ -44,9 +57,9 @@ The tag set is **user-extensible** (custom tags with arbitrary label, subtypes, 
 
 `QUICK_TAGS = ['Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub']`
 
-Pressing a quick tag that is not already in the tag set auto-creates it as a **flat tag** (no subtypes, no qualifiers, no interval; line 2965). Therefore:
+Pressing a quick tag whose label is not already in the tag set auto-creates it as a **flat tag** (no subtypes, no qualifiers, no interval; line 2965). Since F1.5 all eleven non-core quick-tag labels ship as default flat tags (§1.1), so on a fresh state the auto-create path is dormant for them; it still applies for labels removed from a session's embedded tag array or otherwise absent (e.g. hand-edited session files). Therefore:
 
-- `Chance`, `Cross`, `Key Pass`, `Press`, `Press Win`, `Turnover`, `Recovery`, `Interception`, `Duel`, `Positive Transition`, `Negative Transition` exist in practice as **flat, single-click events with no outcome representation**.
+- `Chance`, `Cross`, `Key Pass`, `Press`, `Press Win`, `Turnover`, `Recovery`, `Interception`, `Duel`, `Positive Transition`, `Negative Transition` exist in practice as **flat, single-click events with no outcome representation** — now reachable from BOTH the desktop tag grid and Touchline Mode.
 - `Shot`, `Goal`, `Card`, `Sub` resolve to the default tag definitions and do carry subtypes/qualifiers — but see §1.16 defect F6 (detail panel unreachable in Touchline Mode), which in practice prevents subtype/qualifier completion from the touchline.
 
 ### 1.3 Subtypes

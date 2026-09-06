@@ -1726,6 +1726,18 @@ button {
 .touchline-tag-btn { min-height: 48px; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; background: var(--panel-alt); border: 2px solid var(--border); border-radius: var(--radius); cursor: pointer; touch-action: manipulation; padding: 8px 4px; text-align: center; }
 .touchline-tag-btn:active { background: var(--accent-soft); border-color: var(--accent); }
 .touchline-tag-btn.goal-tag { background: rgba(46,204,113,0.15); border-color: rgba(46,204,113,0.4); color: #2ecc71; }
+/* F1.4 — Touchline Mode interval-recording state for quick tags
+   (Possession). Mirrors the desktop .tag-btn-recording visual language:
+   while a possession interval is being recorded, its quick-tag button
+   turns accent-colored and pulses with a ⏱ glyph appended to the label,
+   so the analyst can see the running interval and tap it again to
+   finish it. */
+.touchline-tag-btn.recording {
+  background: var(--accent) !important;
+  border-color: var(--accent-bright) !important;
+  color: #fff !important;
+  animation: pulse 1.4s ease-in-out infinite;
+}
 .touchline-undo { margin-top: 6px; min-height: 40px; }
 .touchline-recent { height: 120px; background: var(--panel); border-top: 1px solid var(--border); padding: 6px 16px; overflow: hidden; }
 .touchline-recent-label { font-size: 10px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; margin-bottom: 4px; }
