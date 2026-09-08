@@ -1,3 +1,6 @@
 node_modules/
 release/
-tests/.jsdom-scratch/
+# The jsdom test scratch: its package.json + package-lock.json are committed
+# so a fresh clone can reproduce the test environment (npm run setup-tests);
+# only the installed node_modules stays ignored.
+tests/.jsdom-scratch/node_modules/

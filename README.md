@@ -69,6 +69,31 @@ Once it's installed this way, running `npm start` from the project folder
 still works too — that's for when you're actively changing the code and
 want to test quickly without rebuilding the installer each time.
 
+## Running the automated tests (optional)
+
+The project has an automated test suite — 22 scripts in `tests/` that
+exercise the tagging, analytics, and export logic without ever opening
+the app window.
+
+If you want to run it, install the test helper once (needs internet the
+first time; it downloads a small "jsdom" library into a separate
+`tests/.jsdom-scratch/` folder — deliberately kept out of the app's own
+dependencies, so testing never requires downloading Electron):
+
+```
+npm run setup-tests
+```
+
+Then run the whole suite:
+
+```
+npm test
+```
+
+You want to see `22/22 suites GREEN`. If anything fails, the output names
+the failing script and shows what it expected — that's the part worth
+pasting back if you're reporting a problem.
+
 ## Project structure
 
 ```

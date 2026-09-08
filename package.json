@@ -5,7 +5,9 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "setup-tests": "node scripts/setup-tests.js",
+    "test": "node scripts/run-tests.js"
   },
   "author": "",
   "license": "UNLICENSED",
