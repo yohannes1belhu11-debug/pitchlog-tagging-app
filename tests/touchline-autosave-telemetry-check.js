@@ -195,8 +195,8 @@ section('STATIC — F2.4 wiring + preservation (source-level checks)');
     (rendererSrc.match(/renderTouchlineQuickTags\(\);/g) || []).length >= 2 &&
     /'Possession','Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub'/.test(rendererSrc));
 
-  ok('TS-S19: schema version + core autosave IPC names unchanged',
-    /CURRENT_SCHEMA_VERSION = 3/.test(mainSrc) &&
+  ok('TS-S19: schema version pinned at v4 (R1 outcome field) + core autosave IPC names unchanged',
+    /CURRENT_SCHEMA_VERSION = 4/.test(mainSrc) &&
     /ipcMain\.handle\('autosave:write'/.test(mainSrc) &&
     /ipcMain\.handle\('autosave:delete'/.test(mainSrc) &&
     /ipcMain\.on\('autosave:flush-sync'/.test(mainSrc));

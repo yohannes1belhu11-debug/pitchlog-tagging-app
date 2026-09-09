@@ -147,8 +147,8 @@ section('STATIC — F1.3 wiring (source-level checks)');
     /autosaveFlushTempPath\(\);[\s\S]{0,400}unlink\(flushTmp\)/.test(mainSrc));
 
   // --- preservation guards ---
-  ok('AS-S16: schema version unchanged (no schema bump)',
-    /CURRENT_SCHEMA_VERSION = 3/.test(mainSrc));
+  ok('AS-S16: schema version pinned at v4 (bumped only by R1 outcome field; autosave flow itself unchanged)',
+    /CURRENT_SCHEMA_VERSION = 4/.test(mainSrc));
   ok('AS-S17: event creation semantics untouched (logEvent pushes before detail panel)',
     /function logEvent\(tag\)[\s\S]{0,900}events\.push\(event\)/.test(rendererSrc) &&
     rendererSrc.indexOf('events.push(event)') < rendererSrc.indexOf('openDetailPanel(tag, event)'));

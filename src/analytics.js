@@ -53,7 +53,7 @@
   'use strict';
 
   var SPEC = 'PitchLog-METRIC-SPEC-v1.0';
-  var VERSION = '1.1.0';   // 1.1.0 = + spatial engine V1 (A.spatial + computeSpatialView)
+  var VERSION = '1.2.0';   // 1.2.0 = + universal outcome field (R1: level1.outcomes, outcome validation)
 
   // ---- Fixed vocabularies (mirror src/renderer.js; source is authority) ----
 
@@ -62,6 +62,12 @@
     'Chance', 'Cross', 'Key Pass', 'Press', 'Press Win', 'Turnover',
     'Recovery', 'Interception', 'Duel', 'Positive Transition', 'Negative Transition'
   ];
+
+  // R1: the first-class `outcome` event field ('SUCCESS' | 'FAILURE' | null)
+  // applies ONLY to these labels. Pass keeps its qualifier-based outcome
+  // mechanism ('Outcome' qualifier group) — deliberately NOT in this list.
+  var OUTCOME_LABELS = ['Duel', 'Press', 'Turnover', 'Cross'];
+  var OUTCOME_VALUES = ['SUCCESS', 'FAILURE'];
 
   var THIRDS = ['Defensive third', 'Middle third', 'Attacking third'];
   var CHANNELS = ['Left channel', 'Central channel', 'Right channel'];
@@ -185,6 +191,26 @@
 
       var team = (ev.team === 'our' || ev.team === 'opponent') ? ev.team : null;
 
+      // R1: first-class outcome field. Only 'SUCCESS'/'FAILURE' are valid
+      // stored values; null/absent means "no outcome (yet)". Anything else
+      // is flagged through the existing data-quality mechanism (issue codes
+      // below) and carried as null — values are never silently normalized,
+      // never coerced, and a missing outcome is NEVER treated as failure.
+      var outcome = null;
+      if (ev.outcome !== undefined && ev.outcome !== null) {
+        if (OUTCOME_VALUES.indexOf(ev.outcome) !== -1) {
+          outcome = ev.outcome;
+        } else {
+          flag('INVALID_OUTCOME');
+        }
+      }
+      // A non-null outcome on a label outside OUTCOME_LABELS would give a
+      // non-applicable event outcome semantics — flag it so it is visible
+      // in the validation report instead of silently meaningful.
+      if (outcome !== null && OUTCOME_LABELS.indexOf(label) === -1) {
+        flag('OUTCOME_NON_APPLICABLE');
+      }
+
       records.push({
         ref: ev,
         id: id === null ? records.length : id,     // deterministic fallback
@@ -192,6 +218,7 @@
         label: label || '(unknown)',
         team: team,
         subtype: (typeof ev.subtype === 'string' && ev.subtype) ? ev.subtype : null,
+        outcome: outcome,
         qualifiers: qualifiers,
         location: location,
         playerId: (typeof ev.playerId === 'string' && ev.playerId) ? ev.playerId : null,
@@ -344,6 +371,44 @@
       case 'Positive Transition': bucket.positiveTransitions++; break;
       case 'Negative Transition': bucket.negativeTransitions++; break;
     }
+  }
+
+  // ---- R1: outcome summaries for applicable actions -----------------------
+  //
+  // Per applicable label (Duel / Press / Turnover / Cross), over a given
+  // record partition (team):
+  //   successCount        events with outcome 'SUCCESS'
+  //   failureCount        events with outcome 'FAILURE'
+  //   outcomeCount        successCount + failureCount (qualified outcomes —
+  //                       the ONLY success-rate denominator; null outcomes
+  //                       are excluded from it, never counted as failure)
+  //   unknownOutcomeCount applicable events with a null/absent outcome
+  //   successRate         successCount / outcomeCount, or null when
+  //                       outcomeCount == 0 (no qualified outcomes)
+  // All counts are enveloped (spec §12.5); successRate uses ratioEnv, so
+  // the displayed value is a percentage rounded half-up to 1 decimal and
+  // num/den preserve the exact recomputable inputs. Deterministic: a plain
+  // single pass over the partition; nothing inferred, nothing extrapolated.
+  function outcomeMetrics(recs) {
+    var perLabel = {};
+    OUTCOME_LABELS.forEach(function (label) {
+      var succ = 0, fail = 0, unknown = 0;
+      recs.forEach(function (r) {
+        if (r.label !== label) return;
+        if (r.outcome === 'SUCCESS') succ++;
+        else if (r.outcome === 'FAILURE') fail++;
+        else unknown++;
+      });
+      var outcomeCount = succ + fail;
+      perLabel[label] = {
+        successCount: countEnv(succ, { unknownOutcome: unknown }),
+        failureCount: countEnv(fail, { unknownOutcome: unknown }),
+        outcomeCount: countEnv(outcomeCount, { unknownOutcome: unknown }),
+        unknownOutcomeCount: countEnv(unknown),
+        successRate: ratioEnv(succ, outcomeCount, { unknownOutcome: unknown })
+      };
+    });
+    return perLabel;
   }
 
   // ---- Level 1 team counting (single partitioning pass) ------------------
@@ -1584,6 +1649,15 @@
         our: teamEnvelope(ourM),
         opponent: teamEnvelope(oppM),
         unattributed: teamEnvelope(unattrM)
+      },
+      // R1: first-class outcome summaries for the applicable labels, using
+      // the SAME team partitioning as level1.team/level1.possession (our /
+      // opponent / unattributed). Purely additive block — every existing
+      // metric above and below is unchanged.
+      outcomes: {
+        our: outcomeMetrics(teamPartition(records, 'our')),
+        opponent: outcomeMetrics(teamPartition(records, 'opponent')),
+        unattributed: outcomeMetrics(teamPartition(records, null))
       },
       possession: { our: ourPoss, opponent: oppPoss, unattributed: unattrPoss },
       attributes: {

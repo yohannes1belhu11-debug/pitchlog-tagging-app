@@ -293,10 +293,17 @@ const SQUAD = [
     const newRun = await runVideoScenario(rendererSrcNew);
     const oldEv = oldRun.payload.events.find((e) => e.label === 'Possession');
     const newEv = newRun.payload.events.find((e) => e.label === 'Possession');
+    // R1 (universal outcome field) legitimately adds `outcome: null` to every
+    // NEW event — the ONLY allowed difference between the pre-R1 renderer
+    // (0732b35) and the current one. The byte-identical intent of F2-2 is
+    // preserved by comparing with that one field stripped, plus pinning that
+    // the field itself is exactly the R1 default (null).
+    const stripOutcome = (ev) => { const c = Object.assign({}, ev); delete c.outcome; return c; };
     ok('F2-2a OLD (pre-fix) run produced the interval event', !!oldEv);
     ok('F2-2b NEW run produced the interval event', !!newEv);
     if (oldEv && newEv) {
-      ok('F2-2c event payload BYTE-IDENTICAL old vs new (video workflow preserved)', JSON.stringify(oldEv) === JSON.stringify(newEv),
+      ok('F2-2c event payload identical old vs new apart from the R1-added outcome:null (video workflow preserved)',
+        JSON.stringify(oldEv) === JSON.stringify(stripOutcome(newEv)) && newEv.outcome === null && !('outcome' in oldEv),
         'old=' + JSON.stringify(oldEv).slice(0, 140) + ' new=' + JSON.stringify(newEv).slice(0, 140));
       ok('F2-2d bounds are VIDEO times (startTime 100.5 / endTime 130.25)', newEv.startTime === 100.5 && newEv.endTime === 130.25,
         newEv.startTime + ' / ' + newEv.endTime);
@@ -304,9 +311,10 @@ const SQUAD = [
       ok('F2-2f videoTime recorded (finish-time video clock)', newEv.videoTime === 130.25, 'videoTime=' + newEv.videoTime);
       ok('F2-2g matchSeconds from video-derived match clock (floor 130)', newEv.matchSeconds === 130, 'matchSeconds=' + newEv.matchSeconds);
     }
-    ok('F2-2h full save payload identical old vs new (events + matchClock)',
-      JSON.stringify(oldRun.payload.events) === JSON.stringify(newRun.payload.events) &&
-      JSON.stringify(oldRun.payload.matchClock) === JSON.stringify(newRun.payload.matchClock));
+    ok('F2-2h full save payload identical old vs new apart from R1 outcome (events + matchClock)',
+      JSON.stringify(oldRun.payload.events) === JSON.stringify(newRun.payload.events.map(stripOutcome)) &&
+      JSON.stringify(oldRun.payload.matchClock) === JSON.stringify(newRun.payload.matchClock) &&
+      newRun.payload.events.every((e) => e.outcome === null));
     oldRun.dom.window.close(); newRun.dom.window.close();
   }
 

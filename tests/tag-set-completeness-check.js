@@ -174,8 +174,8 @@ section('STATIC — F1.5 wiring (source-level checks)');
   ok('TS-S13: metric-spec §1.5 still declares the 11 labels flat (no taxonomy invention)',
     /none — flat tags/.test(spec15) && spec15.indexOf('Chance') > -1);
 
-  ok('TS-S14: schema version untouched (tags are session data, no bump)',
-    /CURRENT_SCHEMA_VERSION = 3/.test(fs.readFileSync(path.join(srcDir, 'main.js'), 'utf8')));
+  ok('TS-S14: schema version pinned at v4 (R1 outcome-field bump; tags remain session data)',
+    /CURRENT_SCHEMA_VERSION = 4/.test(fs.readFileSync(path.join(srcDir, 'main.js'), 'utf8')));
 }
 
 // ---------------------------------------------------------------------------

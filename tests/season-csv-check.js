@@ -664,9 +664,9 @@ if (CSV && PARSED.length === 56) {
     ok('SC-T14.10 legacy button still exports (one call)', exported.length === 1, 'calls=' + exported.length);
     if (exported.length === 1) {
       const legacyHeader = exported[0].split('\n')[0];
-      eq('SC-T14.11 legacy header byte-identical (event dump untouched)',
+      eq('SC-T14.11 legacy header unchanged except the appended outcome column (R1)',
         legacyHeader,
-        'match,timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y');
+        'match,timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y,outcome');
     } else {
       ok('SC-T14.11 legacy header check (skipped — no export)', false);
     }

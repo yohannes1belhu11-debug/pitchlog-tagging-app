@@ -84,6 +84,45 @@
   // autosaving.
   const DEFAULT_TAGS_LENGTH = tags.length;
 
+  // ---------- R1: universal outcome field (first-class event field) ----------
+  //
+  // `outcome` is a FIRST-CLASS event field — stored values are exactly
+  // 'SUCCESS' | 'FAILURE' | null. It is never a free-form string and never
+  // lives in qualifiers{}. It is applicable ONLY to the four labels below;
+  // every other event type behaves exactly as before.
+  //
+  // Pass deliberately stays OUT of this registry: its existing
+  // qualifier-based outcome mechanism (qualifiers['Outcome'] =
+  // 'Successful'/'Unsuccessful', analytics hasQual 'Outcome') is a separate
+  // system that R1 must not replace, migrate, reinterpret, or break.
+  //
+  // Display labels are event-appropriate (spec), but only the canonical
+  // SUCCESS/FAILURE values are ever persisted.
+  const OUTCOME_APPLICABLE = ['Duel', 'Press', 'Turnover', 'Cross'];
+  const OUTCOME_DISPLAY = {
+    Duel: { SUCCESS: 'Won', FAILURE: 'Lost' },
+    Press: { SUCCESS: 'Success', FAILURE: 'Failure' },
+    Turnover: { SUCCESS: 'Successful', FAILURE: 'Unsuccessful' },
+    Cross: { SUCCESS: 'Successful', FAILURE: 'Unsuccessful' }
+  };
+
+  function outcomeApplies(label) {
+    return Object.prototype.hasOwnProperty.call(OUTCOME_DISPLAY, label);
+  }
+
+  // Event-appropriate display label for a stored outcome value (null when
+  // the label is not applicable or the value is not canonical).
+  function outcomeDisplayLabel(label, value) {
+    const map = OUTCOME_DISPLAY[label];
+    return (map && (value === 'SUCCESS' || value === 'FAILURE')) ? map[value] : null;
+  }
+
+  // CSV representation of the stored outcome: the canonical value, or ''
+  // for null/absent/non-canonical (empty — never invented, never 0).
+  function outcomeCsvValue(ev) {
+    return (ev.outcome === 'SUCCESS' || ev.outcome === 'FAILURE') ? ev.outcome : '';
+  }
+
   // ---------- Match clock (independent of video) ----------
   // Timestamp-based: clockStartedAt (ms epoch), clockBaseSeconds, clockRunning.
   // The setInterval display timer ONLY refreshes the UI — never advances time.
@@ -937,6 +976,10 @@
       period: ts.period,
       label: tag.label,
       subtype: null,
+      // R1: first-class outcome field. Every new event starts null (outcome
+      // is optional and must never block event creation); the detail panel
+      // exposes controls only for OUTCOME_APPLICABLE labels.
+      outcome: null,
       qualifiers: {},
       location: null,
       playerId: matchClock.selectedPlayerId || null,
@@ -1464,6 +1507,23 @@
       html += `</div></div>`;
     }
 
+    // R1: first-class outcome controls — rendered ONLY for the applicable
+    // labels (Duel / Press / Turnover / Cross). Pass and every other event
+    // type get no outcome control here: Pass outcome keeps its existing
+    // qualifier-group chips above, other events simply have no outcome UI.
+    // The chips use the SAME detail-panel pattern as side/subtype (shared by
+    // desktop and Touchline — F1.1 — no second detail system). Tapping the
+    // already-selected chip clears the outcome back to null.
+    if (outcomeApplies(ev.label)) {
+      html += `<div class="detail-group"><span class="detail-group-label">Outcome</span><div class="detail-chips">`;
+      ['SUCCESS', 'FAILURE'].forEach((value) => {
+        const selected = ev.outcome === value ? ' selected' : '';
+        const display = outcomeDisplayLabel(ev.label, value);
+        html += `<button class="chip${selected}" data-kind="outcome" data-value="${value}">${escapeHtml(display)}</button>`;
+      });
+      html += `</div></div>`;
+    }
+
     (tag.qualifierGroups || []).forEach((group) => {
       html += `<div class="detail-group"><span class="detail-group-label">${escapeHtml(group.name)}</span><div class="detail-chips">`;
       group.options.forEach((opt) => {
@@ -1494,6 +1554,13 @@
         } else if (kind === 'subtype') {
           const value = chip.dataset.value;
           ev.subtype = (ev.subtype === value) ? null : value;
+        } else if (kind === 'outcome') {
+          // R1: toggle-to-clear — tapping the already-selected chip clears
+          // the outcome back to null (same semantics as side/subtype). Only
+          // the canonical 'SUCCESS'/'FAILURE' values are ever written, and
+          // the value NEVER lives in qualifiers{}.
+          const value = chip.dataset.value;
+          ev.outcome = (ev.outcome === value) ? null : value;
         } else {
           const value = chip.dataset.value;
           const group = chip.dataset.group;
@@ -1717,6 +1784,13 @@
       }
     }
     if (ev.subtype) parts.push(ev.subtype);
+    // R1: show the event-appropriate outcome word (Won/Lost/…) for
+    // applicable events so the outcome is visible (and searchable) in the
+    // event list without opening the detail panel.
+    if (ev.outcome && outcomeApplies(ev.label)) {
+      const outcomeWord = outcomeDisplayLabel(ev.label, ev.outcome);
+      if (outcomeWord) parts.push(outcomeWord);
+    }
     Object.values(ev.qualifiers || {}).forEach((v) => { if (v) parts.push(v); });
     if (ev.location) parts.push(`📍 ${locationZone(ev.location.x, ev.location.y)}`);
     return parts.join(' · ');
@@ -2443,6 +2517,25 @@
     return `<tr><td>${escapeHtml(label)}</td><td class="an-our">${ourHtml}</td><td class="an-opp">${oppHtml}</td></tr>`;
   }
 
+  // R1: helper for the Level-1 outcome rows — renders one applicable
+  // label's outcome summary pair (counts + success rate) as T1 table rows,
+  // using the same anTeamRow/envelope access pattern as every other row.
+  // Null rates render as an em dash (pct1 already returns null for a zero
+  // denominator — no qualified outcomes => rate null, never 0).
+  function outcomeTeamRows(OC, label) {
+    const o = OC.our[label], p = OC.opponent[label];
+    const w = OUTCOME_DISPLAY[label].SUCCESS.toLowerCase();
+    const l = OUTCOME_DISPLAY[label].FAILURE.toLowerCase();
+    return [
+      [`${label} outcome (${w} / ${l} / unknown)`,
+        `${o.successCount.value} / ${o.failureCount.value} / ${o.unknownOutcomeCount.value}`,
+        `${p.successCount.value} / ${p.failureCount.value} / ${p.unknownOutcomeCount.value}`],
+      [`${label} success rate`,
+        o.successRate.value === null ? '—' : o.successRate.value + '%',
+        p.successRate.value === null ? '—' : p.successRate.value + '%']
+    ];
+  }
+
   function buildAnalyticsHtml(A) {
     const S = A.matchSummary;
     const L1 = A.level1;
@@ -2528,6 +2621,21 @@
       ['Negative transitions', T1.our.negativeTransitions.value, T1.opponent.negativeTransitions.value],
       ['All events', T1.our.events.value, T1.opponent.events.value]
     ];
+    // R1: Level-1 outcome summaries — one counts row + one success-rate row
+    // per applicable label, inserted directly after that label's existing
+    // count row (exactly where comparable event summaries already appear).
+    if (L1.outcomes) {
+      const OC = L1.outcomes;
+      const insertOutcomeAfter = (anchorLabel, label) => {
+        const idx = rows1.findIndex((r) => r[0] === anchorLabel);
+        if (idx === -1) return;
+        rows1.splice(idx + 1, 0, ...outcomeTeamRows(OC, label));
+      };
+      insertOutcomeAfter('Crosses', 'Cross');
+      insertOutcomeAfter('Press wins', 'Press');
+      insertOutcomeAfter('Turnovers', 'Turnover');
+      insertOutcomeAfter('Duels', 'Duel');
+    }
     rows1.forEach((r) => { html += anTeamRow(r[0], String(r[1]), String(r[2])); });
     if (T1.unattributed.events.value > 0) {
       html += `<tr class="an-unattr"><td>Unattributed (no team)</td><td colspan="2">${T1.unattributed.events.value} events — excluded from both columns above</td></tr>`;
@@ -3715,7 +3823,7 @@
   btnExportSeasonCsv.addEventListener('click', async () => {
     if (seasonMatches.length === 0) return;
 
-    const header = 'match,timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y';
+    const header = 'match,timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y,outcome';
     const rows = [];
 
     seasonMatches.forEach((m) => {
@@ -3749,7 +3857,10 @@
           csvEscape(qualifiersStr),
           csvEscape(zone),
           x,
-          y
+          y,
+          // R1: first-class outcome as the final column (appended — every
+          // pre-existing column keeps its position; '' for null/absent).
+          csvEscape(outcomeCsvValue(ev))
         ].join(','));
       });
     });
@@ -4002,7 +4113,7 @@
     // (Previously both listeners fired on Shift+Click, opening two save
     // dialogs / two exports.)
     if (e.shiftKey) return;
-    const header = 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y';
+    const header = 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y,outcome';
     const rows = events.map((ev) => {
       const qualifiersStr = Object.entries(ev.qualifiers || {})
         .filter(([, v]) => v)
@@ -4031,7 +4142,10 @@
         csvEscape(qualifiersStr),
         csvEscape(zone),
         x,
-        y
+        y,
+        // R1: first-class outcome as the final column (appended — every
+        // pre-existing column keeps its position; '' for null/absent).
+        csvEscape(outcomeCsvValue(ev))
       ].join(',');
     });
     const csv = [header, ...rows].join('\n');
@@ -4910,7 +5024,7 @@
 
   // ---------- Expanded CSV export ----------
   function buildFullAnalysisCsv() {
-    const header = ['Match ID','Date','Competition','Home Team','Away Team','Opponent','Period','Official Minute','Second','Match Seconds','Match Time','Video Time','Team','Primary Player ID','Secondary Player ID','Category','Event','Label','Subtype','Outcome','Phase','Pitch Zone','X','Y','Third','Channel','Score For Before','Score Against Before','Score For After','Score Against After','Score State','Sequence ID','Note','Created At','Updated At'];
+    const header = ['Match ID','Date','Competition','Home Team','Away Team','Opponent','Period','Official Minute','Second','Match Seconds','Match Time','Video Time','Team','Primary Player ID','Secondary Player ID','Category','Event','Label','Subtype','Outcome','Phase','Pitch Zone','X','Y','Third','Channel','Score For Before','Score Against Before','Score For After','Score Against After','Score State','Sequence ID','Note','Created At','Updated At','Event Outcome'];
     const matchId = matchInfo.date ? `${matchInfo.date}_${(matchInfo.opponent || 'unknown').replace(/\s+/g, '_')}` : '';
     const homeTeam = matchInfo.homeAway === 'home' ? 'Us' : (matchInfo.opponent || '');
     const awayTeam = matchInfo.homeAway === 'away' ? 'Us' : (matchInfo.opponent || '');
@@ -4921,7 +5035,7 @@
       const sab = ev.scoreAgainstBefore ?? 0;
       let scoreState = 'DRAW'; if (sfb > sab) scoreState = 'WINNING'; else if (sfb < sab) scoreState = 'LOSING';
       const qualStr = Object.entries(ev.qualifiers || {}).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join('; ');
-      return [csvEscape(matchId),csvEscape(matchInfo.date||''),csvEscape(matchInfo.competition||''),csvEscape(homeTeam),csvEscape(awayTeam),csvEscape(matchInfo.opponent||''),csvEscape(ev.period||''),ev.officialMinute??'',ev.second??'',ev.matchSeconds??'',ev.matchTime!=null?ev.matchTime.toFixed(1):'',ev.videoTime!=null?ev.videoTime.toFixed(1):'',csvEscape(ev.team||''),csvEscape(ev.playerId||''),csvEscape(ev.playerOffId||''),csvEscape(ev.label||''),csvEscape(ev.label||''),csvEscape(ev.label||''),csvEscape(ev.subtype||''),csvEscape(qualStr),'',csvEscape(zone),ev.location?(ev.location.x*100).toFixed(1):'',ev.location?(ev.location.y*100).toFixed(1):'',csvEscape(tp[0]||''),csvEscape(tp[1]||''),sfb,sab,ev.scoreForAfter??'',ev.scoreAgainstAfter??'',csvEscape(scoreState),csvEscape(ev.sequenceId||''),'','',''].join(',');
+      return [csvEscape(matchId),csvEscape(matchInfo.date||''),csvEscape(matchInfo.competition||''),csvEscape(homeTeam),csvEscape(awayTeam),csvEscape(matchInfo.opponent||''),csvEscape(ev.period||''),ev.officialMinute??'',ev.second??'',ev.matchSeconds??'',ev.matchTime!=null?ev.matchTime.toFixed(1):'',ev.videoTime!=null?ev.videoTime.toFixed(1):'',csvEscape(ev.team||''),csvEscape(ev.playerId||''),csvEscape(ev.playerOffId||''),csvEscape(ev.label||''),csvEscape(ev.label||''),csvEscape(ev.label||''),csvEscape(ev.subtype||''),csvEscape(qualStr),'',csvEscape(zone),ev.location?(ev.location.x*100).toFixed(1):'',ev.location?(ev.location.y*100).toFixed(1):'',csvEscape(tp[0]||''),csvEscape(tp[1]||''),sfb,sab,ev.scoreForAfter??'',ev.scoreAgainstAfter??'',csvEscape(scoreState),csvEscape(ev.sequenceId||''),'','','',csvEscape(outcomeCsvValue(ev))].join(',');
     });
     return [header.join(','), ...rows].join('\n');
   }

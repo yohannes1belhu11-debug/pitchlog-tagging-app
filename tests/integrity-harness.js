@@ -154,7 +154,7 @@ const sessionData = {
   const data = exists(dest) ? readJson(dest) : null;
   ok('FIX 1', 'new session: returns success', res && res.canceled === false && res.filePath === dest, JSON.stringify(res));
   ok('FIX 1', 'new session: file is valid JSON', !!data);
-  ok('FIX 1', 'new session: stamped schema v3', data && data.__schemaVersion === 3);
+  ok('FIX 1', 'new session: stamped schema v4 (R1 outcome field)', data && data.__schemaVersion === 4);
   ok('FIX 1', 'new session: __savedAt present', data && typeof data.__savedAt === 'string');
   ok('FIX 1', 'new session: payload intact', data && data.events.length === 1 && data.matchClock.scoreFor === 1);
   ok('FIX 1', 'new session: no temp file left behind', !exists(dest + '.tmp'));
@@ -169,7 +169,7 @@ const sessionData = {
   const data = readJson(dest);
   ok('FIX 1', 'overwrite: returns success', res && res.canceled === false);
   ok('FIX 1', 'overwrite: new content in place', data.marker === undefined && data.events.length === 1);
-  ok('FIX 1', 'overwrite: still valid JSON, v3', data.__schemaVersion === 3);
+  ok('FIX 1', 'overwrite: still valid JSON, v4', data.__schemaVersion === 4);
   ok('FIX 1', 'overwrite: no temp file left behind', !exists(dest + '.tmp'));
 }
 
@@ -230,7 +230,7 @@ section('FIX 3 — safe legacy team migration (migrateSessionData)');
   ok('FIX 3', 'side missing -> team null (NOT our)', ev(4).team === null, 'team=' + ev(4).team);
   ok('FIX 3', 'side unknown -> team null (NOT our)', ev(5).team === null, 'team=' + ev(5).team);
   ok('FIX 3', 'legacy side values preserved', ev(1).side === 'for' && ev(2).side === 'against' && ev(3).side === 'neutral' && ev(4).side === null && ev(5).side === 'xyz');
-  ok('FIX 3', 'migrated to schema v3', m.__schemaVersion === 3);
+  ok('FIX 3', 'migrated to schema v4 (R1)', m.__schemaVersion === 4);
   ok('FIX 3', 'v3 defaults added (period, sequenceId, score)', ev(1).period === '2H' && ev(1).sequenceId === null && ev(1).scoreForBefore === 0);
 
   // v2 file with explicit team: preserved, not overwritten
@@ -326,8 +326,8 @@ section('REG — main-process regression (squad, autosave, CSV export, session l
   const autosavePath = path.join(userDataDir, 'autosave.json');
   const read1 = await handlers['autosave:read'](fakeEvent);
   ok('REG', 'autosave:write ok', w && w.ok === true, JSON.stringify(w));
-  ok('REG', 'autosave.json valid + v3', readJson(autosavePath).__schemaVersion === 3);
-  ok('REG', 'autosave:read returns migrated data', read1 && read1.events.length === 1 && read1.__schemaVersion === 3);
+  ok('REG', 'autosave.json valid + v4', readJson(autosavePath).__schemaVersion === 4);
+  ok('REG', 'autosave:read returns migrated data', read1 && read1.events.length === 1 && read1.__schemaVersion === 4);
   ok('REG', 'autosave: no temp file left behind', !exists(autosavePath + '.tmp'));
   const d = await handlers['autosave:delete'](fakeEvent);
   ok('REG', 'autosave:delete ok', d && d.ok === true);
@@ -371,7 +371,7 @@ section('REG — main-process regression (squad, autosave, CSV export, session l
   controls.openDialog = { canceled: false, filePaths: [legacyPath] };
   const data = await handlers['file:loadSession'](fakeEvent);
   ok('REG', 'loadSession: legacy file loads', !!data);
-  ok('REG', 'loadSession: migrated to v3', data.__schemaVersion === 3);
+  ok('REG', 'loadSession: migrated to v4 (R1 outcome field)', data.__schemaVersion === 4);
   ok('REG', 'loadSession: v1->v2 player snapshot -> playerId', data.events[0].playerId === 'player_1' && !('player' in data.events[0]));
   ok('REG', 'loadSession: Fix 3 applied on load (neutral -> null)', data.events[1].team === null);
   ok('REG', 'loadSession: for -> our on load', data.events[0].team === 'our');

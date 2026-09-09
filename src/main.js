@@ -77,7 +77,7 @@ app.on('activate', () => {
 // migration function transforms them into the current shape before the
 // renderer ever sees them.
 //
-// Current schema version: 3
+// Current schema version: 4
 //   - v0 → v1: add __schemaVersion; ensure events/tags/squad are arrays;
 //     normalize each event's optional fields with null defaults; ensure
 //     matchInfo is an object. No structural changes to user-facing data.
@@ -89,12 +89,19 @@ app.on('activate', () => {
 //     object to the session. Also adds team, sequenceId, and score-before
 //     fields to events. The legacy `time` field is preserved for backward
 //     compatibility.
+//   - v3 → v4 (R1): add the first-class `outcome` field to every event
+//     (null default). Stored values are only 'SUCCESS' | 'FAILURE' | null
+//     — never free-form strings, never in qualifiers{}. Migration NEVER
+//     infers SUCCESS/FAILURE from historical data (a v3 Pass qualifier
+//     'Outcome: Successful' stays a qualifier — untouched) and never
+//     alters any other event field: it only adds outcome: null to events
+//     that lack the field.
 //
 // Migration runs in the main process (the file-reading layer) so the
 // renderer always receives data at the current schema version and never
 // has to worry about legacy formats.
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 // Migrate a session object (from file:loadSession, file:loadMultipleSessions,
 // or autosave:read) to CURRENT_SCHEMA_VERSION. Returns the migrated object
@@ -264,8 +271,26 @@ function migrateSessionData(data) {
     migrated.__schemaVersion = 3;
   }
 
-  // Future migrations (v3 → v4, etc.) would go here as a chain:
-  // if (migrated.__schemaVersion < 4) { ... migrate v3 → v4 ...; migrated.__schemaVersion = 4; }
+  // --- v3 → v4 migration: add the first-class outcome field (R1) ---
+  //
+  // Every event gains `outcome` with an explicit null default. The rule is
+  // strictly additive: only events that lack the field get outcome: null;
+  // nothing else on any event is read, derived, or rewritten. In particular
+  // NO outcome is ever inferred from history — not from qualifiers (a v3
+  // Pass's 'Outcome: Successful' qualifier remains exactly that qualifier),
+  // not from labels, not from subtypes. A pre-existing outcome value on a
+  // forward-edited file is carried through verbatim (same preserve-unknown-
+  // fields philosophy as the v2/v3 steps); semantic validation of the
+  // stored value ('SUCCESS' | 'FAILURE' | null) is the analytics layer's
+  // data-quality job, not the migration's.
+  if (migrated.__schemaVersion < 4) {
+    migrated.events = migrated.events.map((ev) => {
+      const v4 = Object.assign({}, ev);
+      if (!('outcome' in v4)) v4.outcome = null;
+      return v4;
+    });
+    migrated.__schemaVersion = 4;
+  }
 
   return migrated;
 }

@@ -851,8 +851,8 @@ function recEvent(o) {
       ok(name + '-4 LF-only, no CR, no BOM (deferred defect 6 unchanged)', !csv.includes('\r') && csv.charCodeAt(0) !== 0xFEFF);
       return { header, parsed };
     }
-    const std = audit('CSV-STD', globalThis.__csvStd, 18, n);
-    ok('CSV-STD-5 header exactly as specified', std.header && std.header.join(',') === 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y');
+    const std = audit('CSV-STD', globalThis.__csvStd, 19, n);
+    ok('CSV-STD-5 header exactly as specified (R1: outcome appended as final column)', std.header && std.header.join(',') === 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y,outcome');
     const stdGoalRow = std.parsed.find((r) => r[5] === 'Goal' && r[1] === '1440.0');
     ok('CSV-STD-6 first goal row: 1440.0s, side for, #9 Getachew Mulu', !!stdGoalRow && stdGoalRow[6] === 'for' && stdGoalRow[7] === '9' && stdGoalRow[8] === 'Getachew Mulu', stdGoalRow ? stdGoalRow.slice(5, 10).join('|') : 'missing');
     const stdSubRow = std.parsed.find((r) => r[5] === 'Sub' && r[9] === '6' && r[11] === '12');
@@ -864,7 +864,7 @@ function recEvent(o) {
     const stdLoc = std.parsed.find((r) => r[15] !== '' && r[5] === 'Pass');
     ok('CSV-STD-10 located pass row has zone + x/y', !!stdLoc && stdLoc[15].includes('third') && stdLoc[16] !== '', stdLoc ? stdLoc.slice(15, 18).join('|') : 'missing');
 
-    const full = audit('CSV-FULL', globalThis.__csvFull, 35, n);
+    const full = audit('CSV-FULL', globalThis.__csvFull, 36, n);
     const H = {}; full.header.forEach((h, i) => { H[h] = i; });
     ok('CSV-FULL-5 header includes all required analysis columns', ['Period', 'Official Minute', 'Second', 'Match Seconds', 'Match Time', 'Video Time', 'Team', 'Primary Player ID', 'Score For Before', 'Score Against Before', 'Score For After', 'Score Against After', 'Score State', 'Sequence ID', 'X', 'Y', 'Pitch Zone'].every((k) => k in H));
     ok('CSV-FULL-6 Video Time empty for all rows (no video)', full.parsed.every((r) => r[H['Video Time']] === ''));
@@ -885,7 +885,7 @@ function recEvent(o) {
     const dupCats = full.parsed.every((r) => r[H['Category']] === r[H['Event']] && r[H['Label']] === r[H['Event']]);
     ok('CSV-FULL-14 (deferred defect 7 confirmed) Category/Event/Label all duplicate the label', dupCats);
     finding('F7', 'LOW', 'Full-analysis CSV semantics (deferred defect 7, unchanged): Category = Event = Label (all event.label); Outcome = qualifiers; Phase/Note/Created At/Updated At always empty. Confirmed still present.');
-    const season = audit('CSV-SEASON', globalThis.__csvSeason, 19, globalThis.__P1.events.length + globalThis.__P3.events.length);
+    const season = audit('CSV-SEASON', globalThis.__csvSeason, 20, globalThis.__P1.events.length + globalThis.__P3.events.length);
     ok('CSV-SEASON-5 first column carries match labels', season.parsed.every((r) => r[0].includes('Bahir Dar City')));
   }
 
