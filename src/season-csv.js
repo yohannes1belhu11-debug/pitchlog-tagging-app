@@ -17,8 +17,12 @@
 //   - csvEscape is behavior-identical to the renderer's exporter (§8.2
 //     "reuse the existing exporters verbatim"): quote a cell iff it contains
 //     a comma, double quote, or newline; double internal double quotes.
-//     Line endings LF, no BOM, no trailing newline — the existing exporters'
-//     conventions (join('\n'), writeFile utf-8), reused verbatim.
+//     Line endings LF, no trailing newline — the existing exporters'
+//     conventions (join('\n')). Since R2-A the shared file-write layer in
+//     main.js prepends the UTF-8 BOM when the CSV hits disk; this engine's
+//     output STRING stays BOM-free (pinned by season-csv-check SC-T7.4), so
+//     the exported file is BOM-marked without touching the string or its
+//     semantics.
 //   - Rendering conventions (§8.5 + approved presentation decisions):
 //       counts → integers; minutes/percentages → 1 decimal half-up
 //       (roundHalfUp1, same house helper); booleans → TRUE/FALSE;

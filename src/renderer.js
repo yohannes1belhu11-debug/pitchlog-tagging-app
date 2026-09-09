@@ -3908,8 +3908,82 @@
     renderSeasonStats();
   });
 
+  // ---------- R2-A: CSV export hygiene ----------
+  // Deterministic per-export file names, toast feedback, and empty-export
+  // guards for the four CSV exports (standard match, full-analysis match,
+  // season event dump, season player×match). The CSV strings themselves are
+  // untouched: the UTF-8 BOM is added by the main-process file writer, so
+  // escaping, column order, and every value stay byte-identical.
+
+  // Base names per export kind. Match exports reuse the session's match
+  // metadata (date + opponent) so files are self-identifying; season exports
+  // span many matches, so they stay plain — all four are always distinct.
+  const CSV_EXPORT_BASENAMES = {
+    'match-events': 'match-events',
+    'match-events-full-analysis': 'match-events-full-analysis',
+    'season-events': 'season-events',
+    'season-player': 'season-player'
+  };
+
+  // Windows-unsafe characters (< > : " / \ | ? * and control chars) become
+  // '_', runs collapse, edge dots/spaces (invalid on Windows) are trimmed,
+  // and the segment is capped so metadata can never blow up the path
+  // component. Unicode — including Amharic opponent names — is preserved:
+  // only genuinely invalid characters are replaced.
+  function sanitizeCsvNameSegment(str) {
+    const cleaned = String(str)
+      .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_')
+      .replace(/_{2,}/g, '_')
+      .replace(/^[\s._]+/, '')
+      .replace(/[\s._]+$/, '');
+    return cleaned.slice(0, 40);
+  }
+
+  function csvExportFilename(kind) {
+    const base = CSV_EXPORT_BASENAMES[kind] || 'match-events';
+    if (kind === 'season-events' || kind === 'season-player') return base + '.csv';
+    let name = base;
+    const date = matchInfo && matchInfo.date ? sanitizeCsvNameSegment(matchInfo.date) : '';
+    if (date) name += '_' + date;
+    const opponent = matchInfo && matchInfo.opponent ? sanitizeCsvNameSegment(matchInfo.opponent) : '';
+    if (opponent) name += '_vs_' + opponent;
+    return name + '.csv';
+  }
+
+  // Central export path for all four CSVs: suggested file name → IPC →
+  // feedback through the existing toast. Success reports the saved file name
+  // and the row count; a write failure (main already showed the native error
+  // box) is toasted with the original error message; a plain user cancel
+  // stays silent, exactly like before.
+  async function exportCsvFile(kind, csv, rowCount) {
+    let result = null;
+    try {
+      result = await window.matchtag.exportCsv(csv, csvExportFilename(kind));
+    } catch (err) {
+      showAutosaveToast('Export failed: ' + (err && err.message ? err.message : String(err)) + '.');
+      return;
+    }
+    if (!result || result.canceled) {
+      if (result && result.error) showAutosaveToast('Export failed: ' + result.error + '.');
+      return; // user canceled the save dialog — no feedback, no file
+    }
+    const savedName = result.filePath ? String(result.filePath).split(/[\\/]/).pop() : 'CSV file';
+    const rows = typeof rowCount === 'number' ? ' — ' + rowCount + (rowCount === 1 ? ' row' : ' rows') : '';
+    showAutosaveToast('Exported ' + savedName + rows + '.');
+  }
+
   btnExportSeasonCsv.addEventListener('click', async () => {
-    if (seasonMatches.length === 0) return;
+    // R2-A: explicit empty-export feedback — a silent return left the analyst
+    // with no idea why nothing happened; a header-only file would be worse.
+    if (seasonMatches.length === 0) {
+      showAutosaveToast('Nothing to export — no season matches are loaded. Add match sessions in the season view first.');
+      return;
+    }
+    const totalSeasonEvents = seasonMatches.reduce((n, m) => n + (Array.isArray(m.events) ? m.events.length : 0), 0);
+    if (totalSeasonEvents === 0) {
+      showAutosaveToast('Nothing to export — the loaded season matches contain no events.');
+      return;
+    }
 
     const header = 'match,timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y,outcome';
     const rows = [];
@@ -3954,7 +4028,7 @@
     });
 
     const csv = [header, ...rows].join('\n');
-    await window.matchtag.exportCsv(csv);
+    await exportCsvFile('season-events', csv, totalSeasonEvents);
   });
 
   // ---------- Season player×match CSV export (PSD-V2, Phase E) ----------
@@ -3966,7 +4040,13 @@
   // here and no engine is modified. The legacy event-dump export above is
   // intentionally untouched (PSD §12.3 default: add alongside, never replace).
   btnExportSeasonPlayerCsv.addEventListener('click', async () => {
-    if (seasonMatches.length === 0) return;
+    // R2-A: explicit empty-export feedback (same rationale as the event dump
+    // above; the engine-wiring guards below stay silent — they are app
+    // defects, not analyst-actionable states).
+    if (seasonMatches.length === 0) {
+      showAutosaveToast('Nothing to export — no season matches are loaded. Add match sessions in the season view first.');
+      return;
+    }
     if (!window.SeasonCsvEngine || typeof window.SeasonCsvEngine.buildSeasonPlayerCsv !== 'function') return;
     if (!window.PlayerSeasonEngine || typeof window.PlayerSeasonEngine.computeSeason !== 'function') return;
     let PS;
@@ -3974,6 +4054,8 @@
       PS = window.PlayerSeasonEngine.computeSeason(seasonMatches);
     } catch (err) {
       console.error('Season player CSV export: season engine error', err);
+      // R2-A: report the failure — the analyst previously got silence.
+      showAutosaveToast('Season player CSV export failed: ' + (err && err.message ? err.message : 'season engine error') + '.');
       return;
     }
     let csv;
@@ -3981,10 +4063,22 @@
       csv = window.SeasonCsvEngine.buildSeasonPlayerCsv(PS);
     } catch (err) {
       console.error('Season player CSV export: export module error', err);
+      showAutosaveToast('Season player CSV export failed: ' + (err && err.message ? err.message : 'export module error') + '.');
       return;
     }
-    if (!csv) return;
-    await window.matchtag.exportCsv(csv);
+    if (!csv) {
+      showAutosaveToast('Season player CSV export failed: no CSV produced.');
+      return;
+    }
+    // R2-A: data rows = one player×match record each + one SEASON_SUMMARY
+    // row per player — the toast row count matches the CSV's data rows.
+    const summaryCount = Array.isArray(PS.playerOrder) ? PS.playerOrder.length : 0;
+    const recordCount = Array.isArray(PS.playerMatchRecords) ? PS.playerMatchRecords.length : 0;
+    if (recordCount + summaryCount === 0) {
+      showAutosaveToast('Nothing to export — the loaded season matches contain no players.');
+      return;
+    }
+    await exportCsvFile('season-player', csv, recordCount + summaryCount);
   });
 
   // ---------- Session save / load ----------
@@ -4201,6 +4295,12 @@
     // (Previously both listeners fired on Shift+Click, opening two save
     // dialogs / two exports.)
     if (e.shiftKey) return;
+    // R2-A: empty-export guard — a header-only file is misleading; the
+    // analyst gets an explicit "nothing to export" message instead.
+    if (events.length === 0) {
+      showAutosaveToast('Nothing to export — no tagged events in this match yet.');
+      return;
+    }
     const header = 'timecode,seconds,end_timecode,end_seconds,duration_seconds,label,side,player_number,player_name,player_off_number,player_off_name,player_on_number,player_on_name,subtype,qualifiers,location_zone,location_x,location_y,outcome';
     const rows = events.map((ev) => {
       const qualifiersStr = Object.entries(ev.qualifiers || {})
@@ -4237,7 +4337,7 @@
       ].join(',');
     });
     const csv = [header, ...rows].join('\n');
-    await window.matchtag.exportCsv(csv);
+    await exportCsvFile('match-events', csv, events.length);
   });
 
   function csvEscape(value) {
@@ -5129,9 +5229,17 @@
   }
 
   if (btnExportCsv) {
-    btnExportCsv.title = 'Click: Standard CSV | Shift+Click: Full Analysis CSV';
+    btnExportCsv.title = 'Click: Standard CSV | Shift+Click: Full Analysis CSV — each export suggests its own file name (written UTF-8 with BOM)';
     btnExportCsv.addEventListener('click', (e) => {
-      if (e.shiftKey) { window.matchtag.exportCsv(buildFullAnalysisCsv()); }
+      if (e.shiftKey) {
+        // R2-A: same empty guard as the standard export (both listeners
+        // share the same event list).
+        if (events.length === 0) {
+          showAutosaveToast('Nothing to export — no tagged events in this match yet.');
+          return;
+        }
+        exportCsvFile('match-events-full-analysis', buildFullAnalysisCsv(), events.length);
+      }
     });
   }
 

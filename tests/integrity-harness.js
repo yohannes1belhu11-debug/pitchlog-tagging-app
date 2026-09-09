@@ -348,12 +348,23 @@ section('REG — main-process regression (squad, autosave, CSV export, session l
   ok('REG', 'autosave:flush-sync(null) deletes + ok', ev2.returnValue && ev2.returnValue.ok === true && !exists(autosavePath));
 }
 
-// CSV export (unchanged behavior; still the non-atomic LOW-priority path)
+// CSV export (R2-A: the file is written UTF-8 with BOM — an encoding
+// marker only; still the non-atomic LOW-priority path)
 {
   const dest = path.join(scratchDir, 'export.csv');
   controls.saveDialog = { canceled: false, filePath: dest };
   const res = await handlers['file:exportCsv'](fakeEvent, 'timecode,seconds\n00:00:10.0,10.0\n');
-  ok('REG', 'file:exportCsv writes exact content', res.canceled === false && realFs.readFileSync(dest, 'utf-8') === 'timecode,seconds\n00:00:10.0,10.0\n');
+  const bytes = realFs.readFileSync(dest); // raw bytes incl. the BOM
+  const body = realFs.readFileSync(dest, 'utf-8');
+  ok('REG', 'file:exportCsv writes exact content after the R2-A BOM',
+    res.canceled === false && body === '\uFEFFtimecode,seconds\n00:00:10.0,10.0\n',
+    'len=' + bytes.length);
+  ok('REG', 'file:exportCsv file starts with the UTF-8 BOM bytes EF BB BF',
+    bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF,
+    bytes[0] + ',' + bytes[1] + ',' + bytes[2]);
+  ok('REG', 'file:exportCsv byte length = BOM + payload exactly',
+    bytes.length === 3 + Buffer.byteLength('timecode,seconds\n00:00:10.0,10.0\n', 'utf-8'),
+    'len=' + bytes.length);
 }
 
 // session load end-to-end (legacy v0 file -> migrated v3 + Fix 3 applied)
@@ -400,8 +411,8 @@ section('STATIC — renderer wiring (source-level checks)');
   ok('STATIC', 'FIX 2: exactly 2 click listeners on btnExportCsv', count === 2, 'count=' + count);
   ok('STATIC', 'FIX 2: standard handler takes event + early-returns on shiftKey',
     /btnExportCsv\.addEventListener\('click',\s*async\s*\(e\)\s*=>\s*\{[\s\S]{0,600}?if\s*\(e\.shiftKey\)\s*return;/.test(rendererSrc));
-  ok('STATIC', 'FIX 2: full-analysis handler fires only on shiftKey',
-    /btnExportCsv\.addEventListener\('click',\s*\(e\)\s*=>\s*\{\s*if\s*\(e\.shiftKey\)\s*\{\s*window\.matchtag\.exportCsv\(buildFullAnalysisCsv\(\)\);/.test(rendererSrc));
+  ok('STATIC', 'FIX 2: full-analysis handler fires only on shiftKey (R2-A: routed through exportCsvFile)',
+    /btnExportCsv\.addEventListener\('click',\s*\(e\)\s*=>\s*\{\s*if\s*\(e\.shiftKey\)\s*\{[\s\S]{0,400}?exportCsvFile\('match-events-full-analysis',\s*buildFullAnalysisCsv\(\)/.test(rendererSrc));
   ok('STATIC', 'FIX 2: both export modes still present', rendererSrc.includes('buildFullAnalysisCsv') && rendererSrc.includes("const header = 'timecode,seconds,end_timecode"));
 
   // FIX 5 wiring

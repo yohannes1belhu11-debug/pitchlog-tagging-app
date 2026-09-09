@@ -427,11 +427,15 @@
         <!-- Legacy season event-dump export (one row per raw event, 19
              columns). PSD §12.3 default: kept alongside the new player×match
              export — intentionally byte-unchanged (Phase E scope). -->
-        <button id="btnExportSeasonCsv" class="btn btn-accent">Export season CSV</button>
+        <button id="btnExportSeasonCsv" class="btn btn-accent" title="One row per raw event across all loaded season matches (legacy event dump). Suggested file name: season-events.csv — written UTF-8 with BOM.">Export season CSV</button>
         <!-- Season Player CSV export (PSD-V2, Phase E): one row per
              player×match + one SEASON_SUMMARY row per player, 63 exact
-             columns from the Player & Season Core output (read-only). -->
-        <button id="btnExportSeasonPlayerCsv" class="btn btn-ghost">Export player×match CSV</button>
+             columns from the Player & Season Core output (read-only).
+             R2-A help text: summary rows are labeled SEASON_SUMMARY in the
+             match_key and participation_status columns; their per-match
+             context/participation columns are empty and the totals come from
+             the season rollup (PSD §8.2). -->
+        <button id="btnExportSeasonPlayerCsv" class="btn btn-ghost" title="One row per player×match plus one SEASON_SUMMARY row per player — 63 columns (PSD-V2 §8.2). Summary rows are labeled SEASON_SUMMARY in match_key and participation_status; their per-match columns are empty and totals come from the season rollup. Suggested file name: season-player.csv — written UTF-8 with BOM.">Export player×match CSV</button>
       </div>
     </div>
   </div>

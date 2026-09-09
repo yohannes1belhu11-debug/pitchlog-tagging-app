@@ -164,7 +164,7 @@ There is **no global outcome model**. Outcome is represented inconsistently acro
 - **F7**: full-analysis CSV emits `Category` = `Event` = `Label` = the same string, `Outcome` and `Phase` columns are empty. Analytics must read `Label` + `Subtype`, not `Category`/`Outcome`.
 - **F1**: player dropdown can be stale after a same-session bulk add → risk of unattributed events.
 - **F8**: undo is single-shot by design (last logged event only). Metrics operate on the saved event set; undo consistency is guaranteed by the F3 fix.
-- CSV files are LF-only without BOM (Excel import caveat — does not affect parsing by a proper CSV reader).
+- CSV files are LF-only; since R2-A they are written UTF-8 **with BOM** (Windows/Excel compatibility). The BOM is an encoding marker only — escaping, column order, and field semantics are unchanged, and a proper CSV reader is unaffected.
 
 ---
 

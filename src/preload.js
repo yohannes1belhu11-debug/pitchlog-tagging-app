@@ -3,7 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('matchtag', {
   openVideo: () => ipcRenderer.invoke('dialog:openVideo'),
   saveSession: (sessionData) => ipcRenderer.invoke('file:saveSession', sessionData),
-  exportCsv: (csvString) => ipcRenderer.invoke('file:exportCsv', csvString),
+  // R2-A: defaultName is the renderer's suggested file name (export kind +
+  // match metadata); main sanitizes it and falls back to 'match-events.csv'.
+  exportCsv: (csvString, defaultName) => ipcRenderer.invoke('file:exportCsv', csvString, defaultName),
   exportClipPlaylist: (data) => ipcRenderer.invoke('file:exportClipPlaylist', data),
   loadSession: () => ipcRenderer.invoke('file:loadSession'),
   loadMultipleSessions: () => ipcRenderer.invoke('file:loadMultipleSessions'),

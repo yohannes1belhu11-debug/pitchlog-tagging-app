@@ -387,22 +387,53 @@ ipcMain.handle('file:saveSession', async (_event, sessionData) => {
   }
 });
 
+// R2-A: sanitize a renderer-suggested default file name for the save dialog.
+// Defense in depth only — the renderer already sanitizes. Keeps just the
+// base name (any smuggled path is dropped), strips Windows-invalid
+// characters, and falls back to the legacy default.
+function sanitizeCsvDefaultName(name) {
+  if (typeof name !== 'string') return 'match-events.csv';
+  const base = name.split(/[\\/]/).pop() || '';
+  const cleaned = base
+    .replace(/[<>:"/\\|?*\x00-\x1f]+/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^[\s._]+/, '')
+    .replace(/[\s._]+$/, '')
+    .slice(0, 80);
+  return cleaned || 'match-events.csv';
+}
+
 // Export the event log as CSV for use elsewhere (spreadsheets, other tools).
 // Uses fs.promises (async) so the main process doesn't block during I/O.
-ipcMain.handle('file:exportCsv', async (_event, csvString) => {
+// R2-A export hygiene:
+//   - The renderer passes a suggested default file NAME (export kind + match
+//     metadata) so every export type gets a deterministic, distinguishable
+//     suggestion; it is sanitized again here (never trust the renderer with
+//     a path — only the base name survives) and falls back to the legacy
+//     'match-events.csv'.
+//   - The file is written UTF-8 WITH BOM — an encoding marker only. The CSV
+//     string, its escaping, and every column/row semantic are untouched
+//     (the BOM never enters any CSV string the engines/renderer produce).
+//   - A write failure now also returns { canceled: true, error } (the same
+//     pattern file:saveSession already uses) so the renderer can toast the
+//     failure with the original message; the native error box is unchanged.
+ipcMain.handle('file:exportCsv', async (_event, csvString, defaultName) => {
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Export events as CSV',
-    defaultPath: 'match-events.csv',
+    defaultPath: sanitizeCsvDefaultName(defaultName),
     filters: [{ name: 'CSV', extensions: ['csv'] }]
   });
   if (result.canceled || !result.filePath) return { canceled: true };
 
   try {
-    await fs.promises.writeFile(result.filePath, csvString, 'utf-8');
+    // BOM only for real string payloads — anything else keeps failing
+    // inside writeFile exactly like before (no silent 'undefined' file).
+    const payload = (typeof csvString === 'string') ? '\ufeff' + csvString : csvString;
+    await fs.promises.writeFile(result.filePath, payload, 'utf-8');
     return { canceled: false, filePath: result.filePath };
   } catch (err) {
     dialog.showErrorBox('Export failed', err && err.message ? err.message : 'Could not write the CSV file.');
-    return { canceled: true };
+    return { canceled: true, error: err && err.message ? err.message : 'Could not write the CSV file.' };
   }
 });
 
