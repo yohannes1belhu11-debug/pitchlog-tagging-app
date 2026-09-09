@@ -345,6 +345,55 @@ button {
   white-space: nowrap;
 }
 
+/* ---------- Transport: volume ---------- */
+
+/* Mute toggle + level slider, laid out inline in the transport bar. Shares
+   the .btn / .btn-icon base with the play/pause button; the slider uses the
+   same accent-color technique as the scrub bar so both tracks pick up the
+   theme accent in Chromium's native rendering. */
+
+.video-volume-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.volume-mute-btn {
+  font-size: 13px;
+  line-height: 1;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.volume-mute-btn:hover:not(:disabled) {
+  border-color: var(--accent-bright);
+  color: var(--accent-bright);
+}
+
+.volume-mute-btn:active:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Muted (or zero-volume) state: same active-accent treatment as other
+   selected controls (e.g. .team-btn.active). */
+.volume-mute-btn.muted {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-bright);
+}
+
+.volume-slider {
+  width: 88px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.volume-slider:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ---------- Tag panel ---------- */
 
 .tagpanel {

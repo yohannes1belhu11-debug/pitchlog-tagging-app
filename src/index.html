@@ -202,6 +202,17 @@
           <option value="1.5">1.5x</option>
           <option value="2">2.0x</option>
         </select>
+        <!-- Volume: mute toggle + level slider, part of the transport bar.
+             State is owned by renderer.js (volumeState) and re-stamped onto
+             the <video> element at every source change (fresh load, error
+             relink, detach/reattach). Starts disabled like the rest of the
+             transport, enabled once a video loads. -->
+        <div class="video-volume-control" id="videoVolumeControl">
+          <button id="volumeMuteBtn" class="btn btn-icon volume-mute-btn" title="Mute" aria-label="Mute" disabled>
+            <span id="volumeIcon">🔊</span>
+          </button>
+          <input id="videoVolumeSlider" class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume level" title="Volume" disabled />
+        </div>
         <span class="transport-hint">← → seek 5s · Shift + ← → seek 1s</span>
       </div>
 

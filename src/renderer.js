@@ -286,6 +286,9 @@
   const timelineMarkersEl = document.getElementById('timelineMarkers');
   const timelinePlayheadEl = document.getElementById('timelinePlayhead');
   const speed = document.getElementById('speed');
+  const volumeMuteBtn = document.getElementById('volumeMuteBtn');
+  const volumeIcon = document.getElementById('volumeIcon');
+  const videoVolumeSlider = document.getElementById('videoVolumeSlider');
 
   const tagButtonsEl = document.getElementById('tagButtons');
   const eventListEl = document.getElementById('eventList');
@@ -642,6 +645,10 @@
     scrub.disabled = false;
     speed.disabled = false;
     btnDetachVideo.disabled = false;
+    // Stamp the analyst's volume onto the new source and bring the volume
+    // controls live with the rest of the transport.
+    applyVolumeToVideo();
+    setVolumeControlsEnabled(true);
     markAutosaveDirty();
   }
 
@@ -718,6 +725,10 @@
   });
 
   video.addEventListener('loadedmetadata', () => {
+    // Every source that reaches metadata (fresh load, error relink,
+    // reattach after the detached window closes) is re-stamped with the
+    // analyst's volume — the choice survives source-change cycles.
+    applyVolumeToVideo();
     scrub.max = Math.floor(video.duration * 10);
     durationEl.textContent = formatTimecode(video.duration, false);
     renderTimelineStrip();
@@ -757,6 +768,7 @@
     btnPlayPause.disabled = true;
     scrub.disabled = true;
     btnDetachVideo.disabled = true;
+    setVolumeControlsEnabled(false);
     const btnRelink = document.getElementById('btnRelinkVideo');
     if (btnRelink) {
       btnRelink.addEventListener('click', relinkVideo);
@@ -788,6 +800,11 @@
     remoteState = state;
     isDetached = true;
     btnDetachVideo.disabled = true;
+    // While the video plays in its own window, the main-window volume
+    // control has no element to drive (play/scrub/speed stay live because
+    // they forward commands to the detached window) — disable it until
+    // reattach.
+    setVolumeControlsEnabled(false);
 
     video.pause();
     video.removeAttribute('src');
@@ -807,11 +824,15 @@
     if (!isDetached) return;
     isDetached = false;
     btnDetachVideo.disabled = false;
+    setVolumeControlsEnabled(true);
 
     const restoreState = remoteState;
     videoDetachedMsg.style.display = 'none';
     video.style.display = 'block';
     video.src = currentVideoUrl;
+    // Re-stamp the volume immediately; the loadedmetadata listener fires
+    // applyVolumeToVideo() again once the source is ready.
+    applyVolumeToVideo();
 
     const applyRestoredState = () => {
       video.currentTime = restoreState.currentTime || 0;
@@ -879,6 +900,73 @@
       video.playbackRate = rate;
     }
   });
+
+  // ---------- Volume control ----------
+  // The analyst's volume choice lives in volumeState — not only on the
+  // <video> element — so it survives every source cycle: a fresh open, an
+  // error relink, and the detach/reattach round-trip all re-stamp it via
+  // applyVolumeToVideo() (loadVideoFromPath, the loadedmetadata listener,
+  // and reattachLocally). lastVolume remembers the last audible level so
+  // unmuting restores the pre-muted volume instead of staying silent.
+  const volumeState = { volume: 1, muted: false, lastVolume: 1 };
+
+  function volumeIconFor(level, muted) {
+    if (muted || level === 0) return '🔇';
+    return level < 0.5 ? '🔉' : '🔊';
+  }
+
+  function setVolumeControlsEnabled(enabled) {
+    volumeMuteBtn.disabled = !enabled;
+    videoVolumeSlider.disabled = !enabled;
+  }
+
+  function applyVolumeToVideo() {
+    video.volume = volumeState.volume;
+    video.muted = volumeState.muted;
+  }
+
+  function renderVolumeUI() {
+    videoVolumeSlider.value = String(volumeState.volume);
+    volumeIcon.textContent = volumeIconFor(volumeState.volume, volumeState.muted);
+    const silent = volumeState.muted || volumeState.volume === 0;
+    volumeMuteBtn.classList.toggle('muted', silent);
+    volumeMuteBtn.title = silent ? 'Unmute' : 'Mute';
+    volumeMuteBtn.setAttribute('aria-label', silent ? 'Unmute' : 'Mute');
+  }
+
+  videoVolumeSlider.addEventListener('input', () => {
+    const v = Math.min(1, Math.max(0, Number(videoVolumeSlider.value)));
+    if (!isFinite(v)) return;
+    if (v > 0) {
+      volumeState.lastVolume = v;
+      // Moving the slider off zero always unmutes (standard player
+      // behavior): the analyst asked for an audible level.
+      volumeState.muted = false;
+    }
+    volumeState.volume = v;
+    applyVolumeToVideo();
+    renderVolumeUI();
+  });
+
+  volumeMuteBtn.addEventListener('click', () => {
+    if (volumeState.muted) {
+      volumeState.muted = false;
+      // Unmute restores the pre-muted level. If the slider itself sits at
+      // zero (muted, then dragged to 0), lastVolume is the level to return
+      // to; if there was never an audible level, fall back to a small
+      // default so unmuting is actually audible.
+      if (volumeState.volume <= 0) {
+        volumeState.volume = volumeState.lastVolume > 0 ? volumeState.lastVolume : 0.5;
+      }
+    } else {
+      volumeState.muted = true;
+      if (volumeState.volume > 0) volumeState.lastVolume = volumeState.volume;
+    }
+    applyVolumeToVideo();
+    renderVolumeUI();
+  });
+
+  renderVolumeUI();
 
   // ---------- Tag buttons ----------
 
