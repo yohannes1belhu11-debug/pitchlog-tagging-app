@@ -220,20 +220,23 @@ if (!handlers['file:exportCsv']) {
     res9 && res9.canceled === true && typeof res9.error === 'string' && !exists(dest9),
     JSON.stringify(res9).slice(0, 120));
 
-  // M10 — R2-A boundary: the clip playlist handler is NOT BOM-marked
-  // (out-of-scope export; pins that the BOM lives only in file:exportCsv).
+  // M10 — clip playlist (boundary moved by R2-B): the clip CSV is now
+  // BOM-marked exactly like the analysis exports; the .bat stays BOM-free.
   const clipDir = fs.mkdtempSync(path.join(os.tmpdir(), 'r2a-clips-'));
   controls.openDialog = { canceled: false, filePaths: [clipDir] };
-  const res10 = await handlers['file:exportClipPlaylist'](fakeEvent, { csv: 'clip,label\n1,Goal\n', script: '@echo off\n' });
+  const CLIP_CSV = 'clip,label\n1,Goal\n';
+  const res10 = await handlers['file:exportClipPlaylist'](fakeEvent, { csv: CLIP_CSV, script: '@echo off\n' });
   const clipCsv = path.join(clipDir, 'clip_playlist.csv');
   const clipBat = path.join(clipDir, 'cut_clips.bat');
   ok('M10: clip playlist export still succeeds',
     res10 && res10.canceled === false && exists(clipCsv) && exists(clipBat));
   if (exists(clipCsv)) {
     const b = fs.readFileSync(clipCsv);
-    ok('M10b: clip_playlist.csv stays BOM-free (R2-A scope boundary)',
-      !(b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) &&
-        fs.readFileSync(clipCsv, 'utf-8') === 'clip,label\n1,Goal\n');
+    const expectedClip = Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from(CLIP_CSV, 'utf-8')]);
+    ok('M10b: clip_playlist.csv is BOM-marked with a byte-identical payload (R2-B moved the R2-A boundary)',
+      b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF && expectedClip.equals(b));
+    ok('M10c: cut_clips.bat stays BOM-free (cmd.exe requirement)',
+      fs.readFileSync(clipBat).equals(Buffer.from('@echo off\n', 'utf-8')));
   }
 }
 
@@ -622,9 +625,14 @@ console.log('\n== STATIC — help text + boundary pins ==');
   ok('S2: both season export buttons document their suggested file names',
     /season-events\.csv/.test(htmlSrc) && /season-player\.csv/.test(htmlSrc));
   const mainSrc = fs.readFileSync(path.join(srcDir, 'main.js'), 'utf-8');
-  ok('S3: the BOM is prepended only in the file:exportCsv write (main process)',
-    /'\\ufeff'\s*\+\s*csvString/.test(mainSrc) && mainSrc.indexOf("'\\ufeff'") === mainSrc.lastIndexOf("'\\ufeff'"),
-    'exactly one BOM prepend, in the export write');
+  // R2-B moved the boundary: the clip-CSV write is the second sanctioned
+  // BOM site; the .bat write must never get one.
+  ok('S3: BOM prepends exist at exactly the two sanctioned write sites (exportCsv + clip CSV; never the .bat)',
+    /'\\ufeff'\s*\+\s*csvString/.test(mainSrc) &&
+      /'\\ufeff'\s*\+\s*csv\b/.test(mainSrc) &&
+      (mainSrc.match(/'\\ufeff'/g) || []).length === 2 &&
+      !/'\\ufeff'\s*\+\s*script/.test(mainSrc),
+    'two BOM prepends: file:exportCsv + clip_playlist.csv');
 }
 
 // ---------------------------------------------------------------------------

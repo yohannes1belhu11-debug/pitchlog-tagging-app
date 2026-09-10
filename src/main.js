@@ -440,6 +440,11 @@ ipcMain.handle('file:exportCsv', async (_event, csvString, defaultName) => {
 // Export a clip playlist: writes a CSV reference and an ffmpeg .bat script
 // into a folder the user picks, so they don't have to save two files separately.
 // Uses fs.promises (async) so the main process doesn't block during I/O.
+// R2-B export-hygiene follow-up: clip_playlist.csv now gets the same UTF-8
+// BOM treatment as the other CSV exports (an encoding marker only — the CSV
+// string, its escaping, and every cell stay byte-identical), so Excel reads
+// Amharic labels correctly. The companion cut_clips.bat stays STRICTLY
+// BOM-free: cmd.exe fails on a BOM in front of '@echo off'.
 ipcMain.handle('file:exportClipPlaylist', async (_event, { csv, script }) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose a folder to save the clip playlist',
@@ -449,7 +454,9 @@ ipcMain.handle('file:exportClipPlaylist', async (_event, { csv, script }) => {
 
   const dir = result.filePaths[0];
   try {
-    await fs.promises.writeFile(path.join(dir, 'clip_playlist.csv'), csv, 'utf-8');
+    // BOM only for a real string payload — same guard as file:exportCsv.
+    const csvPayload = (typeof csv === 'string') ? '\ufeff' + csv : csv;
+    await fs.promises.writeFile(path.join(dir, 'clip_playlist.csv'), csvPayload, 'utf-8');
     await fs.promises.writeFile(path.join(dir, 'cut_clips.bat'), script, 'utf-8');
     return { canceled: false, dir };
   } catch (err) {

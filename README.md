@@ -13,7 +13,8 @@ with timestamps as it plays, and export the tagged data.
   click the ✕ to delete it
 - Save the whole session (video path + tags + events) to a `.json` file and
   reload it later
-- Export the event log as a `.csv` file
+- Export the event log as CSV files — every column of every export is
+  documented in `docs/export-data-dictionary.md`
 
 ## Requirements
 
@@ -71,9 +72,9 @@ want to test quickly without rebuilding the installer each time.
 
 ## Running the automated tests (optional)
 
-The project has an automated test suite — 22 scripts in `tests/` that
-exercise the tagging, analytics, and export logic without ever opening
-the app window.
+The project has an automated test suite in `tests/` (it grows as features
+land — the runner prints the current count) that exercises the tagging,
+analytics, and export logic without ever opening the app window.
 
 If you want to run it, install the test helper once (needs internet the
 first time; it downloads a small "jsdom" library into a separate
@@ -90,9 +91,10 @@ Then run the whole suite:
 npm test
 ```
 
-You want to see `22/22 suites GREEN`. If anything fails, the output names
-the failing script and shows what it expected — that's the part worth
-pasting back if you're reporting a problem.
+You want to see every suite GREEN (no FAIL lines — the summary line shows
+`N/N suites GREEN`). If anything fails, the output names the failing script
+and shows what it expected — that's the part worth pasting back if you're
+reporting a problem.
 
 ## Project structure
 

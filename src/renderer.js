@@ -3990,6 +3990,18 @@
 
     seasonMatches.forEach((m) => {
       const matchLabel = seasonMatchLabel(m);
+      // R2-B data-quality fix: player references in a loaded season match
+      // must resolve against THAT match's own squad (m.squad), not the live
+      // session squad. Squad ids are per-file (every squad has its own
+      // player_1, player_2, …), so the live resolver silently blanked —
+      // or, via same-id collisions, mis-attributed — player names/numbers
+      // in this multi-match export whenever the two squads differed.
+      // Unresolved ids stay empty cells, exactly like the standard export
+      // (null discipline: never invented, never zero-filled). Column order,
+      // escaping, and every other cell are untouched.
+      const matchSquad = Array.isArray(m.squad) ? m.squad : [];
+      const resolveMatchPlayer = (pid) =>
+        matchSquad.find((p) => p && p.id === pid) || null;
       m.events.forEach((ev) => {
         const qualifiersStr = Object.entries(ev.qualifiers || {})
           .filter(([, v]) => v)
@@ -4009,12 +4021,12 @@
           duration.toFixed(1),
           csvEscape(ev.label),
           csvEscape(ev.side || ''),
-          csvEscape((() => { const p = resolvePlayer(ev.playerId); return p ? (p.number || '') : ''; })()),
-          csvEscape((() => { const p = resolvePlayer(ev.playerId); return p ? p.name : ''; })()),
-          csvEscape((() => { const p = resolvePlayer(ev.playerOffId); return p ? (p.number || '') : ''; })()),
-          csvEscape((() => { const p = resolvePlayer(ev.playerOffId); return p ? p.name : ''; })()),
-          csvEscape((() => { const p = resolvePlayer(ev.playerOnId); return p ? (p.number || '') : ''; })()),
-          csvEscape((() => { const p = resolvePlayer(ev.playerOnId); return p ? p.name : ''; })()),
+          csvEscape((() => { const p = resolveMatchPlayer(ev.playerId); return p ? (p.number || '') : ''; })()),
+          csvEscape((() => { const p = resolveMatchPlayer(ev.playerId); return p ? p.name : ''; })()),
+          csvEscape((() => { const p = resolveMatchPlayer(ev.playerOffId); return p ? (p.number || '') : ''; })()),
+          csvEscape((() => { const p = resolveMatchPlayer(ev.playerOffId); return p ? p.name : ''; })()),
+          csvEscape((() => { const p = resolveMatchPlayer(ev.playerOnId); return p ? (p.number || '') : ''; })()),
+          csvEscape((() => { const p = resolveMatchPlayer(ev.playerOnId); return p ? p.name : ''; })()),
           csvEscape(ev.subtype || ''),
           csvEscape(qualifiersStr),
           csvEscape(zone),
@@ -4356,7 +4368,17 @@
   }
 
   function openClipExportModal() {
-    if (!currentVideoPath || events.length === 0) return;
+    // R2-B: explicit empty-guard feedback (closes the R2-A deferred item) —
+    // a silent return left the analyst with no idea why nothing happened.
+    // Same pattern and wording family as the four CSV export guards.
+    if (!currentVideoPath) {
+      showAutosaveToast('Nothing to export — no video is loaded. Open a match video first.');
+      return;
+    }
+    if (events.length === 0) {
+      showAutosaveToast('Nothing to export — no tagged events in this match yet.');
+      return;
+    }
     clipPreRoll.value = '5';
     clipPostRoll.value = '8';
     clipExportModal.style.display = 'flex';
@@ -4365,6 +4387,10 @@
   function closeClipExportModal() {
     clipExportModal.style.display = 'none';
   }
+
+  // R2-B: document the two-file output on the button itself (same pattern
+  // as the CSV export buttons after R2-A).
+  btnExportClips.title = 'Writes clip_playlist.csv (UTF-8 with BOM) and cut_clips.bat (an ffmpeg script) into a folder you choose. Full column reference: docs/export-data-dictionary.md';
 
   btnExportClips.addEventListener('click', openClipExportModal);
   btnCancelClipExport.addEventListener('click', closeClipExportModal);

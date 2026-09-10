@@ -161,10 +161,10 @@ There is **no global outcome model**. Outcome is represented inconsistently acro
 ### 1.16 Known defects relevant to analytics (from the verification history — unchanged, all LOW)
 
 - **F6**: detail panel is unreachable in Touchline Mode → subtypes/qualifiers effectively cannot be completed from the touchline (location can, via the touchline pitch tap). Affects completeness of Shot subtypes, Pass outcomes, Possession end reasons.
-- **F7**: full-analysis CSV emits `Category` = `Event` = `Label` = the same string, `Outcome` and `Phase` columns are empty. Analytics must read `Label` + `Subtype`, not `Category`/`Outcome`.
+- **F7**: full-analysis CSV emits `Category` = `Event` = `Label` = the same string; its legacy `Outcome` column carries the serialized qualifiers (usually empty) while `Phase`/`Note`/`Created At`/`Updated At` are always empty. Analytics must read `Label` + `Subtype` + the final `Event Outcome` column, not `Category`/`Outcome`.
 - **F1**: player dropdown can be stale after a same-session bulk add → risk of unattributed events.
 - **F8**: undo is single-shot by design (last logged event only). Metrics operate on the saved event set; undo consistency is guaranteed by the F3 fix.
-- CSV files are LF-only; since R2-A they are written UTF-8 **with BOM** (Windows/Excel compatibility). The BOM is an encoding marker only — escaping, column order, and field semantics are unchanged, and a proper CSV reader is unaffected.
+- CSV exports are LF-only and written UTF-8 **with BOM** (Windows/Excel compatibility) — the four analysis CSVs since R2-A and `clip_playlist.csv` since R2-B; the companion `cut_clips.bat` script deliberately stays BOM-free (cmd.exe requires it). The BOM is an encoding marker only — escaping, column order, and field semantics are unchanged, and a proper CSV reader is unaffected. Full per-column documentation for every export: `docs/export-data-dictionary.md`.
 
 ---
 
