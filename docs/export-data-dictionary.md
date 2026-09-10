@@ -3,6 +3,7 @@
 **Status:** authoritative reference for every CSV file PitchLog writes to disk.
 **Audience:** Excel analysis, reports, charts, and the future AI report layer.
 **Introduced:** R2-B (data quality & analysis readiness). Baseline commit `2247a07` (R2-A export hygiene) for filename/BOM/feedback behavior.
+**Readability spec:** `docs/export-readability-specification.md` (R2-EXREAD) — the readable-layer proposals and frozen compatibility columns on top of this dictionary; its value-dictionary glossary ships as `docs/pitchlog-data-dictionary.csv`.
 
 This document is the single source of truth for the five CSV outputs. Each
 export section contains a fenced `json` schema block whose `columns` array
@@ -53,9 +54,9 @@ from raw events without reading that spec.
 |---|---|---|---|---|---|
 | 1 | match-events | "Export CSV" click | `match-events_<date>_vs_<opponent>.csv` | event (current match) | 19 |
 | 2 | match-events-full-analysis | "Export CSV" **Shift+Click** | `match-events-full-analysis_<date>_vs_<opponent>.csv` | event (current match) | 36 |
-| 3 | season-events | Season view → "Export season events" | `season-events.csv` | event (all loaded season matches) | 20 |
-| 4 | season-player | Season view → "Export season player CSV" | `season-player.csv` | player×match, plus one SEASON_SUMMARY row per player | 63 |
-| 5 | clip_playlist | "Export Clips" → confirm | `clip_playlist.csv` (+ companion `cut_clips.bat`) | event (current match, as video clips) | 7 |
+| 3 | season-events | Season view → "Export season CSV" (`index.html:430`) | `season-events.csv` | event (all loaded season matches) | 20 |
+| 4 | season-player | Season view → "Export player×match CSV" (`index.html:438`) | `season-player.csv` | player×match, plus one SEASON_SUMMARY row per player | 63 |
+| 5 | clip_playlist | "Export clip playlist" (`index.html:61`) → confirm | `clip_playlist.csv` (+ companion `cut_clips.bat`) | event (current match, as video clips) | 7 |
 
 Filenames are suggestions in the native save dialog — the user picks the real
 location and name; Windows-invalid characters in the metadata part are
@@ -261,11 +262,11 @@ percentages. `minutes_est` is the season estimated-minutes rollup.
     { "name": "competition", "type": "text", "empty": "summary rows / unset" },
     { "name": "home_away", "type": "code", "empty": "summary rows / unset", "notes": "home / away / neutral" },
     { "name": "result", "type": "code", "empty": "summary rows / no final score", "notes": "'W 2-1' / 'D 1-1' / 'L 0-2'" },
-    { "name": "x1_status", "type": "code", "empty": "summary rows", "notes": "score-chain status; MISMATCH flags an inconsistent goal chain" },
+    { "name": "x1_status", "type": "code", "empty": "summary rows", "notes": "MATCH / MISMATCH / MANUAL-EMPTY (analytics.js:1618; player-season.js:614,636) — manual-vs-goal-chain score reconciliation; MISMATCH flags an inconsistent goal chain" },
     { "name": "player_id", "type": "id", "empty": "never", "notes": "engine-canonical player id" },
     { "name": "player_name", "type": "text", "empty": "never", "notes": "season canonical name (drift is flagged, never merged)" },
     { "name": "player_number", "type": "text", "empty": "no number" },
-    { "name": "participation_status", "type": "code", "empty": "never", "notes": "STARTED / SUB_ON / SUB_OFF / UNUSED / UNKNOWN — or the SEASON_SUMMARY sentinel" },
+    { "name": "participation_status", "type": "code", "empty": "never", "notes": "engine enum (player-season.js:710-730; PSD §3.2, player-season-data-specification.md:216): STARTED / STARTED_FULL / STARTED_SUBBED_OFF / STARTED_SENT_OFF / SUB_ON / SUB_ON_SUBBED_OFF / SUB_ON_SENT_OFF / UNUSED_SUB / NOT_INVOLVED / UNKNOWN — plus the SEASON_SUMMARY sentinel in summary rows (season-csv.js:249). The values SUB_OFF and UNUSED are never emitted" },
     { "name": "started", "type": "bool", "empty": "summary rows" },
     { "name": "subbed_on", "type": "bool", "empty": "summary rows" },
     { "name": "subbed_on_min", "type": "decimal", "empty": "summary rows / not subbed on", "notes": "minute of coming on, 1 decimal" },
@@ -274,7 +275,7 @@ percentages. `minutes_est` is the season estimated-minutes rollup.
     { "name": "sent_off", "type": "bool", "empty": "summary rows" },
     { "name": "minutes_est", "type": "decimal", "empty": "no minutes evidence", "notes": "estimated minutes (reliable+estimated), 1 decimal — never official minutes" },
     { "name": "minutes_quality", "type": "code", "empty": "never", "notes": "RELIABLE / ESTIMATED / UNAVAILABLE" },
-    { "name": "minutes_reasons", "type": "text", "empty": "no reasons", "notes": "engine reason codes joined with ';'" },
+    { "name": "minutes_reasons", "type": "text", "empty": "no reasons", "notes": "engine reason codes joined with ';' (season-csv.js:223): OPPONENT_SUB_REFERENCES_PLAYER / NO_PARTICIPATION_MARKERS / SUB_TIME_MISSING / MULTIPLE_SUB_ON / NO_FT_MARKER / END_FALLBACK_LAST_KNOWN / STARTING_XI_MISSING / NOT_IN_SQUAD (player-season.js:340,358,373,375-376,422-423,691-692)" },
     { "name": "goals", "type": "int", "empty": "no tagged data" },
     { "name": "shots", "type": "int", "empty": "no tagged data" },
     { "name": "shots_on_target", "type": "int", "empty": "no tagged data" },
@@ -307,7 +308,7 @@ percentages. `minutes_est` is the season estimated-minutes rollup.
     { "name": "state_winning", "type": "int", "empty": "suppressed/no data", "notes": "events while WINNING; suppressed when a match's score chain is inconsistent" },
     { "name": "state_drawing", "type": "int", "empty": "suppressed/no data" },
     { "name": "state_losing", "type": "int", "empty": "suppressed/no data" },
-    { "name": "state_suppressed", "type": "code", "empty": "not suppressed", "notes": "e.g. X1_MISMATCH_SUPPRESSED" },
+    { "name": "state_suppressed", "type": "code", "empty": "not suppressed", "notes": "X1_MISMATCH_SUPPRESSED (player-season.js:804) — the only emitted value; marks rows whose score-state columns are suppressed because that match's score chain is inconsistent" },
     { "name": "zone_dl", "type": "int", "empty": "no located data", "notes": "Defensive third · Left channel" },
     { "name": "zone_dc", "type": "int", "empty": "no located data" },
     { "name": "zone_dr", "type": "int", "empty": "no located data" },
@@ -332,7 +333,7 @@ while in that score state (not booleans).
 
 ## 7. clip_playlist — video clip reference sheet (7 columns) + cut_clips.bat
 
-Written together by "Export Clips": the CSV is the human/machine reference for
+Written together by "Export clip playlist" (`index.html:61`): the CSV is the human/machine reference for
 the clip reel; the `.bat` (CRLF line endings, ASCII, **no BOM** — cmd.exe
 requires that) runs ffmpeg to cut and merge the clips. One row per event, in
 logged order; clip timestamps include the pre/post-roll values chosen in the

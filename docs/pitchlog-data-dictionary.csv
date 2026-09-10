@@ -1,0 +1,279 @@
+﻿vocabulary,machine_value,readable_label,columns,source,frozen
+about,purpose,Value dictionaries and readable header display names for the five PitchLog CSV exports (readability glossary v1),all five exports,docs/export-readability-specification.md:295-306,no
+about,frozen,"yes = spec Part C.2 MUST-NOT-CHANGE column (Once Sport import surface: no rename, no reorder, no value-format change); every column is additionally bound by the Part C.3 additive-only rule and the season-player 63-column and full-analysis legacy contracts",spec Part C,docs/export-readability-specification.md:337-378,no
+about,source,every mapping row cites the code source (file:line) of its machine value — verified at baseline b0cd92a,all rows,docs/export-readability-specification.md:7-8,no
+about,empty,an empty machine_value row documents the export empty cell (unknown / not recorded — never zero),value vocabularies,docs/export-data-dictionary.md:22,no
+outcome,SUCCESS,Success,match-events:outcome; season-events:outcome; match-events-full-analysis:Event Outcome,renderer.js:119-123,no
+outcome,FAILURE,Failure,match-events:outcome; season-events:outcome; match-events-full-analysis:Event Outcome,renderer.js:119-123,no
+outcome,,—,match-events:outcome; season-events:outcome; match-events-full-analysis:Event Outcome,renderer.js:119-123,no
+outcome_display:Duel,SUCCESS,Won,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Duel,FAILURE,Lost,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Press,SUCCESS,Success,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Press,FAILURE,Failure,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Turnover,SUCCESS,Successful,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Turnover,FAILURE,Unsuccessful,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Cross,SUCCESS,Successful,in-app event rows (not an export column),renderer.js:102-106,no
+outcome_display:Cross,FAILURE,Unsuccessful,in-app event rows (not an export column),renderer.js:102-106,no
+side,for,Our team,match-events:side; season-events:side,renderer.js:5445,no
+side,against,Opponent,match-events:side; season-events:side,renderer.js:5445,no
+team,our,Us,match-events-full-analysis:Team,renderer.js:5439-5441,no
+team,opponent,Opponent,match-events-full-analysis:Team,renderer.js:5439-5441,no
+home_away,home,Home,season-player:home_away,index.html:343-345,no
+home_away,away,Away,season-player:home_away,index.html:343-345,no
+home_away,neutral,Neutral,season-player:home_away,index.html:343-345,no
+period,PRE_MATCH,Pre-match,match-events-full-analysis:Period,renderer.js:130-134,no
+period,1H,1st Half,match-events-full-analysis:Period,renderer.js:130-134,no
+period,HT,Half-time,match-events-full-analysis:Period,renderer.js:130-134,no
+period,2H,2nd Half,match-events-full-analysis:Period,renderer.js:130-134,no
+period,FT,Full-time,match-events-full-analysis:Period,renderer.js:130-134,no
+period,ET1,ET 1st Half,match-events-full-analysis:Period,renderer.js:130-134,no
+period,ET_HT,ET Half-time,match-events-full-analysis:Period,renderer.js:130-134,no
+period,ET2,ET 2nd Half,match-events-full-analysis:Period,renderer.js:130-134,no
+score_state,WINNING,Winning,match-events-full-analysis:Score State; season-player:state_winning/state_drawing/state_losing (column semantics),renderer.js:5250-5252,no
+score_state,DRAW,Drawing,match-events-full-analysis:Score State; season-player:state_winning/state_drawing/state_losing (column semantics),renderer.js:5250-5252,no
+score_state,LOSING,Losing,match-events-full-analysis:Score State; season-player:state_winning/state_drawing/state_losing (column semantics),renderer.js:5250-5252,no
+participation_status,STARTED,Started,season-player:participation_status,player-season.js:716,no
+participation_status,STARTED_FULL,Started (full match),season-player:participation_status,player-season.js:715,no
+participation_status,STARTED_SUBBED_OFF,"Started, subbed off",season-player:participation_status,player-season.js:714,no
+participation_status,STARTED_SENT_OFF,"Started, sent off",season-player:participation_status,player-season.js:713,no
+participation_status,SUB_ON,Substitute on,season-player:participation_status,player-season.js:720,no
+participation_status,SUB_ON_SUBBED_OFF,"Sub on, subbed off",season-player:participation_status,player-season.js:719,no
+participation_status,SUB_ON_SENT_OFF,"Sub on, sent off",season-player:participation_status,player-season.js:718,no
+participation_status,UNUSED_SUB,Unused substitute,season-player:participation_status,player-season.js:723,no
+participation_status,NOT_INVOLVED,Not involved,season-player:participation_status,"player-season.js:727,729",no
+participation_status,UNKNOWN,Unknown,season-player:participation_status,player-season.js:725,no
+participation_status,SEASON_SUMMARY,Season summary,season-player:participation_status (sentinel on summary rows),season-csv.js:249,no
+minutes_quality,RELIABLE,Reliable,season-player:minutes_quality,player-season.js:456,no
+minutes_quality,ESTIMATED,Estimated,season-player:minutes_quality,player-season.js:456,no
+minutes_quality,UNAVAILABLE,Unavailable,season-player:minutes_quality,"player-season.js:360,370",no
+minutes_reasons,OPPONENT_SUB_REFERENCES_PLAYER,Opponent substitution references this player (informational),season-player:minutes_reasons (codes joined with ;),player-season.js:340,no
+minutes_reasons,NO_PARTICIPATION_MARKERS,No participation markers,season-player:minutes_reasons (codes joined with ;),player-season.js:358,no
+minutes_reasons,SUB_TIME_MISSING,Substitution time missing,season-player:minutes_reasons (codes joined with ;),"player-season.js:373,423",no
+minutes_reasons,MULTIPLE_SUB_ON,Multiple sub-on markers,season-player:minutes_reasons (codes joined with ;),player-season.js:375,no
+minutes_reasons,NO_FT_MARKER,No full-time marker,season-player:minutes_reasons (codes joined with ;),player-season.js:376,no
+minutes_reasons,END_FALLBACK_LAST_KNOWN,End fell back to last-known evidence,season-player:minutes_reasons (codes joined with ;),player-season.js:422,no
+minutes_reasons,STARTING_XI_MISSING,Starting XI missing,season-player:minutes_reasons (codes joined with ;),player-season.js:692,no
+minutes_reasons,NOT_IN_SQUAD,Not in squad,season-player:minutes_reasons (codes joined with ;),player-season.js:691,no
+x1_status,MATCH,Score chain consistent,season-player:x1_status,"analytics.js:1618; player-season.js:614,636",no
+x1_status,MISMATCH,Score chain inconsistent,season-player:x1_status,"analytics.js:1618; player-season.js:614,636",no
+x1_status,MANUAL-EMPTY,No manual score,season-player:x1_status,"analytics.js:1618; player-season.js:614,636",no
+state_suppressed,X1_MISMATCH_SUPPRESSED,Suppressed — score chain inconsistent,season-player:state_suppressed,player-season.js:804,no
+boolean,TRUE,Yes,season-player:started; subbed_on; subbed_off; sent_off,season-csv.js:101-105,no
+boolean,FALSE,No,season-player:started; subbed_on; subbed_off; sent_off,season-csv.js:101-105,no
+result,W,Win,season-player:result (cell = W/D/L + score),player-season.js:622,no
+result,D,Draw,season-player:result (cell = W/D/L + score),player-season.js:622,no
+result,L,Loss,season-player:result (cell = W/D/L + score),player-season.js:622,no
+zone,zone_dl,Defensive third · Left channel,season-player:zone_dl,season-csv.js:123-133,no
+zone,zone_dc,Defensive third · Central channel,season-player:zone_dc,season-csv.js:123-133,no
+zone,zone_dr,Defensive third · Right channel,season-player:zone_dr,season-csv.js:123-133,no
+zone,zone_ml,Middle third · Left channel,season-player:zone_ml,season-csv.js:123-133,no
+zone,zone_mc,Middle third · Central channel,season-player:zone_mc,season-csv.js:123-133,no
+zone,zone_mr,Middle third · Right channel,season-player:zone_mr,season-csv.js:123-133,no
+zone,zone_al,Attacking third · Left channel,season-player:zone_al,season-csv.js:123-133,no
+zone,zone_ac,Attacking third · Central channel,season-player:zone_ac,season-csv.js:123-133,no
+zone,zone_ar,Attacking third · Right channel,season-player:zone_ar,season-csv.js:123-133,no
+zone,zone_unlocated,Unlocated,season-player:zone_unlocated,season-csv.js:78,no
+location_zone,Defensive third · Left channel,Defensive third · Left channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Defensive third · Central channel,Defensive third · Central channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Defensive third · Right channel,Defensive third · Right channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Middle third · Left channel,Middle third · Left channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Middle third · Central channel,Middle third · Central channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Middle third · Right channel,Middle third · Right channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Attacking third · Left channel,Attacking third · Left channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Attacking third · Central channel,Attacking third · Central channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+location_zone,Attacking third · Right channel,Attacking third · Right channel,match-events:location_zone; season-events:location_zone; match-events-full-analysis:Pitch Zone,renderer.js:1249-1259,no
+event_label,Goal,Goal,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:17,yes
+event_label,Shot,Shot,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:23,yes
+event_label,Pass,Pass,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:31,yes
+event_label,Foul,Foul,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:39,yes
+event_label,Card,Card,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:44,yes
+event_label,Corner,Corner,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:45,yes
+event_label,Sub,Sub,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:46,yes
+event_label,Possession,Possession,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:48,yes
+event_label,Chance,Chance,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:68,yes
+event_label,Cross,Cross,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:69,yes
+event_label,Key Pass,Key Pass,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:70,yes
+event_label,Press,Press,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:71,yes
+event_label,Press Win,Press Win,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:72,yes
+event_label,Turnover,Turnover,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:73,yes
+event_label,Recovery,Recovery,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:74,yes
+event_label,Interception,Interception,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:75,yes
+event_label,Duel,Duel,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:76,yes
+event_label,Positive Transition,Positive Transition,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:77,yes
+event_label,Negative Transition,Negative Transition,match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:78,yes
+event_label,(custom tag),"(user-defined label — any text, readable as-is)",match-events:label; season-events:label; match-events-full-analysis:Label/Category/Event; clip_playlist:label,renderer.js:1797-1801,yes
+subtype:Shot,On target,On target,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:24,no
+subtype:Shot,Off target,Off target,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:24,no
+subtype:Shot,Blocked,Blocked,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:24,no
+subtype:Pass,Progressive,Progressive,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:32,no
+subtype:Pass,Lateral,Lateral,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:32,no
+subtype:Pass,Backward,Backward,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:32,no
+subtype:Pass,Long,Long,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:32,no
+subtype:Card,Yellow,Yellow,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:44,no
+subtype:Card,Red,Red,match-events:subtype; season-events:subtype; match-events-full-analysis:Subtype,renderer.js:44,no
+qualifier:Goal/Body part,Left foot,Left foot,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:19,no
+qualifier:Goal/Body part,Right foot,Right foot,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:19,no
+qualifier:Goal/Body part,Head,Head,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:19,no
+qualifier:Goal/Body part,Other,Other,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:19,no
+qualifier:Shot/Body part,Left foot,Left foot,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:26,no
+qualifier:Shot/Body part,Right foot,Right foot,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:26,no
+qualifier:Shot/Body part,Head,Head,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:26,no
+qualifier:Shot/Situation,Open play,Open play,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:27,no
+qualifier:Shot/Situation,Set piece,Set piece,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:27,no
+qualifier:Shot/Situation,Penalty,Penalty,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:27,no
+qualifier:Pass/Outcome,Successful,Successful,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:34,no
+qualifier:Pass/Outcome,Unsuccessful,Unsuccessful,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:34,no
+qualifier:Pass/Pressure,Under pressure,Under pressure,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:35,no
+qualifier:Pass/Pressure,Free,Free,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:35,no
+qualifier:Foul/Zone,Defensive third,Defensive third,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:41,no
+qualifier:Foul/Zone,Middle third,Middle third,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:41,no
+qualifier:Foul/Zone,Attacking third,Attacking third,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:41,no
+qualifier:Possession/Ended by,Shot,Shot,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:50,no
+qualifier:Possession/Ended by,Turnover,Turnover,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:50,no
+qualifier:Possession/Ended by,Foul won,Foul won,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:50,no
+qualifier:Possession/Ended by,Out of play,Out of play,match-events:qualifiers; season-events:qualifiers; match-events-full-analysis:Outcome (legacy qualifiers string),renderer.js:50,no
+header:match-events,timecode,Timecode (HH:MM:SS.t),match-events,renderer.js:4316,yes
+header:match-events,seconds,Start second,match-events,renderer.js:4316,yes
+header:match-events,end_timecode,End timecode (HH:MM:SS.t),match-events,renderer.js:4316,yes
+header:match-events,end_seconds,End second,match-events,renderer.js:4316,yes
+header:match-events,duration_seconds,Duration (seconds),match-events,renderer.js:4316,no
+header:match-events,label,Event label,match-events,renderer.js:4316,yes
+header:match-events,side,Team perspective,match-events,renderer.js:4316,no
+header:match-events,player_number,Player number,match-events,renderer.js:4316,no
+header:match-events,player_name,Player name,match-events,renderer.js:4316,no
+header:match-events,player_off_number,Player off (number),match-events,renderer.js:4316,no
+header:match-events,player_off_name,Player off (name),match-events,renderer.js:4316,no
+header:match-events,player_on_number,Player on (number),match-events,renderer.js:4316,no
+header:match-events,player_on_name,Player on (name),match-events,renderer.js:4316,no
+header:match-events,subtype,Subtype,match-events,renderer.js:4316,no
+header:match-events,qualifiers,Qualifiers,match-events,renderer.js:4316,no
+header:match-events,location_zone,Pitch zone,match-events,renderer.js:4316,no
+header:match-events,location_x,X (0–1),match-events,renderer.js:4316,no
+header:match-events,location_y,Y (0–1),match-events,renderer.js:4316,no
+header:match-events,outcome,Outcome (SUCCESS/FAILURE),match-events,renderer.js:4316,no
+header:season-events,match,Match label,season-events,renderer.js:3988,no
+header:season-events,timecode,Timecode (HH:MM:SS.t),season-events,renderer.js:3988,yes
+header:season-events,seconds,Start second,season-events,renderer.js:3988,yes
+header:season-events,end_timecode,End timecode (HH:MM:SS.t),season-events,renderer.js:3988,yes
+header:season-events,end_seconds,End second,season-events,renderer.js:3988,yes
+header:season-events,duration_seconds,Duration (seconds),season-events,renderer.js:3988,no
+header:season-events,label,Event label,season-events,renderer.js:3988,yes
+header:season-events,side,Team perspective,season-events,renderer.js:3988,no
+header:season-events,player_number,Player number,season-events,renderer.js:3988,no
+header:season-events,player_name,Player name,season-events,renderer.js:3988,no
+header:season-events,player_off_number,Player off (number),season-events,renderer.js:3988,no
+header:season-events,player_off_name,Player off (name),season-events,renderer.js:3988,no
+header:season-events,player_on_number,Player on (number),season-events,renderer.js:3988,no
+header:season-events,player_on_name,Player on (name),season-events,renderer.js:3988,no
+header:season-events,subtype,Subtype,season-events,renderer.js:3988,no
+header:season-events,qualifiers,Qualifiers,season-events,renderer.js:3988,no
+header:season-events,location_zone,Pitch zone,season-events,renderer.js:3988,no
+header:season-events,location_x,X (0–1),season-events,renderer.js:3988,no
+header:season-events,location_y,Y (0–1),season-events,renderer.js:3988,no
+header:season-events,outcome,Outcome (SUCCESS/FAILURE),season-events,renderer.js:3988,no
+header:match-events-full-analysis,Match ID,Match ID (date_opponent),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Date,Date,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Competition,Competition,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Home Team,Home team,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Away Team,Away team,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Opponent,Opponent,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Period,Period (see period vocabulary),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Official Minute,Official minute,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Second,Second (within official minute),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Match Seconds,Match seconds,match-events-full-analysis,renderer.js:5241,yes
+header:match-events-full-analysis,Match Time,Match time (decimal),match-events-full-analysis,renderer.js:5241,yes
+header:match-events-full-analysis,Video Time,Video time (position in video file),match-events-full-analysis,renderer.js:5241,yes
+header:match-events-full-analysis,Team,Team (our/opponent),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Primary Player ID,Primary player ID (squad player_N),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Secondary Player ID,Secondary player ID (player off — legacy),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Category,Category (legacy duplicate of Label),match-events-full-analysis,renderer.js:5241,yes
+header:match-events-full-analysis,Event,Event (legacy duplicate of Label),match-events-full-analysis,renderer.js:5241,yes
+header:match-events-full-analysis,Label,Label (read this one),match-events-full-analysis,renderer.js:5241,yes
+header:match-events-full-analysis,Subtype,Subtype,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Outcome,Outcome (legacy: serialized qualifiers),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Phase,Phase (legacy — always empty),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Pitch Zone,Pitch zone,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,X,X (0–100),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Y,Y (0–100),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Third,Third,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Channel,Channel,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Score For Before,Score for (before event),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Score Against Before,Score against (before event),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Score For After,Score for (after event),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Score Against After,Score against (after event),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Score State,Score state (before event),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Sequence ID,Sequence ID,match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Note,Note (legacy — always empty),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Created At,Created at (legacy — always empty),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Updated At,Updated at (legacy — always empty),match-events-full-analysis,renderer.js:5241,no
+header:match-events-full-analysis,Event Outcome,Event outcome (SUCCESS/FAILURE),match-events-full-analysis,renderer.js:5241,no
+header:season-player,match_key,Match key (match label or SEASON_SUMMARY),season-player,season-csv.js:62-79,no
+header:season-player,date,Date,season-player,season-csv.js:62-79,no
+header:season-player,opponent,Opponent,season-player,season-csv.js:62-79,no
+header:season-player,competition,Competition,season-player,season-csv.js:62-79,no
+header:season-player,home_away,Venue (home/away/neutral),season-player,season-csv.js:62-79,no
+header:season-player,result,Result (W/D/L + score),season-player,season-csv.js:62-79,no
+header:season-player,x1_status,Score-chain status,season-player,season-csv.js:62-79,no
+header:season-player,player_id,Player ID,season-player,season-csv.js:62-79,no
+header:season-player,player_name,Player name,season-player,season-csv.js:62-79,no
+header:season-player,player_number,Player number,season-player,season-csv.js:62-79,no
+header:season-player,participation_status,Participation status,season-player,season-csv.js:62-79,no
+header:season-player,started,Started,season-player,season-csv.js:62-79,no
+header:season-player,subbed_on,Subbed on,season-player,season-csv.js:62-79,no
+header:season-player,subbed_on_min,Subbed on (minute),season-player,season-csv.js:62-79,no
+header:season-player,subbed_off,Subbed off,season-player,season-csv.js:62-79,no
+header:season-player,subbed_off_min,Subbed off (minute),season-player,season-csv.js:62-79,no
+header:season-player,sent_off,Sent off,season-player,season-csv.js:62-79,no
+header:season-player,minutes_est,Estimated minutes,season-player,season-csv.js:62-79,no
+header:season-player,minutes_quality,Minutes quality,season-player,season-csv.js:62-79,no
+header:season-player,minutes_reasons,Minutes reasons,season-player,season-csv.js:62-79,no
+header:season-player,goals,Goals,season-player,season-csv.js:62-79,no
+header:season-player,shots,Shots,season-player,season-csv.js:62-79,no
+header:season-player,shots_on_target,Shots on target,season-player,season-csv.js:62-79,no
+header:season-player,chances,Chances,season-player,season-csv.js:62-79,no
+header:season-player,key_passes,Key passes,season-player,season-csv.js:62-79,no
+header:season-player,crosses,Crosses,season-player,season-csv.js:62-79,no
+header:season-player,passes,Passes,season-player,season-csv.js:62-79,no
+header:season-player,pass_success_pct,Pass success % (pooled),season-player,season-csv.js:62-79,no
+header:season-player,presses,Presses,season-player,season-csv.js:62-79,no
+header:season-player,press_wins,Press wins,season-player,season-csv.js:62-79,no
+header:season-player,interceptions,Interceptions,season-player,season-csv.js:62-79,no
+header:season-player,recoveries,Recoveries,season-player,season-csv.js:62-79,no
+header:season-player,turnovers,Turnovers,season-player,season-csv.js:62-79,no
+header:season-player,duels,Duels,season-player,season-csv.js:62-79,no
+header:season-player,fouls,Fouls,season-player,season-csv.js:62-79,no
+header:season-player,yellow_cards,Yellow cards,season-player,season-csv.js:62-79,no
+header:season-player,red_cards,Red cards,season-player,season-csv.js:62-79,no
+header:season-player,transitions_positive,Positive transitions,season-player,season-csv.js:62-79,no
+header:season-player,transitions_negative,Negative transitions,season-player,season-csv.js:62-79,no
+header:season-player,positive_events,Positive events,season-player,season-csv.js:62-79,no
+header:season-player,negative_events,Negative events,season-player,season-csv.js:62-79,no
+header:season-player,events_total,Events total,season-player,season-csv.js:62-79,no
+header:season-player,located_events,Located events,season-player,season-csv.js:62-79,no
+header:season-player,unlocated_events,Unlocated events,season-player,season-csv.js:62-79,no
+header:season-player,located_share_pct,Located share %,season-player,season-csv.js:62-79,no
+header:season-player,events_1h,Events 1st half,season-player,season-csv.js:62-79,no
+header:season-player,events_2h,Events 2nd half,season-player,season-csv.js:62-79,no
+header:season-player,events_et1,Events ET 1st half,season-player,season-csv.js:62-79,no
+header:season-player,events_et2,Events ET 2nd half,season-player,season-csv.js:62-79,no
+header:season-player,state_winning,Events while winning,season-player,season-csv.js:62-79,no
+header:season-player,state_drawing,Events while drawing,season-player,season-csv.js:62-79,no
+header:season-player,state_losing,Events while losing,season-player,season-csv.js:62-79,no
+header:season-player,state_suppressed,Score-state suppressed (flag),season-player,season-csv.js:62-79,no
+header:season-player,zone_dl,Defensive third · Left channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_dc,Defensive third · Central channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_dr,Defensive third · Right channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_ml,Middle third · Left channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_mc,Middle third · Central channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_mr,Middle third · Right channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_al,Attacking third · Left channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_ac,Attacking third · Central channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_ar,Attacking third · Right channel,season-player,season-csv.js:62-79,no
+header:season-player,zone_unlocated,Unlocated events,season-player,season-csv.js:62-79,no
+header:clip_playlist,clip,Clip number,clip_playlist,renderer.js:4414,no
+header:clip_playlist,label,Event label,clip_playlist,renderer.js:4414,yes
+header:clip_playlist,details,Details,clip_playlist,renderer.js:4414,no
+header:clip_playlist,start_timecode,Start timecode (HH:MM:SS.t video clock),clip_playlist,renderer.js:4414,yes
+header:clip_playlist,end_timecode,End timecode (HH:MM:SS.t video clock),clip_playlist,renderer.js:4414,yes
+header:clip_playlist,duration_seconds,Duration (seconds),clip_playlist,renderer.js:4414,no
+header:clip_playlist,filename,Clip filename (ASCII-safe),clip_playlist,renderer.js:4414,yes
