@@ -413,6 +413,7 @@ doc-only commit — not fixed now, per the STOP rules):
 ---
 
 ## Part E — Open questions needing architect decision
+> Disposition: E1-E3 ruled at D2 (architect decisions D2-0..D2-8); E4-E8 ruled in Part F (BINDING).
 
 1. **Once Sport import format.** No in-repo document specifies which
    columns Once Sport actually consumes (only the ownership split,
@@ -462,3 +463,62 @@ doc-only commit — not fixed now, per the STOP rules):
 
 *Deliverable per the R2-EXREAD task book: this commit contains ONLY this
 document. No source, test, or UI files are modified.*
+
+---
+
+## Part F — Architect Rulings (D3 round, post-480162c)
+
+Status: BINDING. Source: architect review of R2-DICTFIX-D2 (commit 480162c).
+These rulings close Part E items E4-E8. F-numbers map to E-numbers.
+F1 and F2 are binding requirements for the RF-Q3 (Tier 2) specification.
+
+F1 (=E4). mm:ss readable clock — for Tier 2 companion exports:
+  a. Derivation: TRUNCATE (floor) the machine match-clock value to
+     minute:second. Never round. Truncation guarantees the readable
+     cell is a pure prefix-view of the machine value and stays stable
+     across re-exports.
+  b. Format: mm:ss with UNBOUNDED minutes (football time can exceed
+     59:59, e.g. 97:04). Minutes zero-padded to 2 digits, wider when
+     needed; seconds always 2 digits.
+  c. Column name: clock_mmss. General convention for derived readable
+     columns: <machine_column>_label (e.g. outcome_label). clock_mmss
+     is the one sanctioned exception (reformatting, not label lookup).
+  d. season-events carries ONLY the match-clock readable. The
+     video-clock readable stays in full-analysis, where the machine
+     video time already exists. Readable columns must be derivable
+     from the SAME row's machine values (D2-0). Adding video time to
+     season-events is a machine-layer change requiring its own spec.
+
+F2 (=E5). Glossary sidecar — Tier 2 implementation ruling:
+  a. Delivery: AUTOMATIC SIDECAR. Whenever a data export is written,
+     the write layer also writes the glossary CSV next to it.
+     Rationale: consumers of exports are the consumers of the key;
+     no extra UI; glossary and data never drift.
+  b. Filename: exactly pitchlog-data-dictionary.csv, identical
+     global content every time (overwrite in place).
+  c. Encoding: UTF-8 with BOM via the existing R2-A write layer.
+  d. EXCEPTION: do NOT write the sidecar into the clip-playlist
+     export folder. That folder is machine-watched by the Once Sport
+     pipeline; introducing new files there before watcher behavior is
+     confirmed violates the D2-1 conservative-freeze spirit. Revisit
+     at Real Match-Day Validation.
+  e. Separate glossary button: REJECTED. Repo-docs-only (current
+     Tier 1 state) remains the fallback of record.
+
+F3 (=E6). Unknown marker in readable cells:
+  a. Machine columns: EMPTY means unknown/absent. Unchanged, absolute.
+  b. Readable *_label columns: use the EM DASH character U+2014 (—)
+     to mean "known unknown / not applicable". Never "N/A", never
+     whitespace-only cells.
+  c. This convention must be documented in the glossary about row.
+
+F4 (=E7). Label language:
+  a. Value labels: ENGLISH ONLY in v1, for exports AND glossary.
+  b. Player and opponent names: preserved as-is (Unicode/Amharic).
+     Never transliterated. Names are data, not labels.
+  c. Future Amharic value labels, if a real consumer requires them,
+     go into additional GLOSSARY columns (e.g. readable_label_am) —
+     never into export columns. Evidence-driven, per D2-1 discipline.
+
+F5 (=E8). CLOSED — executed in 480162c; r2b dictionary-contract suite
+  verified green post-corrections (48/48) and full battery 26/26 at gate.
