@@ -1,16 +1,28 @@
 # PitchLog — Save-Flow Specification
 
 **Task ID:** R2-C-SPEC-D4
-**Status:** PROPOSED SPECIFICATION — no implementation. This document changes
+**Amendment:** R2-C-SPEC-AMEND-D6 (baseline `663585a`, documentation-only).
+Records the binding architect rulings D1–D10 as **Part F** (closing Part D
+questions D.1–D.10), corrects the video-relink statement in risk B10 and
+in question E.5, and fixes the R2-C implementation scope as **Part G**. The
+amendment changes no source, no tests, no UI, no schema, no package files.
+**Status:** RULED SPECIFICATION — no implementation. This document changes
 no source, no tests, no UI, no schema. It records the verified current state
 (Part A), rates its risks (Part B), proposes a target design in prose
-(Part C), and surfaces every decision this codebase and its precedents
-cannot settle (Parts D and E).
+(Part C, superseded where Part F rules otherwise), and surfaces every
+decision this codebase and its precedents cannot settle (Parts D and E —
+the architect questions D.1–D.10 are now closed by the binding Part F
+rulings; the product-owner questions remain Part E's).
 **Baseline:** `ca0a13a` (D3 architect rulings recorded as spec Part F). All
 source citations below are line numbers at this commit. Note: local repo
 config now carries `core.filemode=false` per architect decision D4-a
 (environment-side mode flapping); repo content is byte-identical to
 `ca0a13a` and the config is local-only, never committed.
+**Amendment baseline:** `663585a` (= `56afc5f` plus the owner-added
+package-lock.json). All Part A citations remain valid at `663585a`:
+`src/` and `tests/` are byte-identical to `ca0a13a` there (verified —
+`git diff --stat ca0a13a 663585a -- src/ tests/` is empty; the
+intervening commits are doc-only `56afc5f` and lockfile-only `663585a`).
 **Companion documents:** `docs/export-readability-specification.md` (export
 contracts, Part F rulings), `docs/export-data-dictionary.md` (per-column
 export reference), `docs/pitchlog-data-dictionary.csv` (glossary of record),
@@ -391,7 +403,7 @@ MEDIUM / HIGH.
 | B7 | **Export ≠ saved (provenance gap).** Exports serialize unsaved in-memory state; a consumer can hold a CSV for a session that was never saved — the deliverable exists while the "source of truth" file does not. No reminder exists. | MED | LOW–MED | A.7; renderer.js:4304–4353 |
 | B8 | **Autosave vs manual-save vs export races.** F1.3 closed the write/delete resurrection and stale-completion races (verified by a dedicated suite); residual documented window is the flush interleaving with an async write of the same dirty session (benign staleness ≤ debounce). Exports never touch save state, so no export race exists by construction. | V.LOW | LOW | main.js:631–651, 638–643; tests/autosave-safety-check.js:1–36 |
 | B9 | **Squad dual-write divergence.** squad.json persists immediately while the session's embedded squad snapshot rides the debounced autosave; a crash between the two leaves them out of sync. Bounded: recovery reconciles against the local squad and warns on missing refs (both pre- and post-recovery), events never rewritten. | MED | LOW | renderer.js:439/474 vs 4600–4610; 4853–4870, 4942–4953 |
-| B10 | **Session portability / video relink.** `videoPath` is stored absolute; moving files or machines leaves `__videoExists: false` (warned in the recovery modal and load path) but no relink helper; events keep match-time so data survives. | MED | LOW | main.js:483–497; renderer.js:4840–4848 |
+| B10 | **Session portability / video relink.** `videoPath` is stored absolute; moving files or machines leaves `__videoExists: false` (warned in the recovery modal and load path). **Corrected by R2-C-SPEC-AMEND-D6:** this row originally claimed "no relink helper" — that was inaccurate. A usable relink workflow already exists: a broken video source shows the video-error UI with a "Find video" button (renderer.js:749–776) wired to `relinkVideo()` (renderer.js:778–784), which re-links via `loadVideoFromPath()` (renderer.js:636–653) — and that call marks the session dirty, so the updated video path persists through autosave and the next save. Both the load path (renderer.js:4212) and the recovery path (renderer.js:4965–4968) restore video through `loadVideoFromPath`, so a moved video is re-linkable immediately after load/recovery via that error UI. The residual gap is only that the recovery modal itself shows a "file not found" label (renderer.js:4840–4848) with no direct relink action — deferred as a future UX improvement (Part G). Events keep match-time so data survives. | MED | LOW | main.js:483–497; renderer.js:749–784, 636–653, 4212, 4965–4968, 4840–4848 |
 | B11 | **Unbounded session size / write amplification.** The full session (pretty-printed, embedded squad) is rewritten on every debounced autosave; very large event counts make each write multi-MB and every mutation re-arms it. No quota limit exists (plain files), so this is performance/wear, not loss. | LOW | LOW | main.js:378, 664–665; renderer.js:4600–4610 |
 | B12 | **Version conflicts.** Forward files are rejected with an explicit update prompt (good); migration is one-way and additive-only (good); unknown fields are preserved (main.js:167–170). Residual: hand-edited or third-party-written files with malformed fields are silently normalized per v0→v1 rules (ids become 0, labels 'Unknown') rather than rejected. | LOW | LOW | main.js:116–122, 145–172 |
 | B13 | **Offline / multi-device / multi-user.** Not risks in the current design: the app is fully offline with no sync surface (Part 0). Any future multi-device expectation would be net-new architecture — routed to Part E, not designed around here. | — | — | Part 0; A.3 |
@@ -574,7 +586,12 @@ noise?
 E.5 When you open a saved session on a different computer (or after
 moving your video files), the video will not auto-load and you get a
 "file not found" note. Is that enough, or do you want a "find the video
-again" helper?
+again" helper? *[Premise corrected by R2-C-SPEC-AMEND-D6: a "find the
+video" helper already exists — the broken video source shows the
+video-error UI with a "Find video" button (renderer.js:749–784), and
+the relinked path persists (renderer.js:636–653). What does not exist
+is direct relink access from the recovery modal itself; the Part F/G
+rulings defer that as a future UX improvement.]*
 
 E.6 The season view forgets its match list every time the app closes —
 you re-add the saved match files each session. Should it remember the
@@ -595,6 +612,224 @@ you before Real Match-Day Validation?
 
 ---
 
+## Part F — Architect rulings (R2-C-SPEC-AMEND-D6 round, post-663585a)
+
+Status: BINDING. Source: architect rulings D1–D10 issued on review of this
+specification (R2-C-SPEC-D4). These rulings close Part D items D.1–D.10.
+F-numbers map to the D-numbers they close (F1 closes D.1 … F10 closes
+D.10); the architect's ruling labels D1–D10 map one-to-one onto the
+Part D questions. The rulings are recorded as issued and are not
+reinterpreted here; where a ruling supersedes a Part C proposal, that
+is noted in the entry. Part E items settled as a side effect: E.2 by
+F3 (one .bak, no rotation), E.3 by F2 (second launch focuses the
+existing window), E.4 by F8 (post-export reminder), E.8 by F5
+(corrupt-file notice); E.5's premise is corrected at B10/E.5 above;
+E.1, E.6, E.7, E.9 remain open product-owner questions.
+
+F1 (=D.1) fsync / durability — RULING: DEFER.
+Do not add fsync in the initial R2-C implementation. The existing
+writer durability behavior (main.js:556–558 — "neither weakened nor
+strengthened") remains unchanged. Reason: adding fsync changes the
+durability guarantees and performance characteristics of the existing
+save mechanism and therefore requires a dedicated future hardening
+task. Recorded as issued:
+
+  R2-C initial implementation: NO fsync
+  Future durability hardening: separate evidence-driven task
+
+This supersedes C.6 (INC-6) for R2-C: the durability-hardening
+increment is not part of this phase.
+
+F2 (=D.2) Single-instance architecture — RULING: IMPLEMENT.
+PitchLog is a single-instance desktop application. The implementation
+phase will use Electron's single-instance mechanism (the C.1/INC-1
+shape). Expected behavior, as issued:
+
+  First PitchLog instance owns the application.
+
+  Second launch:
+  → focus the existing application window
+  → terminate the second process
+
+No multi-instance persistence namespacing is required. No concurrent
+writers are supported.
+
+F3 (=D.3) Save-over backup — RULING: IMPLEMENT.
+When overwriting an existing saved session:
+
+  session file
+  → preserve immediately previous successful version as one .bak
+  → write new session
+
+Requirements, as issued:
+
+- exactly one automatic .bak backup;
+- the backup represents the immediately previous successful saved
+  version;
+- no timestamp rotation;
+- no multiple generations;
+- no backup for a brand-new session file.
+
+This is a recovery mechanism for accidental overwrite or failed
+subsequent save scenarios. Confirms C.3 (INC-3) with the D.3
+sub-questions closed: single generation, no rotation.
+
+F4 (=D.4) Power / suspend flush — RULING: IMPLEMENT AS AN ADDITIVE
+TRIGGER.
+Do not redesign the autosave system. Do not replace existing flush
+semantics. The implementation phase may add power/suspend/shutdown
+lifecycle triggers (the C.2/INC-2 shape) that invoke the existing
+save/flush machinery. Concept, as issued:
+
+  power lifecycle event
+        ↓
+  existing flush semantics
+
+NOT:
+
+  power lifecycle event
+        ↓
+  new independent save architecture
+
+Existing autosave behavior remains protected.
+
+F5 (=D.5) Corrupt autosave visibility — RULING: IMPLEMENT.
+A corrupt autosave/recovery file must not silently appear identical to
+"no autosave exists". The recovery/read contract will be extended
+additively in the implementation phase (the C.4/INC-4 shape — an
+additive, distinguishable failure result on the existing
+`autosave:read` path, not a parallel architecture). The corrupted
+file must:
+
+- remain preserved;
+- not be silently deleted;
+- be surfaced clearly to the analyst/application;
+- be distinguishable from normal absence of recovery data.
+
+Prefer additive evolution of the existing recovery/read contract
+rather than creation of unnecessary parallel architecture.
+
+F6 (=D.6) In-flight interval persistence — RULING: DEFER.
+Do not persist currently running/in-flight intervals during R2-C.
+Existing runtime-only interval behavior (A.2.8, risk B2) remains
+unchanged. A hard crash may therefore still lose an in-progress
+interval. This requires a separate future architecture decision
+because persisting interval state changes autosave/recovery
+semantics.
+
+F7 (=D.7) Autosave max-wait — RULING: DEFER.
+Do not add a maximum-wait autosave timer in R2-C. Do not change the
+existing 1500 ms trailing/full-reset debounce behavior (A.2.1, risk
+B1) during this phase. Future reconsideration must be evidence-driven
+through Real Match-Day Validation. The initial R2-C reliability
+improvement comes from:
+
+- existing autosave;
+- lifecycle flush protection;
+- single-instance protection;
+- overwrite backup;
+- corruption visibility.
+
+F8 (=D.8) Unsaved export warning — RULING: IMPLEMENT.
+PitchLog may export data from unsaved work. Exports must not be
+blocked. However, after a successful relevant data export, if
+meaningful unsaved session changes exist, the analyst must receive a
+clear informational warning (the C.5/INC-5 shape). Concept, as issued:
+
+  Export succeeds
+        ↓
+  session contains unsaved meaningful changes
+        ↓
+  informational warning
+
+The warning must not change:
+
+- exported data contents;
+- filenames;
+- encoding;
+- BOM behavior;
+- frozen R2-A export contracts;
+- existing column contracts.
+
+Recorded explicitly, as issued: this requires an **additive R2-A
+contract amendment** during implementation.
+
+F9 (=D.9) Squad wrapper version quirk — RULING: LEAVE AS-IS.
+Do not clean up the existing squad wrapper version inconsistency
+(A.5: saves stamp the wrapper `__schemaVersion: 4` while the
+wrapped-object migration returns a `1`-stamped wrapper — main.js:582
+vs 331–333, invisible because `squad:load` returns only `.players`)
+during R2-C. It is outside the primary reliability objectives. It
+must not be bundled opportunistically into this work. Future
+squad-format evolution may address it.
+
+F10 (=D.10) Multi-instance strategy — RULING: CLOSED BY D2 (F2 here).
+PitchLog will not support simultaneous independent instances sharing
+the same persistence location. No per-instance namespaces. No
+last-writer-wins strategy. No concurrent session sharing. The
+single-instance decision (F2) is the approved architecture.
+
+---
+
+## Part G — R2-C implementation scope (fixed by the Part F rulings)
+
+The Part F rulings fix what the R2-C implementation phase builds. The
+scope below is closed: implementation work may not add to it without a
+new architect ruling.
+
+### G.1 Implement now
+
+R2-C-1 — Single-instance protection (F2; C.1/INC-1; closes risk B4).
+R2-C-2 — Save-over .bak backup (F3; C.3/INC-3; closes risk B6).
+R2-C-3 — Corrupt-autosave visibility (F5; C.4/INC-4; closes risk B5).
+R2-C-4 — Power/suspend lifecycle flush (F4; C.2/INC-2; shrinks risk
+B1's hard-kill window).
+R2-C-5 — Unsaved-export warning (F8; C.5/INC-5; addresses risk B7;
+carries the additive R2-A contract amendment recorded in F8).
+
+### G.2 Explicitly deferred
+
+- fsync durability hardening (F1 — C.6/INC-6 stays out of R2-C);
+- in-flight interval persistence (F6 — risk B2 remains open);
+- autosave max-wait (F7 — risk B1's burst window remains open);
+- multi-instance support (F10 — closed by the single-instance
+architecture of F2);
+- Season View persistence (the season-view match list remains
+in-memory only, A.8 — nothing in this round authorizes persisting it);
+- direct recovery-modal video relink access — with the video-relink
+correction recorded above: existing video relink functionality is
+RETAINED (video error → "Find video" → `relinkVideo()`,
+renderer.js:749–784 → `loadVideoFromPath()`, renderer.js:636–653,
+which marks the session dirty so the updated video path persists);
+only direct access to that relink workflow from the recovery modal is
+deferred as a future UX improvement.
+
+No additional scope is introduced by this amendment.
+
+### G.3 Frozen contracts preserved
+
+This amendment — and the R2-C implementation phase it scopes —
+explicitly preserves:
+
+- Schema v4 (no schema change, no migration change);
+- analytics behavior;
+- existing autosave core behavior (dirty tracking, the 1500 ms
+trailing full-reset debounce, clear-on-save/load, recovery UX; every
+sanctioned R2-C addition wraps the existing machinery, none replaces
+it);
+- R2-A behavior (export filename/BOM and the R2-A contract pins —
+R2-C-5's warning is post-export feedback only);
+- the Season Player 63-column contract;
+- the R1 outcome-last-column invariant;
+- the existing export machine contracts.
+
+This amendment is documentation only: no implementation is authorized
+by it, and no implementation has started.
+
+---
+
 *End of specification. No source, test, UI, or schema file was modified by
-this document. Part C is proposal-only prose; Parts D/E are open questions
-awaiting rulings.*
+this document or by the R2-C-SPEC-AMEND-D6 amendment. Part C is
+proposal-only prose, superseded where Part F rules otherwise; Part D's
+questions D.1–D.10 are closed by the binding Part F rulings; Part G fixes
+the implementation scope. No implementation has started.*
