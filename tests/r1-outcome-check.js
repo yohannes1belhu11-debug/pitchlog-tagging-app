@@ -62,7 +62,8 @@ const electronStub = {
     getPath: () => '/tmp/r1-harness-userdata',
     whenReady: () => new Promise(() => {}), // never resolve -> no BrowserWindow
     on: () => {},
-    quit: () => {}
+    quit: () => {},
+    requestSingleInstanceLock: () => true // R2-C-1: this stub always plays the first (only) instance
   },
   BrowserWindow: class StubBrowserWindow {
     constructor() { this.webContents = { send: () => {}, once: () => {} }; }

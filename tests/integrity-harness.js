@@ -11,6 +11,9 @@
 //   FIX 5  collision-safe player id generation (src/integrity.js)
 //   REG    main-process regression: squad save/load, autosave
 //          write/read/delete/flush-sync, CSV export, session load
+//   R2-C-1 single-instance lock: lock acquired -> normal startup armed;
+//          lock denied -> app.quit() with no window and no startup; the
+//          'second-instance' handler restores + focuses the main window
 //   STATIC source-level wiring checks for renderer.js / index.html
 //          (Fix 2 double-fire guard, integrity.js load order,
 //          generatePlayerId usage, recovery warning wiring)
@@ -18,8 +21,11 @@
 // How it works: src/main.js is required into plain Node with a stubbed
 // 'electron' module (Module._load hook) and a failure-injectable 'fs'
 // proxy. IPC handlers registered via ipcMain.handle/on are captured and
-// invoked directly. app.whenReady() never resolves in the stub, so no
-// BrowserWindow is ever created.
+// invoked directly. app.whenReady() resolves only when a test resolves
+// the captured resolver, so no BrowserWindow is ever created unless a
+// test explicitly drives ready (R2-C-1 Test C does). app-level listeners
+// are recorded, app.quit() is counted, and requestSingleInstanceLock()
+// is controllable via controls.singleInstanceLock (R2-C-1 Tests A/B/C).
 //
 // Run:  node tests/integrity-harness.js   (from the pitchlog project root)
 
@@ -57,21 +63,45 @@ const controls = {
   openDialog: { canceled: true, filePaths: [] },
   lastErrorBox: null,
   failWritePaths: new Set(),             // absolute paths where writeFile must fail
-  failRenamePaths: new Set()             // absolute destinations where rename must fail
+  failRenamePaths: new Set(),            // absolute destinations where rename must fail
+  // R2-C-1 single-instance lock controls:
+  singleInstanceLock: true,              // what app.requestSingleInstanceLock() returns
+  lockRequests: 0,                       // observable: lock request count
+  quitCalls: 0,                          // observable: app.quit() call count
+  whenReadyResolvers: []                 // whenReady() captures; tests may resolve them
 };
+
+// R2-C-1: recorded app-level listeners ('second-instance', etc.) and
+// every StubBrowserWindow ever constructed, so the lock tests can observe
+// and drive main.js's real lifecycle wiring.
+const appListeners = {};
+const bwInstances = [];
 
 const electronStub = {
   app: {
     // 'userData' IS the app-data directory itself; other named paths
     // (e.g. 'desktop') would be siblings inside it for this stub.
     getPath: (name) => (name === 'userData' ? userDataDir : path.join(userDataDir, name)),
-    whenReady: () => new Promise(() => {}), // never resolve -> createWindow never runs
-    on: () => {},
-    quit: () => {}
+    // Resolves only when a test resolves the captured resolver — the
+    // default (never ready, createWindow never runs) is unchanged.
+    whenReady: () => new Promise((resolve) => { controls.whenReadyResolvers.push(resolve); }),
+    on: (channel, fn) => { appListeners[channel] = fn; }, // R2-C-1: record app listeners
+    quit: () => { controls.quitCalls++; },                // R2-C-1: observable quit
+    // R2-C-1: controllable lock result; counted so tests can assert calls.
+    requestSingleInstanceLock: () => { controls.lockRequests++; return controls.singleInstanceLock; }
   },
   BrowserWindow: class StubBrowserWindow {
-    constructor() { this.webContents = { send: () => {}, once: () => {} }; }
-    on() {} loadFile() {} close() {} isDestroyed() { return false; } focus() {}
+    constructor() {
+      bwInstances.push(this); // R2-C-1: track windows — no second main window may appear
+      this.webContents = { send: () => {}, once: () => {} };
+      this.minimized = false; // test-controllable via isMinimized()
+      this.restored = false;  // observable: restore() was called
+      this.focused = false;   // observable: focus() was called
+    }
+    on() {} loadFile() {} close() {} isDestroyed() { return false; }
+    isMinimized() { return !!this.minimized; }
+    restore() { this.restored = true; this.minimized = false; }
+    focus() { this.focused = true; }
   },
   ipcMain: {
     handlers: {},
@@ -432,6 +462,57 @@ section('STATIC — renderer wiring (source-level checks)');
   const posIntegrity = htmlSrc.indexOf('src="integrity.js"');
   const posRenderer = htmlSrc.indexOf('src="renderer.js"');
   ok('STATIC', 'integrity.js loaded before renderer.js', posIntegrity > -1 && posRenderer > -1 && posIntegrity < posRenderer);
+}
+
+// ===========================================================================
+section('R2-C-1 — single-instance lock (first instance / second-instance / denied lock)');
+
+// Test A — lock acquired: the harness's own initial module load IS the
+// first instance (controls.singleInstanceLock defaults to true).
+{
+  ok('R2-C-1', 'A1: lock requested exactly once at startup', controls.lockRequests === 1, 'lockRequests=' + controls.lockRequests);
+  ok('R2-C-1', 'A2: lock acquired → app.quit() NOT called', controls.quitCalls === 0, 'quitCalls=' + controls.quitCalls);
+  ok('R2-C-1', 'A3: normal startup armed (whenReady consumed exactly once)', controls.whenReadyResolvers.length === 1, 'resolvers=' + controls.whenReadyResolvers.length);
+  ok('R2-C-1', 'A4: second-instance handler registered', typeof appListeners['second-instance'] === 'function');
+  ok('R2-C-1', 'A5: existing lifecycle listeners registered (window-all-closed, activate)',
+    typeof appListeners['window-all-closed'] === 'function' && typeof appListeners['activate'] === 'function');
+  ok('R2-C-1', 'A6: no window created while whenReady is pending', bwInstances.length === 0, 'windows=' + bwInstances.length);
+}
+
+// Test C — second-instance event: restore + focus the existing window,
+// never create another one. Resolve the armed whenReady promise so the
+// real createWindow() runs against the stub BrowserWindow, then fire the
+// captured 'second-instance' listener.
+{
+  controls.whenReadyResolvers.forEach((resolve) => resolve());
+  await new Promise((resolve) => setTimeout(resolve, 25)); // let .then(createWindow) land
+  ok('R2-C-1', 'C1: first instance created exactly one main window on ready', bwInstances.length === 1, 'windows=' + bwInstances.length);
+  const win = bwInstances[0];
+  win.minimized = true; win.restored = false; win.focused = false;
+  appListeners['second-instance']();
+  ok('R2-C-1', 'C2: minimized main window is restored by second-instance', win.restored === true);
+  ok('R2-C-1', 'C3: existing main window is focused by second-instance', win.focused === true);
+  ok('R2-C-1', 'C4: second-instance creates no additional window', bwInstances.length === 1, 'windows=' + bwInstances.length);
+  win.minimized = false; win.restored = false; win.focused = false;
+  appListeners['second-instance']();
+  ok('R2-C-1', 'C5: un-minimized window is focused WITHOUT a restore call', win.focused === true && win.restored === false);
+}
+
+// Test B — lock denied: simulate a second launch by re-requiring main.js
+// with the lock refusing. Runs LAST because the re-require re-registers
+// the IPC handlers (identical functions, fresh closures).
+{
+  const resolversBefore = controls.whenReadyResolvers.length;
+  const windowsBefore = bwInstances.length;
+  const firstHandler = appListeners['second-instance'];
+  controls.singleInstanceLock = false;
+  delete require.cache[require.resolve(path.join(__dirname, '..', 'src', 'main.js'))];
+  require(path.join(__dirname, '..', 'src', 'main.js')); // the "second launch"
+  ok('R2-C-1', 'B1: second launch requests the lock (and is refused)', controls.lockRequests === 2, 'lockRequests=' + controls.lockRequests);
+  ok('R2-C-1', 'B2: denied lock → app.quit() called exactly once', controls.quitCalls === 1, 'quitCalls=' + controls.quitCalls);
+  ok('R2-C-1', 'B3: denied process never arms normal startup (whenReady not consumed)', controls.whenReadyResolvers.length === resolversBefore, 'resolvers=' + controls.whenReadyResolvers.length);
+  ok('R2-C-1', 'B4: denied process creates no window', bwInstances.length === windowsBefore, 'windows=' + bwInstances.length);
+  ok('R2-C-1', 'B5: denied process registers no lifecycle handler of its own', appListeners['second-instance'] === firstHandler);
 }
 
 // ---------------------------------------------------------------------------

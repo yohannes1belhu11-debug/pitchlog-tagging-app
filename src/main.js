@@ -57,15 +57,43 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+// --- R2-C-1: Single-instance protection (architect ruling F2) ---
+// PitchLog is a single-instance application (save-flow specification,
+// Part F ruling F2 / Part G.1). The first process to launch acquires the
+// OS-level single-instance lock and owns the app — including the userData
+// persistence files (autosave.json, squad.json). Any further launch fails
+// to acquire the lock and exits below, before a window is ever created,
+// so two processes can never write those files concurrently.
+const gotTheLock = app.requestSingleInstanceLock();
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+if (!gotTheLock) {
+  // Second instance: quit immediately. No window, no UI initialization,
+  // no interference with the first instance (which holds the lock and
+  // retains all persistence and renderer behavior).
+  app.quit();
+} else {
+  // First instance: a second launch was attempted while we are running.
+  // Electron delivers it here as 'second-instance' — restore our existing
+  // window (un-minimizing it if needed) and focus it instead of ever
+  // creating a second main window. The detached-video window belongs to
+  // this instance's window lifecycle and is deliberately untouched.
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
-});
+  app.whenReady().then(createWindow);
+
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}
 
 // --- Schema versioning & migration ---
 //
