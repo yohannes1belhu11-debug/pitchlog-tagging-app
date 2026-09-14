@@ -14,6 +14,10 @@
 //   R2-C-1 single-instance lock: lock acquired -> normal startup armed;
 //          lock denied -> app.quit() with no window and no startup; the
 //          'second-instance' handler restores + focuses the main window
+//   R2-C-2 save-over .bak backup: existing destination copied to <name>.bak
+//          before the overwrite (single generation, replaced each save); a
+//          brand-new destination gets no .bak; a failed backup copy
+//          aborts the save fail-closed (destination untouched)
 //   STATIC source-level wiring checks for renderer.js / index.html
 //          (Fix 2 double-fire guard, integrity.js load order,
 //          generatePlayerId usage, recovery warning wiring)
@@ -64,6 +68,7 @@ const controls = {
   lastErrorBox: null,
   failWritePaths: new Set(),             // absolute paths where writeFile must fail
   failRenamePaths: new Set(),            // absolute destinations where rename must fail
+  failCopyPaths: new Set(),              // absolute destinations where copyFile must fail (R2-C-2)
   // R2-C-1 single-instance lock controls:
   singleInstanceLock: true,              // what app.requestSingleInstanceLock() returns
   lockRequests: 0,                       // observable: lock request count
@@ -117,7 +122,8 @@ const electronStub = {
 };
 
 // fs proxy: everything delegates to the real fs, except promises.writeFile /
-// promises.rename, which can be made to fail for specific absolute paths.
+// promises.rename / promises.copyFile, which can be made to fail for
+// specific absolute paths.
 const fsProxy = new Proxy(realFs, {
   get(target, prop) {
     if (prop === 'promises') {
@@ -137,6 +143,16 @@ const fsProxy = new Proxy(realFs, {
                 throw new Error('EPERM: operation not permitted (simulated rename failure)');
               }
               return t2.rename(from, to, ...rest);
+            };
+          }
+          if (p2 === 'copyFile') {
+            // R2-C-2: inject failures on the copy DESTINATION (the .bak path),
+            // consistent with the writeFile/rename destination-based controls.
+            return async (src, dst, ...rest) => {
+              if (controls.failCopyPaths.has(path.resolve(String(dst)))) {
+                throw new Error('EACCES: permission denied (simulated copy failure)');
+              }
+              return t2.copyFile(src, dst, ...rest);
             };
           }
           return t2[p2];
@@ -235,6 +251,89 @@ const sessionData = {
   ok('FIX 1', 'rename failure: previous file UNCHANGED', data.marker === 'PREVIOUS-VALID-FILE-2' && data.events.length === 1);
   ok('FIX 1', 'rename failure: temp file CLEANED UP', !exists(dest + '.tmp'));
 }
+
+// ===========================================================================
+section('R2-C-2 — save-over .bak backup (existing file / generations / new file / fail-closed)');
+
+// Test 1 — an existing destination is backed up to <name>.bak before the
+// overwrite, and the .bak itself is loadable session JSON (C.3: zero new
+// read-path code).
+{
+  const dest = path.join(scratchDir, 'r2c2-backup.json');
+  realFs.writeFileSync(dest, JSON.stringify({ __schemaVersion: 3, marker: 'R2C2-OLD', events: [] }), 'utf-8');
+  controls.saveDialog = { canceled: false, filePath: dest };
+  const res = await handlers['file:saveSession'](fakeEvent, sessionData);
+  const data = readJson(dest);
+  const bak = readJson(dest + '.bak');
+  ok('R2-C-2', 'T1: overwrite save succeeds', res && res.canceled === false && res.filePath === dest, JSON.stringify(res));
+  ok('R2-C-2', 'T1: destination holds the NEW content', data.marker === undefined && data.events.length === 1);
+  ok('R2-C-2', 'T1: .bak holds the OLD content', bak && bak.marker === 'R2C2-OLD' && bak.events.length === 0);
+  ok('R2-C-2', 'T1: no temp file left behind', !exists(dest + '.tmp'));
+  // the .bak is a plain session file: loadable through the existing
+  // file:loadSession path, migrating like any other session
+  controls.openDialog = { canceled: false, filePaths: [dest + '.bak'] };
+  const recovered = await handlers['file:loadSession'](fakeEvent);
+  ok('R2-C-2', 'T1: .bak is loadable session JSON (migrates like any session)',
+    !!recovered && recovered.marker === 'R2C2-OLD' && recovered.__schemaVersion === 4,
+    JSON.stringify(recovered && { marker: recovered.marker, v: recovered.__schemaVersion }));
+}
+
+// Test 2 — single generation: the .bak is overwritten each save and always
+// holds the IMMEDIATELY previous saved version (F3: no rotation, no chains).
+{
+  const dest = path.join(scratchDir, 'r2c2-generations.json');
+  realFs.writeFileSync(dest, JSON.stringify({ __schemaVersion: 3, marker: 'VER-A', events: [] }), 'utf-8');
+  controls.saveDialog = { canceled: false, filePath: dest };
+  await handlers['file:saveSession'](fakeEvent, sessionData); // "save version B" over A
+  ok('R2-C-2', 'T2: after save B: destination = B, .bak = A',
+    readJson(dest).marker === undefined && readJson(dest).events.length === 1 && readJson(dest + '.bak').marker === 'VER-A');
+  const beforeC = realFs.readFileSync(dest, 'utf-8'); // exact bytes of version B
+  await handlers['file:saveSession'](fakeEvent, sessionData); // "save version C" over B
+  ok('R2-C-2', 'T2: after save C: .bak = version B (immediate previous), byte-identical',
+    realFs.readFileSync(dest + '.bak', 'utf-8') === beforeC);
+  ok('R2-C-2', 'T2: destination is the newest save (valid JSON, marker gone)',
+    readJson(dest).marker === undefined && readJson(dest).events.length === 1);
+  ok('R2-C-2', 'T2: exactly ONE generation — no .bak.bak / .1.bak / .old',
+    !exists(dest + '.bak.bak') && !exists(dest + '.1.bak') && !exists(dest + '.old'));
+}
+
+// Test 3 — a brand-new destination gets NO .bak (F3).
+{
+  const dest = path.join(scratchDir, 'r2c2-brand-new.json');
+  controls.saveDialog = { canceled: false, filePath: dest };
+  const res = await handlers['file:saveSession'](fakeEvent, sessionData);
+  ok('R2-C-2', 'T3: brand-new save succeeds', res && res.canceled === false);
+  ok('R2-C-2', 'T3: destination written', exists(dest));
+  ok('R2-C-2', 'T3: NO .bak created for a brand-new destination', !exists(dest + '.bak'));
+}
+
+// Tests 4+5 — fail-closed: a failed backup copy ABORTS the save; the
+// original destination survives byte-identical; the native error surfaces
+// through the existing save error mechanism (error box + canceled/error).
+{
+  const dest = path.join(scratchDir, 'r2c2-failclosed.json');
+  const original = JSON.stringify({ __schemaVersion: 3, marker: 'R2C2-ORIGINAL', events: [{ id: 42 }] });
+  realFs.writeFileSync(dest, original, 'utf-8');
+  controls.saveDialog = { canceled: false, filePath: dest };
+  controls.failCopyPaths.add(path.resolve(dest + '.bak')); // the backup copy fails
+  controls.lastErrorBox = null;
+  const res = await handlers['file:saveSession'](fakeEvent, sessionData);
+  controls.failCopyPaths.clear();
+  const after = realFs.readFileSync(dest, 'utf-8');
+  ok('R2-C-2', 'T4: backup failure → save ABORTS (canceled + error, no false success)',
+    res && res.canceled === true && typeof res.error === 'string', JSON.stringify(res));
+  ok('R2-C-2', 'T4: backup failure → native error box shown (existing mechanism)', !!controls.lastErrorBox);
+  ok('R2-C-2', 'T4: backup failure → overwrite never happens (no temp file)', !exists(dest + '.tmp'));
+  ok('R2-C-2', 'T5: original destination BYTE-IDENTICAL after backup failure', after === original);
+  ok('R2-C-2', 'T5: no .bak left from the failed copy', !exists(dest + '.bak'));
+}
+
+// Test 6 — existing contracts stay intact: the FIX 1 tests above (1a new
+// save, 1b overwrite, 1c write-failure, 1d rename-failure) and the REG
+// section below (squad, autosave, export, load, handler-registration smoke)
+// already pin the save IPC return shape, stamping, atomicity, and the
+// untouched non-session writers; the full battery covers the rest. No
+// duplication here.
 
 // ===========================================================================
 section('FIX 3 — safe legacy team migration (migrateSessionData)');

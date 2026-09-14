@@ -382,6 +382,32 @@ ipcMain.handle('dialog:openVideo', async () => {
   return { path: filePath, url: pathToFileURL(filePath).toString() };
 });
 
+// --- R2-C-2: save-over .bak backup (architect ruling F3) ---
+// Before a manual session save overwrites an existing destination, the
+// existing file is preserved as <destination>.bak — exactly one backup
+// generation holding the immediately previous successful saved version
+// (save-flow specification, Part F ruling F3 / Part G.1 R2-C-2; closes
+// risk B6). A brand-new destination gets NO .bak. The backup is
+// fail-closed: if the copy cannot be completed, the error propagates and
+// the save aborts BEFORE the atomic overwrite, so a destination is never
+// replaced by a save whose backup failed. The .bak is plain session JSON
+// at the same schema version — recoverable via "Load session" with zero
+// new read-path code (C.3/INC-3). copyFile's default mode overwrites an
+// existing .bak, which is exactly the single-generation ruling (no
+// rotation, no .bak.bak chains).
+async function backupExistingSessionFile(dstPath) {
+  try {
+    await fs.promises.access(dstPath);
+  } catch (err) {
+    // ENOENT = the destination does not exist yet: a brand-new session
+    // file gets no backup (F3). Any other error means existence could not
+    // be determined — fail closed rather than overwrite unbacked-up data.
+    if (err && err.code === 'ENOENT') return;
+    throw err;
+  }
+  await fs.promises.copyFile(dstPath, dstPath + '.bak');
+}
+
 // Save the current tag session (event log) to a JSON file chosen by the user.
 // Stamps __schemaVersion and __savedAt so the file is self-describing and
 // can be migrated by future versions of MatchTag.
@@ -403,6 +429,11 @@ ipcMain.handle('file:saveSession', async (_event, sessionData) => {
   // the destination. If the write or rename fails, the existing session
   // file is left untouched and the temp file is cleaned up.
   try {
+    // R2-C-2 (F3): back up the existing destination to <name>.bak BEFORE
+    // the overwrite. Runs first and fail-closed — if the backup copy
+    // fails, the catch below surfaces the native error and the atomic
+    // overwrite never runs (the destination stays intact).
+    await backupExistingSessionFile(result.filePath);
     await writeFileAtomic(result.filePath + '.tmp', result.filePath, JSON.stringify(stamped, null, 2));
     return { canceled: false, filePath: result.filePath };
   } catch (err) {
