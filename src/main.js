@@ -741,8 +741,13 @@ function deleteAutosaveSync() {
   try { if (fs.existsSync(flushTmp)) fs.unlinkSync(flushTmp); } catch (e) { /* best effort */ }
 }
 
-// Read the autosave file. Returns null if the file doesn't exist or is
-// corrupt (in which case the file is left on disk for manual inspection).
+// Read the autosave file. Returns null if the file doesn't exist. If the
+// file exists but cannot be read, parsed, or migrated (truncated/invalid
+// JSON, non-object JSON such as an array or a bare string, or a newer
+// unsupported schema version), returns { corrupt: true, path } instead —
+// R2-C-3 (F5/B5): a corrupt or unreadable autosave must be distinguishable
+// from a missing one. The corrupt file is left untouched on disk so the
+// analyst can manually inspect, rescue, or delete it.
 // Runs migrateSessionData() so the renderer always receives current-version
 // data, regardless of which app version wrote the autosave. If the
 // autosave has a videoPath, the videoUrl is recomputed and __videoExists is
@@ -776,9 +781,12 @@ ipcMain.handle('autosave:read', async () => {
     }
     return migrated;
   } catch (err) {
-    // Corrupt or unreadable autosave — treat as no autosave. The file is
-    // left on disk so the analyst can manually inspect or delete it.
-    return null;
+    // Corrupt or unreadable autosave (read / parse / migration failure).
+    // R2-C-3 (F5/B5): report it as corrupt with the exact path instead of
+    // masquerading as "no autosave". The file itself is never deleted,
+    // renamed, rewritten, or quarantined here — it stays exactly as it is
+    // on disk for manual inspection.
+    return { corrupt: true, path: autosaveFilePath() };
   }
 });
 

@@ -18,6 +18,12 @@
 //          before the overwrite (single generation, replaced each save); a
 //          brand-new destination gets no .bak; a failed backup copy
 //          aborts the save fail-closed (destination untouched)
+//   R2-C-3 corrupt autosave surfacing: autosave:read distinguishes a
+//          MISSING file (null) from a CORRUPT/UNREADABLE one
+//          ({corrupt:true, path}) for truncated/invalid JSON, non-object
+//          JSON, and newer unsupported schema versions; the corrupt file
+//          stays byte-identical on disk; valid data still migrates
+//          unchanged
 //   STATIC source-level wiring checks for renderer.js / index.html
 //          (Fix 2 double-fire guard, integrity.js load order,
 //          generatePlayerId usage, recovery warning wiring)
@@ -525,6 +531,96 @@ section('REG — main-process regression (squad, autosave, CSV export, session l
     'autosave:read', 'autosave:write', 'autosave:delete', 'video:detach', 'video:reattach'];
   const missing = expected.filter((c) => !handlers[c]);
   ok('REG', 'startup smoke: all IPC handlers registered', missing.length === 0, 'missing: ' + missing.join(','));
+}
+
+// ===========================================================================
+section('R2-C-3 — corrupt autosave surfacing (autosave:read failure contract)');
+
+// The R2-C-3 contract (F5/B5): a MISSING autosave returns null; a VALID
+// autosave returns the migrated session object; a CORRUPT/UNREADABLE
+// autosave (read/parse/migration failure) returns { corrupt: true, path }
+// with the file left byte-identical on disk. The REG section above ends
+// with a null flush (delete), so the autosave file is ABSENT here.
+{
+  const autosavePath = path.join(userDataDir, 'autosave.json');
+
+  // 1. missing file → still null (the missing-file access path is unchanged)
+  {
+    const res = await handlers['autosave:read'](fakeEvent);
+    ok('R2-C-3', 'missing autosave still returns null (missing-file path untouched)',
+      !exists(autosavePath) && res === null, 'exists=' + exists(autosavePath) + ' res=' + JSON.stringify(res));
+  }
+
+  // 2. truncated JSON → corrupt result + file untouched
+  {
+    const bytes = '{"events": [{"id": 1, "label": "Trun';
+    realFs.writeFileSync(autosavePath, bytes, 'utf-8');
+    const before = realFs.readFileSync(autosavePath);
+    const res = await handlers['autosave:read'](fakeEvent);
+    const after = realFs.readFileSync(autosavePath);
+    ok('R2-C-3', 'truncated JSON: returns { corrupt: true, path }',
+      !!res && res.corrupt === true && res.path === autosavePath, JSON.stringify(res));
+    ok('R2-C-3', 'truncated JSON: file remains BYTE-IDENTICAL (never rewritten)',
+      before.equals(after));
+    const artifacts = realFs.readdirSync(userDataDir).filter((f) => /^autosave\.json/.test(f));
+    ok('R2-C-3', 'truncated JSON: no delete/rename/quarantine artifacts (only autosave.json itself)',
+      artifacts.length === 1 && artifacts[0] === 'autosave.json', JSON.stringify(artifacts));
+  }
+
+  // 3. invalid JSON (not JSON at all) → corrupt result + file untouched
+  {
+    realFs.writeFileSync(autosavePath, 'this is not json {{{', 'utf-8');
+    const before = realFs.readFileSync(autosavePath);
+    const res = await handlers['autosave:read'](fakeEvent);
+    const after = realFs.readFileSync(autosavePath);
+    ok('R2-C-3', 'invalid JSON: returns { corrupt: true, path }',
+      !!res && res.corrupt === true && res.path === autosavePath, JSON.stringify(res));
+    ok('R2-C-3', 'invalid JSON: file remains byte-identical', before.equals(after));
+  }
+
+  // 4. non-object JSON (array / bare string / bare number) — migrate throws
+  {
+    for (const raw of ['[1]', '"x"', '42']) {
+      realFs.writeFileSync(autosavePath, raw, 'utf-8');
+      const before = realFs.readFileSync(autosavePath);
+      const res = await handlers['autosave:read'](fakeEvent);
+      const after = realFs.readFileSync(autosavePath);
+      ok('R2-C-3', 'non-object JSON ' + raw + ': returns { corrupt: true, path }',
+        !!res && res.corrupt === true && res.path === autosavePath, JSON.stringify(res));
+      ok('R2-C-3', 'non-object JSON ' + raw + ': file remains byte-identical', before.equals(after));
+    }
+  }
+
+  // 5. newer unsupported schema version → migrate throws → corrupt result
+  {
+    realFs.writeFileSync(autosavePath,
+      JSON.stringify({ __schemaVersion: 5, events: [], squad: [], tags: [], matchInfo: {} }), 'utf-8');
+    const before = realFs.readFileSync(autosavePath);
+    const res = await handlers['autosave:read'](fakeEvent);
+    const after = realFs.readFileSync(autosavePath);
+    ok('R2-C-3', 'newer unsupported schema v5: returns { corrupt: true, path }',
+      !!res && res.corrupt === true && res.path === autosavePath, JSON.stringify(res));
+    ok('R2-C-3', 'newer unsupported schema v5: file remains byte-identical', before.equals(after));
+  }
+
+  // 6. valid file → existing migrated-data behavior remains unchanged
+  {
+    const payload = {
+      videoPath: null, tags: [],
+      events: [{ id: 3, time: 11, label: 'Valid', playerId: 'player_1' }],
+      squad: [], matchInfo: { opponent: 'Valid FC' }, matchClock: { scoreFor: 0 }
+    };
+    const w = await handlers['autosave:write'](fakeEvent, payload);
+    const res = await handlers['autosave:read'](fakeEvent);
+    ok('R2-C-3', 'valid autosave: write ok', !!(w && w.ok === true), JSON.stringify(w));
+    ok('R2-C-3', 'valid autosave: read still returns the migrated session (NOT corrupt)',
+      !!res && res.corrupt !== true && res.events.length === 1 &&
+        res.events[0].label === 'Valid' && res.__schemaVersion === 4,
+      JSON.stringify(res && { corrupt: res.corrupt, v: res.__schemaVersion, events: res.events && res.events.length }));
+    const d = await handlers['autosave:delete'](fakeEvent);
+    ok('R2-C-3', 'valid autosave: cleanup delete ok (file removed)',
+      !!(d && d.ok === true) && !exists(autosavePath));
+  }
 }
 
 // ===========================================================================

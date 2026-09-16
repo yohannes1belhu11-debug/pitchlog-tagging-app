@@ -4819,6 +4819,20 @@
     } catch (e) {
       return; // can't read, can't recover
     }
+    // R2-C-3 (F5/B5): the main process reports a corrupt/unreadable
+    // autosave as { corrupt: true, path } — the file exists but couldn't
+    // be read and was left untouched on disk. This branch must run BEFORE
+    // the recovery path below: a corrupt result is a plain marker object,
+    // not a session, so it must never reach showRecoveryModal(). Surface a
+    // one-line notice with the exact location for manual inspection and
+    // stop here.
+    if (autosave && autosave.corrupt) {
+      showAutosaveToast(
+        'An autosave file exists but couldn\u2019t be read — left in place for manual inspection: ' +
+        (autosave.path || 'unknown location')
+      );
+      return;
+    }
     if (!autosave) return; // no autosave, no recovery needed
     showRecoveryModal(autosave);
   }

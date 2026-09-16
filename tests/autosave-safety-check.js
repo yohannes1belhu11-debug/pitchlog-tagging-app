@@ -24,6 +24,14 @@
 //     and main serializes the async write/delete handlers through one
 //     queue.
 //
+//  3. R2-C-3 CORRUPT-AUTOSAVE SURFACING — main reports a corrupt or
+//     unreadable autosave via autosave:read as { corrupt: true, path },
+//     distinguishable from null (missing). At startup the renderer shows
+//     a dismissible one-line notice with the exact file location through
+//     the EXISTING showAutosaveToast() machinery, never routes the
+//     corrupt marker into showRecoveryModal(), and performs no autosave
+//     write/delete/flush. Null and valid-session startups are unchanged.
+//
 // jsdom boots use a stub whose autosaveWrite can be GATED (the IPC
 // promise resolves only when the test releases it) and can FAIL on
 // demand; the stub also simulates the autosave FILE and keeps an
@@ -155,6 +163,18 @@ section('STATIC — F1.3 wiring (source-level checks)');
   ok('AS-S18: save/load flows still funnel through setClean + clearAutosave',
     /setClean\(\);\s*\n\s*await clearAutosave\(\);/.test(rendererSrc) &&
     (rendererSrc.match(/await clearAutosave\(\);/g) || []).length === 4);
+
+  // --- R2-C-3: corrupt-autosave branch wiring (source-level checks) ---
+  const checkRecoveryFn = fnBody(rendererSrc, 'checkForRecoverableAutosave');
+  ok('AS-S19: corrupt branch occurs BEFORE the falsy/null check and the showRecoveryModal path',
+    checkRecoveryFn.indexOf('autosave.corrupt') > -1 &&
+    checkRecoveryFn.indexOf('autosave.corrupt') < checkRecoveryFn.indexOf('if (!autosave) return;') &&
+    checkRecoveryFn.indexOf('autosave.corrupt') < checkRecoveryFn.indexOf('showRecoveryModal(autosave)'),
+    'corruptIdx=' + checkRecoveryFn.indexOf('autosave.corrupt'));
+  ok('AS-S20: corrupt branch reuses the existing toast machinery with the path; the recovery flow itself is preserved',
+    /showAutosaveToast\(/.test(checkRecoveryFn) &&
+    /autosave\.path/.test(checkRecoveryFn) &&
+    checkRecoveryFn.indexOf('showRecoveryModal(autosave)') > -1);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +193,7 @@ function makeStub(initial, opts) {
   let failNextWrite = false;
   let flushResult = null;
   let loadSessionData = null;
+  let autosaveReadData = null; // R2-C-3: controllable autosave:read result (default null = missing autosave)
 
   const stub = {
     openVideo: async () => null,
@@ -188,7 +209,7 @@ function makeStub(initial, opts) {
     sendVideoCommand: () => {},
     onVideoState: () => {},
     onVideoClosed: () => {},
-    autosaveRead: async () => null,
+    autosaveRead: async () => clone(autosaveReadData),
     autosaveWrite: (data) => new Promise((resolve) => {
       const mySeq = ++seq;
       calls.writeStart++;
@@ -223,6 +244,7 @@ function makeStub(initial, opts) {
     _setFailNextWrite: () => { failNextWrite = true; },
     _setFlushResult: (r) => { flushResult = r; },
     _setLoadSession: (d) => { loadSessionData = d; },
+    _setAutosaveRead: (d) => { autosaveReadData = d; }, // R2-C-3: set synchronously right after boot(), before the boot-time read resolves
     _calls: calls, _file: file, _log: log
   };
   return stub;
@@ -501,6 +523,95 @@ const SQUAD = [{ id: 'player_1', number: '1', name: 'Ana One' }];
     ok('N1k: event list intact (4 events, no corruption through the lifecycle)',
       doc.querySelectorAll('#eventList .event-row').length === 4,
       'rows=' + doc.querySelectorAll('#eventList .event-row').length);
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT C1 — R2-C-3 corrupt startup: one-line notice, no recovery modal, nothing touched');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD });
+    // Set the corrupt result SYNCHRONOUSLY right after boot(), before the
+    // boot-time autosave:read microtask can resolve (the same guarantee
+    // window the other controllable stub fixtures rely on).
+    B.stub._setAutosaveRead({ corrupt: true, path: '/example/autosave.json' });
+    const doc = B.doc;
+    await sleep(300);
+
+    const toast = toastEl(doc);
+    const toastText = toast ? toast.textContent : '';
+    ok('C1a: corrupt startup shows a VISIBLE autosave toast', toastShown(doc),
+      'display=' + (toast ? toast.style.display : 'missing'));
+    ok('C1b: the notice conveys unreadable + left in place + the EXACT path',
+      /couldn.t be read/i.test(toastText) && /left in place/i.test(toastText) &&
+      toastText.indexOf('/example/autosave.json') > -1,
+      toastText.slice(0, 110));
+    ok('C1b2: the notice wording is distinct from the pinned failure strings',
+      !/Autosave on close failed/.test(toastText) && !/Autosave failed/.test(toastText),
+      toastText.slice(0, 60));
+    ok('C1c: recovery modal NOT shown (a corrupt marker is not a session)',
+      doc.getElementById('recoveryModal').style.display === 'none',
+      'display=' + doc.getElementById('recoveryModal').style.display);
+    ok('C1d: no autosaveWrite fired', B.stub._calls.writeStart === 0, 'writeStart=' + B.stub._calls.writeStart);
+    ok('C1e: no autosaveDelete fired (corrupt file conceptually left in place)',
+      B.stub._calls.deleteCalls === 0, 'deletes=' + B.stub._calls.deleteCalls);
+    ok('C1f: no flushSync fired', B.stub._calls.flushSync.length === 0, 'flushes=' + B.stub._calls.flushSync.length);
+    ok('C1g: dirty state remains Saved (a corrupt notice never dirties the session)',
+      /Saved/.test(dirtyText(doc)), dirtyText(doc));
+
+    // Dismissibility through the EXISTING close button.
+    click(doc.getElementById('autosaveToastClose'));
+    await sleep(50);
+    ok('C1h: the corrupt notice is dismissible via the existing toast close button',
+      !toastShown(doc), 'display=' + (toastEl(doc) ? toastEl(doc).style.display : 'missing'));
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT C2 — R2-C-3 null startup unchanged (no notice, no modal)');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD }); // autosaveRead stays null (missing autosave)
+    const doc = B.doc;
+    await sleep(300);
+
+    ok('C2a: null startup shows NO toast', !toastShown(doc));
+    ok('C2b: null startup shows NO recovery modal',
+      doc.getElementById('recoveryModal').style.display === 'none');
+    ok('C2c: null startup performs no autosave operations',
+      B.stub._calls.writeStart === 0 && B.stub._calls.deleteCalls === 0 && B.stub._calls.flushSync.length === 0,
+      'w=' + B.stub._calls.writeStart + ' d=' + B.stub._calls.deleteCalls + ' f=' + B.stub._calls.flushSync.length);
+    ok('C2d: null startup stays Saved', /Saved/.test(dirtyText(doc)), dirtyText(doc));
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT C3 — R2-C-3 valid-session startup unchanged (recovery modal, no notice)');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD });
+    B.stub._setAutosaveRead({
+      __schemaVersion: 4, __savedAt: new Date().toISOString(),
+      videoPath: null, videoUrl: null, __videoExists: false,
+      tags: [],
+      squad: [{ id: 'player_1', number: '1', name: 'Ana One' }],
+      matchInfo: { opponent: 'Recovery FC' },
+      matchClock: { period: '1H', scoreFor: 1, scoreAgainst: 0, selectedTeam: 'our', selectedPlayerId: null, activeSequenceId: null, videoSyncOffset: 0 },
+      events: [{ id: 1, time: 10, label: 'Shot', side: 'for', team: 'our', playerId: 'player_1', playerOffId: null, playerOnId: null, qualifiers: {}, location: null }]
+    });
+    const doc = B.doc;
+    await sleep(300);
+
+    ok('C3a: valid autosave startup still shows the recovery modal',
+      doc.getElementById('recoveryModal').style.display === 'flex',
+      'display=' + doc.getElementById('recoveryModal').style.display);
+    ok('C3b: valid autosave startup shows NO toast (no corrupt notice)', !toastShown(doc));
+    ok('C3c: no autosave write/delete/flush happened during a valid startup',
+      B.stub._calls.writeStart === 0 && B.stub._calls.deleteCalls === 0 && B.stub._calls.flushSync.length === 0,
+      'w=' + B.stub._calls.writeStart + ' d=' + B.stub._calls.deleteCalls + ' f=' + B.stub._calls.flushSync.length);
 
     B.dom.window.close();
   }
