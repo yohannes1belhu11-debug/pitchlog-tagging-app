@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -57,6 +57,29 @@ function createWindow() {
   });
 }
 
+// --- R2-C-4: power/suspend lifecycle flush (architect ruling F4) ---
+// OS suspend/shutdown events are ADDITIONAL triggers for the EXISTING
+// flush semantics — never a new, independent save architecture
+// (save-flow specification, Part F ruling F4 / Part G.1 R2-C-4; shrinks
+// risk B1's hard-kill window). The main process only ASKS the renderer
+// to flush: a one-way 'autosave:flush-requested' message, the exact
+// pattern the safe-close handshake already uses for 'close:requested'.
+// The renderer then runs its existing flushAutosaveSync() (the
+// beforeunload path), which sendSyncs the write — or the stale-delete —
+// back through the existing 'autosave:flush-sync' handler below.
+// Best-effort by design (B1's documented bounded residual): if the
+// window is gone there is nothing to ask and this is a silent no-op.
+// Explicitly OUT of scope (F4/G.2): no resume handling, no lock-screen
+// handling, no new UI, no main-process independent autosave, no draining
+// of in-flight async writes, no fsync, no change to any existing
+// debounce/close/recovery behavior — a power event that never arrives
+// changes nothing.
+function requestRendererAutosaveFlush() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('autosave:flush-requested');
+  }
+}
+
 // --- R2-C-1: Single-instance protection (architect ruling F2) ---
 // PitchLog is a single-instance application (save-flow specification,
 // Part F ruling F2 / Part G.1). The first process to launch acquires the
@@ -84,7 +107,17 @@ if (!gotTheLock) {
     }
   });
 
-  app.whenReady().then(createWindow);
+  // R2-C-4 (F4): register the power lifecycle listeners in the SAME,
+  // single whenReady chain — never inside createWindow(), which the
+  // 'activate' handler below can run again (duplicate listeners). They
+  // are registered exactly once per process, after the app is ready
+  // (powerMonitor is only usable then), and only in the lock-owning
+  // first instance (the second launch quits above before reaching here).
+  app.whenReady().then(() => {
+    createWindow();
+    powerMonitor.on('suspend', requestRendererAutosaveFlush);
+    powerMonitor.on('shutdown', requestRendererAutosaveFlush);
+  });
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();

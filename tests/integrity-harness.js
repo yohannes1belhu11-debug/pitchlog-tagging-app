@@ -24,6 +24,13 @@
 //          JSON, and newer unsupported schema versions; the corrupt file
 //          stays byte-identical on disk; valid data still migrates
 //          unchanged
+//   R2-C-4 power/suspend lifecycle flush: powerMonitor suspend/shutdown
+//          listeners registered exactly once in the SINGLE whenReady
+//          chain (only after ready, never inside createWindow); each
+//          forwards a one-way 'autosave:flush-requested' to the live
+//          window; missing/destroyed/closed window is a silent no-op;
+//          the lock-denied second process registers nothing; no
+//          prohibited scope (no resume/lock-screen handlers, no fsync)
 //   STATIC source-level wiring checks for renderer.js / index.html
 //          (Fix 2 double-fire guard, integrity.js load order,
 //          generatePlayerId usage, recovery warning wiring)
@@ -88,28 +95,57 @@ const controls = {
 const appListeners = {};
 const bwInstances = [];
 
+// R2-C-4: recorded powerMonitor listeners ('suspend'/'shutdown'), the raw
+// registration counts, and an ORDERED lifecycle log ('ready' vs 'pm:*'
+// entries) so the power-flush tests can prove registration happens only
+// after app ready, exactly once per process.
+const powerListeners = {};
+const powerOnCalls = [];
+const lifecycleOps = [];
+
 const electronStub = {
   app: {
     // 'userData' IS the app-data directory itself; other named paths
     // (e.g. 'desktop') would be siblings inside it for this stub.
     getPath: (name) => (name === 'userData' ? userDataDir : path.join(userDataDir, name)),
     // Resolves only when a test resolves the captured resolver — the
-    // default (never ready, createWindow never runs) is unchanged.
-    whenReady: () => new Promise((resolve) => { controls.whenReadyResolvers.push(resolve); }),
+    // default (never ready, createWindow never runs) is unchanged. The
+    // pushed resolver is wrapped ONLY to log 'ready' in order relative to
+    // powerMonitor registrations (R2-C-4); the resolver contract
+    // (controls.whenReadyResolvers) is exactly as before.
+    whenReady: () => new Promise((resolve) => {
+      controls.whenReadyResolvers.push(() => { lifecycleOps.push('ready'); resolve(); });
+    }),
     on: (channel, fn) => { appListeners[channel] = fn; }, // R2-C-1: record app listeners
     quit: () => { controls.quitCalls++; },                // R2-C-1: observable quit
     // R2-C-1: controllable lock result; counted so tests can assert calls.
     requestSingleInstanceLock: () => { controls.lockRequests++; return controls.singleInstanceLock; }
   },
+  // R2-C-4: record powerMonitor listener registrations in a map (so tests
+  // can fire them) plus the ordered lifecycle log (so tests can prove the
+  // registration order vs ready).
+  powerMonitor: {
+    on: (channel, fn) => {
+      powerListeners[channel] = fn;
+      powerOnCalls.push(channel);
+      lifecycleOps.push('pm:' + channel);
+    }
+  },
   BrowserWindow: class StubBrowserWindow {
     constructor() {
       bwInstances.push(this); // R2-C-1: track windows — no second main window may appear
-      this.webContents = { send: () => {}, once: () => {} };
+      this.sent = [];         // R2-C-4: observable webContents.send calls
+      this.winListeners = {}; // R2-C-4: recorded window listeners ('close'/'closed')
+      this.webContents = {
+        send: (channel, ...args) => { this.sent.push({ channel, args }); },
+        once: () => {}
+      };
       this.minimized = false; // test-controllable via isMinimized()
       this.restored = false;  // observable: restore() was called
       this.focused = false;   // observable: focus() was called
     }
-    on() {} loadFile() {} close() {} isDestroyed() { return false; }
+    on(channel, fn) { this.winListeners[channel] = fn; } // R2-C-4: record (previously a no-op; nothing fires them unless a test chooses to)
+    loadFile() {} close() {} isDestroyed() { return false; }
     isMinimized() { return !!this.minimized; }
     restore() { this.restored = true; this.minimized = false; }
     focus() { this.focused = true; }
@@ -708,6 +744,98 @@ section('R2-C-1 — single-instance lock (first instance / second-instance / den
   ok('R2-C-1', 'B3: denied process never arms normal startup (whenReady not consumed)', controls.whenReadyResolvers.length === resolversBefore, 'resolvers=' + controls.whenReadyResolvers.length);
   ok('R2-C-1', 'B4: denied process creates no window', bwInstances.length === windowsBefore, 'windows=' + bwInstances.length);
   ok('R2-C-1', 'B5: denied process registers no lifecycle handler of its own', appListeners['second-instance'] === firstHandler);
+}
+
+// ===========================================================================
+section('R2-C-4 — power/suspend lifecycle flush (powerMonitor wiring)');
+
+// Runs deliberately AFTER the R2-C-1 section: its Test C already resolved
+// the armed whenReady promise (so createWindow + the powerMonitor
+// registrations ran against these stubs), and its Test B lock-denied
+// re-require proves a second process registers nothing. Here we drive the
+// REAL registered powerMonitor listeners against the stub window's
+// observable webContents.send. NOTE: this section must stay LAST among
+// the main-process sections — PM6 runs the real 'closed' handler, which
+// nulls main.js's mainWindow reference for the rest of the run.
+{
+  ok('R2-C-4', 'PM1: suspend + shutdown listeners registered as functions',
+    typeof powerListeners['suspend'] === 'function' && typeof powerListeners['shutdown'] === 'function',
+    'suspend=' + typeof powerListeners['suspend'] + ' shutdown=' + typeof powerListeners['shutdown']);
+
+  ok('R2-C-4', 'PM2: registered exactly once each, strictly AFTER app ready (single whenReady chain)',
+    powerOnCalls.filter((c) => c === 'suspend').length === 1 &&
+    powerOnCalls.filter((c) => c === 'shutdown').length === 1 &&
+    lifecycleOps.length === 3 &&
+    lifecycleOps[0] === 'ready' &&
+    lifecycleOps.indexOf('pm:suspend') > lifecycleOps.indexOf('ready') &&
+    lifecycleOps.indexOf('pm:shutdown') > lifecycleOps.indexOf('ready'),
+    'lifecycleOps=' + JSON.stringify(lifecycleOps));
+
+  const win = bwInstances[0];
+  ok('R2-C-4', 'PM7: ordinary startup/registration sent NOTHING to the renderer',
+    win.sent.length === 0, 'sent=' + JSON.stringify(win.sent));
+
+  powerListeners['suspend']();
+  ok('R2-C-4', 'PM3: suspend forwards autosave:flush-requested to the live window',
+    win.sent.length === 1 && win.sent[0].channel === 'autosave:flush-requested',
+    'sent=' + JSON.stringify(win.sent));
+
+  powerListeners['shutdown']();
+  ok('R2-C-4', 'PM4: shutdown forwards autosave:flush-requested to the live window',
+    win.sent.length === 2 && win.sent[1].channel === 'autosave:flush-requested',
+    'sent=' + JSON.stringify(win.sent));
+
+  // Missing/destroyed window safety: the guard must silently skip.
+  win.isDestroyed = () => true;
+  let pmThrew = false;
+  try {
+    powerListeners['suspend']();
+    powerListeners['shutdown']();
+  } catch (e) { pmThrew = true; }
+  ok('R2-C-4', 'PM5: destroyed window — no send, no throw',
+    !pmThrew && win.sent.length === 2, 'sent=' + win.sent.length + ' threw=' + pmThrew);
+  win.isDestroyed = () => false;
+
+  // Null window: run the REAL 'closed' handler (recorded by the stub's
+  // on()) so main.js's own code nulls its mainWindow reference, then fire
+  // the power listeners again — still no send, no throw.
+  const closedHandler = win.winListeners['closed'];
+  pmThrew = false;
+  try {
+    if (typeof closedHandler === 'function') closedHandler();
+    powerListeners['suspend']();
+    powerListeners['shutdown']();
+  } catch (e) { pmThrew = true; }
+  ok('R2-C-4', 'PM6: closed/null window — no send, no throw',
+    !pmThrew && typeof closedHandler === 'function' && win.sent.length === 2,
+    'sent=' + win.sent.length + ' threw=' + pmThrew + ' closedHandler=' + typeof closedHandler);
+}
+
+// Static source-level guards for the R2-C-4 wiring (real main.js source).
+{
+  const mainSrcR2C4 = realFs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf-8');
+  const whenReadyCalls = (mainSrcR2C4.match(/app\.whenReady\(/g) || []).length;
+  const wrIdx = mainSrcR2C4.indexOf('app.whenReady().then(() => {');
+  const wrBlock = wrIdx > -1 ? mainSrcR2C4.slice(wrIdx, wrIdx + 900) : '';
+
+  ok('R2-C-4', 'PM8: exactly ONE whenReady call site; createWindow + both powerMonitor registrations live inside it (never inside createWindow — no duplicate listeners on activate)',
+    whenReadyCalls === 1 &&
+    wrBlock.includes('createWindow();') &&
+    wrBlock.includes("powerMonitor.on('suspend'") &&
+    wrBlock.includes("powerMonitor.on('shutdown'"),
+    'whenReadyCalls=' + whenReadyCalls);
+
+  ok('R2-C-4', 'PM9: no prohibited scope — no resume/lock-screen/unlock-screen powerMonitor handlers, no fsync calls',
+    !/powerMonitor\.on\('resume'/.test(mainSrcR2C4) &&
+    !/powerMonitor\.on\('lock-screen'/.test(mainSrcR2C4) &&
+    !/powerMonitor\.on\('unlock-screen'/.test(mainSrcR2C4) &&
+    !/fs\.fsync|fsyncSync/.test(mainSrcR2C4),
+    'prohibited-scope scan clean');
+
+  ok('R2-C-4', 'PM10: the lock-denied re-require above (R2-C-1 Test B) registered no additional power listeners',
+    powerOnCalls.filter((c) => c === 'suspend').length === 1 &&
+    powerOnCalls.filter((c) => c === 'shutdown').length === 1,
+    'powerOnCalls=' + JSON.stringify(powerOnCalls));
 }
 
 // ---------------------------------------------------------------------------

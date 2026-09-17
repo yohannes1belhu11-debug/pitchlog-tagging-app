@@ -588,6 +588,7 @@ if (CSV && PARSED.length === 56) {
       autosaveDelete: async () => ({ ok: true }),
       autosaveFlushSync: () => ({ ok: true }),
       onCloseRequested: () => {},
+      onAutosaveFlushRequested: () => {}, // R2-C-4: power-flush bridge (not exercised here)
       closeProceed: () => {}
     }, overrides || {});
   }

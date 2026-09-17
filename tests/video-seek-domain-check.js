@@ -153,6 +153,7 @@ function makeStub(initial) {
     autosaveDelete: async () => ({ ok: true }),
     autosaveFlushSync: () => {},
     onCloseRequested: () => {},
+    onAutosaveFlushRequested: () => {}, // R2-C-4: power-flush bridge (not exercised here)
     closeProceed: () => {},
     _setLoadSession: (d) => { loadSessionData = d; },
     _calls: calls

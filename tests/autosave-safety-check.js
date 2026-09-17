@@ -32,6 +32,15 @@
 //     corrupt marker into showRecoveryModal(), and performs no autosave
 //     write/delete/flush. Null and valid-session startups are unchanged.
 //
+//  4. R2-C-4 POWER/SUSPEND LIFECYCLE FLUSH — main forwards powerMonitor
+//     suspend/shutdown to the renderer as a one-way
+//     'autosave:flush-requested' message (preload bridge
+//     onAutosaveFlushRequested); the renderer's callback runs the
+//     EXISTING flushAutosaveSync (exact beforeunload semantics: dirty +
+//     work → write; clean → stale-delete; recovery modal up → no-op).
+//     No spontaneous flush at startup, debounce still works after a
+//     flush, and the flush clears a pending debounce (no double write).
+//
 // jsdom boots use a stub whose autosaveWrite can be GATED (the IPC
 // promise resolves only when the test releases it) and can FAIL on
 // demand; the stub also simulates the autosave FILE and keeps an
@@ -68,6 +77,7 @@ const analyticsSrc = fs.readFileSync(path.join(srcDir, 'analytics.js'), 'utf-8')
 const playerSeasonSrc = fs.readFileSync(path.join(srcDir, 'player-season.js'), 'utf-8');
 const rendererSrc = fs.readFileSync(path.join(srcDir, 'renderer.js'), 'utf-8');
 const mainSrc = fs.readFileSync(path.join(srcDir, 'main.js'), 'utf-8');
+const preloadSrc = fs.readFileSync(path.join(srcDir, 'preload.js'), 'utf-8'); // R2-C-4
 
 const results = [];
 let SECTION = '(pre)';
@@ -175,6 +185,20 @@ section('STATIC — F1.3 wiring (source-level checks)');
     /showAutosaveToast\(/.test(checkRecoveryFn) &&
     /autosave\.path/.test(checkRecoveryFn) &&
     checkRecoveryFn.indexOf('showRecoveryModal(autosave)') > -1);
+
+  // --- R2-C-4: power lifecycle flush wiring (source-level checks) ---
+  ok('AS-P21: preload exposes the one-way power-flush bridge on the autosave:flush-requested channel',
+    /onAutosaveFlushRequested:\s*\(callback\)\s*=>\s*ipcRenderer\.on\('autosave:flush-requested'/.test(preloadSrc));
+  ok('AS-P22: renderer registers the bridge exactly once; its callback invokes the EXISTING flushAutosaveSync',
+    (rendererSrc.match(/onAutosaveFlushRequested\(/g) || []).length === 1 &&
+    /window\.matchtag\.onAutosaveFlushRequested\(\(\)\s*=>\s*\{\s*flushAutosaveSync\(\);\s*\}\);/.test(rendererSrc));
+  ok('AS-P23: wiring sits with the other one-way bridge registrations; renderer never CALLS powerMonitor (main-process only); main registers suspend+shutdown (not resume) in its single whenReady chain',
+    rendererSrc.indexOf('window.matchtag.onAutosaveFlushRequested(') > rendererSrc.indexOf('window.matchtag.onCloseRequested(') &&
+    !/powerMonitor\.(on|addListener|once)\s*\(/.test(rendererSrc) &&
+    /powerMonitor\.on\('suspend'/.test(mainSrc) &&
+    /powerMonitor\.on\('shutdown'/.test(mainSrc) &&
+    !/powerMonitor\.on\('resume'/.test(mainSrc) &&
+    (mainSrc.match(/app\.whenReady\(/g) || []).length === 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +218,7 @@ function makeStub(initial, opts) {
   let flushResult = null;
   let loadSessionData = null;
   let autosaveReadData = null; // R2-C-3: controllable autosave:read result (default null = missing autosave)
+  let flushRequestCallback = null; // R2-C-4: captured power-flush bridge callback
 
   const stub = {
     openVideo: async () => null,
@@ -238,6 +263,11 @@ function makeStub(initial, opts) {
       return r;
     },
     onCloseRequested: () => {},
+    // R2-C-4: one-way power-flush bridge (mirrors preload.js). The
+    // callback is the renderer's real wiring; tests fire it synchronously
+    // via _triggerFlushRequest() exactly as main's powerMonitor listener
+    // would deliver 'autosave:flush-requested'.
+    onAutosaveFlushRequested: (cb) => { flushRequestCallback = cb; },
     closeProceed: () => {},
     // test controls
     _releaseGates: () => { const g = gates; gates = []; g.forEach((fn) => fn()); },
@@ -245,6 +275,7 @@ function makeStub(initial, opts) {
     _setFlushResult: (r) => { flushResult = r; },
     _setLoadSession: (d) => { loadSessionData = d; },
     _setAutosaveRead: (d) => { autosaveReadData = d; }, // R2-C-3: set synchronously right after boot(), before the boot-time read resolves
+    _triggerFlushRequest: () => { if (flushRequestCallback) flushRequestCallback(); }, // R2-C-4: simulate the powerMonitor suspend/shutdown → main → renderer hop
     _calls: calls, _file: file, _log: log
   };
   return stub;
@@ -612,6 +643,122 @@ const SQUAD = [{ id: 'player_1', number: '1', name: 'Ana One' }];
     ok('C3c: no autosave write/delete/flush happened during a valid startup',
       B.stub._calls.writeStart === 0 && B.stub._calls.deleteCalls === 0 && B.stub._calls.flushSync.length === 0,
       'w=' + B.stub._calls.writeStart + ' d=' + B.stub._calls.deleteCalls + ' f=' + B.stub._calls.flushSync.length);
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT P — R2-C-4 power flush on a DIRTY session: payload write, debounce cleared, still dirty, re-arms');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD });
+    const doc = B.doc;
+    await sleep(300);
+
+    // Tag one event (dirty + real work), but do NOT wait out the 1500ms
+    // debounce — the power flush must arrive while it is still pending.
+    click(desktopTagBtn(doc, 'Shot'));
+    click(doc.getElementById('detailPanelDone'));
+    await sleep(100);
+    ok('P-a: no flush and no async write before the power event',
+      B.stub._calls.flushSync.length === 0 && B.stub._calls.writeStart === 0,
+      'f=' + B.stub._calls.flushSync.length + ' w=' + B.stub._calls.writeStart);
+
+    // Simulate powerMonitor suspend/shutdown → main → renderer.
+    B.stub._triggerFlushRequest();
+    ok('P-b: power flush request runs the EXISTING flushAutosaveSync exactly once, with the real payload',
+      B.stub._calls.flushSync.length === 1 &&
+      B.stub._calls.flushSync[0] !== null &&
+      B.stub._calls.flushSync[0].events.length === 1,
+      'f=' + B.stub._calls.flushSync.length + ' events=' + (B.stub._calls.flushSync[0] && B.stub._calls.flushSync[0].events.length));
+    ok('P-c: ok flush shows NO toast (same as a clean close-time flush)',
+      !toastShown(doc));
+
+    // The flush must have cleared the pending debounce: no async write
+    // may ever land for the pre-flush mutation.
+    await sleep(1700);
+    ok('P-d: pending debounce was CLEARED by the flush (no async write landed afterwards)',
+      B.stub._calls.writeStart === 0, 'writeStart=' + B.stub._calls.writeStart);
+    ok('P-e: session stays dirty after the power flush (Unsaved indicator intact)',
+      /Unsaved/.test(dirtyText(doc)), dirtyText(doc));
+
+    // Resume-continuity: the next mutation re-arms the ordinary debounce.
+    click(desktopTagBtn(doc, 'Corner'));
+    click(doc.getElementById('detailPanelDone'));
+    await sleep(1700);
+    ok('P-f: after the flush, a new mutation still autosaves normally (debounce re-arms)',
+      B.stub._calls.writeStart === 1, 'writeStart=' + B.stub._calls.writeStart);
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT Q — R2-C-4 power flush on a CLEAN session: stale-delete (null), no spontaneous flush at startup');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD }); // no mutation — clean session
+    const doc = B.doc;
+    await sleep(300);
+
+    ok('Q-a: ordinary startup performs NO spontaneous flush',
+      B.stub._calls.flushSync.length === 0, 'f=' + B.stub._calls.flushSync.length);
+
+    B.stub._triggerFlushRequest();
+    ok('Q-b: clean-session power flush sends the stale-DELETE (null) — same semantics as a clean close',
+      B.stub._calls.flushSync.length === 1 && B.stub._calls.flushSync[0] === null,
+      'f=' + B.stub._calls.flushSync.length + ' data=' + JSON.stringify(B.stub._calls.flushSync[0]));
+    ok('Q-c: no async write/delete was triggered by the power flush',
+      B.stub._calls.writeStart === 0 && B.stub._calls.deleteCalls === 0,
+      'w=' + B.stub._calls.writeStart + ' d=' + B.stub._calls.deleteCalls);
+    ok('Q-d: no toast on a clean-session flush', !toastShown(doc));
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT R — R2-C-4 power flush while the recovery modal is up: guarded no-op');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD });
+    B.stub._setAutosaveRead({
+      __schemaVersion: 4, __savedAt: new Date().toISOString(),
+      videoPath: null, videoUrl: null, __videoExists: false,
+      tags: [],
+      squad: [{ id: 'player_1', number: '1', name: 'Ana One' }],
+      matchInfo: { opponent: 'Recovery FC' },
+      matchClock: { period: '1H', scoreFor: 1, scoreAgainst: 0, selectedTeam: 'our', selectedPlayerId: null, activeSequenceId: null, videoSyncOffset: 0 },
+      events: [{ id: 1, time: 10, label: 'Shot', side: 'for', team: 'our', playerId: 'player_1', playerOffId: null, playerOnId: null, qualifiers: {}, location: null }]
+    });
+    const doc = B.doc;
+    await sleep(300);
+    ok('R-a: recovery modal is up (fixture sanity)',
+      doc.getElementById('recoveryModal').style.display === 'flex');
+
+    B.stub._triggerFlushRequest();
+    ok('R-b: power flush is a NO-OP while the recovery modal is up (existing guard holds)',
+      B.stub._calls.flushSync.length === 0, 'f=' + B.stub._calls.flushSync.length);
+    ok('R-c: the recovery modal is still up, untouched',
+      doc.getElementById('recoveryModal').style.display === 'flex');
+
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('BOOT S — R2-C-4 ordinary dirty startup WITHOUT a power event: debounce only, never a flush');
+  // =====================================================================
+  {
+    const B = boot({ squad: SQUAD });
+    const doc = B.doc;
+    await sleep(300);
+
+    click(desktopTagBtn(doc, 'Shot'));
+    click(doc.getElementById('detailPanelDone'));
+    await sleep(1700);
+
+    ok('S-a: ordinary dirty startup autosaves through the DEBOUNCE path only',
+      B.stub._calls.writeStart === 1, 'writeStart=' + B.stub._calls.writeStart);
+    ok('S-b: NO flush ever happened without a power event',
+      B.stub._calls.flushSync.length === 0, 'f=' + B.stub._calls.flushSync.length);
 
     B.dom.window.close();
   }

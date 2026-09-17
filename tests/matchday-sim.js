@@ -100,6 +100,7 @@ function makeStub(initial) {
     autosaveDelete: async () => { calls.autosaveDelete++; return { ok: true }; },
     autosaveFlushSync: (d) => { calls.autosaveFlushSync.push(clone(d)); return { ok: true }; },
     onCloseRequested: (cb) => { closeCallback = cb; },
+    onAutosaveFlushRequested: () => {}, // R2-C-4: power-flush bridge (not exercised here)
     closeProceed: () => { calls.closeProceed++; },
     _setLoadSession: (d) => { loadSessionData = d; },
     _setLoadMultiple: (d) => { loadMultipleData = d; },

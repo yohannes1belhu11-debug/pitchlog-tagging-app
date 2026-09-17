@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld('matchtag', {
   // Synchronous flush for the renderer's beforeunload handler — the write
   // completes before the call returns, so the window can close safely.
   autosaveFlushSync: (data) => ipcRenderer.sendSync('autosave:flush-sync', data),
+  // R2-C-4 (F4): one-way bridge — the main process forwards OS power
+  // lifecycle events (powerMonitor suspend/shutdown) as
+  // 'autosave:flush-requested' so the renderer can run the EXISTING flush
+  // path (the same semantics as beforeunload). The trigger set only
+  // grows; no resume handling, no new save architecture.
+  onAutosaveFlushRequested: (callback) => ipcRenderer.on('autosave:flush-requested', () => callback()),
   // Safe-close: main process intercepts the OS close and sends 'close:requested'
   // to the renderer; the renderer shows the unsaved-changes modal (if dirty)
   // and calls 'closeProceed' once the user has decided.

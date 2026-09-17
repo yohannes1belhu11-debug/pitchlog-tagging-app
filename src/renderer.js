@@ -5134,6 +5134,20 @@
     handleCloseRequested();
   });
 
+  // R2-C-4 (F4): wire up the main process's power-lifecycle flush request
+  // ('autosave:flush-requested', forwarded from powerMonitor suspend/
+  // shutdown in the main process). The callback runs the EXISTING
+  // flushAutosaveSync — the exact beforeunload semantics: dirty + real
+  // work → synchronous write; otherwise clear any stale autosave. Its
+  // recovery-modal guard, debounce-timer clear, and failure toast all
+  // apply unchanged (a flush failure during suspend surfaces through the
+  // same existing toast/native-dialog path as a close-time failure).
+  // Nothing else: no resume handling, no new UI, no debounce/epoch
+  // changes — a power event that never arrives changes nothing.
+  window.matchtag.onAutosaveFlushRequested(() => {
+    flushAutosaveSync();
+  });
+
   // Synchronous flush on window close. The sendSync IPC completes the
   // write before the renderer is torn down, so no work is lost on
   // graceful close. (For hard crashes, the last debounced autosave is

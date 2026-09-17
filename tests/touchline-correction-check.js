@@ -172,6 +172,7 @@ function makeStub(initial) {
     autosaveDelete: async () => { file.current = null; return { ok: true }; },
     autosaveFlushSync: (d) => { calls.flushSync.push(clone(d)); file.current = d === null ? null : clone(d); return { ok: true }; },
     onCloseRequested: () => {},
+    onAutosaveFlushRequested: () => {}, // R2-C-4: power-flush bridge (not exercised here)
     closeProceed: () => {},
     _setLoadSession: (d) => { loadSessionData = d; },
     _calls: calls, _file: file

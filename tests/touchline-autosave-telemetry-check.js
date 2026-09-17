@@ -251,6 +251,7 @@ function makeStub(initial, opts) {
       return r;
     },
     onCloseRequested: () => {},
+    onAutosaveFlushRequested: () => {}, // R2-C-4: power-flush bridge (not exercised here)
     closeProceed: () => {},
     // test controls
     _releaseGates: () => { const g = gates; gates = []; g.forEach((fn) => fn()); },
