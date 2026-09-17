@@ -3950,6 +3950,40 @@
     return name + '.csv';
   }
 
+  // ---------- R2-C-5: unsaved-export warning (save-flow spec Part F, F8) ----
+  // Exports may be built from work that was never manually saved: they
+  // serialize the in-memory session at click time, so a deliverable CSV can
+  // exist while the session's "source of truth" file does not (risk B7 — a
+  // provenance gap, not data loss). F8 rules that exports must NOT be
+  // blocked, but after a successful RELEVANT data export, if meaningful
+  // unsaved session changes exist, the analyst receives a clear
+  // informational warning suggesting a manual save (the C.5/INC-5 shape).
+  // The warning is pure post-success feedback: it never changes the
+  // exported bytes, the suggested file name, the encoding, the BOM, or any
+  // frozen R2-A / column contract.
+  //
+  // "Relevant" = the two current-match CSV kinds below (routed through
+  // exportCsvFile): they serialize the CURRENT session's in-memory state.
+  // The two season exports are NOT relevant: the season view re-serializes
+  // already-SAVED session files loaded from disk (renderer.js:3889–3909),
+  // so unsaved current-session changes cannot appear in them by
+  // construction. The clip-playlist export is excluded from this warning
+  // by the approved Q2 ruling — its success alert and written files stay
+  // exactly as they were.
+  const UNSAVED_WARNING_EXPORT_KINDS = new Set(['match-events', 'match-events-full-analysis']);
+  const UNSAVED_EXPORT_WARNING = 'Exported from an unsaved session — save the session to keep the source data.';
+
+  // F8's "meaningful unsaved session changes": the session is dirty AND has
+  // work worth preserving — the same predicate the autosave machinery uses
+  // to decide whether a write is worth landing. On every reachable
+  // current-session export success the empty-export guards have already
+  // guaranteed events exist, so this holds exactly when the session is
+  // dirty; the explicit predicate keeps the warning honest about
+  // "meaningful" even if those guards ever change.
+  function unsavedExportWarningApplies() {
+    return sessionDirty && hasAutosavableWork();
+  }
+
   // Central export path for all four CSVs: suggested file name → IPC →
   // feedback through the existing toast. Success reports the saved file name
   // and the row count; a write failure (main already showed the native error
@@ -3969,7 +4003,16 @@
     }
     const savedName = result.filePath ? String(result.filePath).split(/[\\/]/).pop() : 'CSV file';
     const rows = typeof rowCount === 'number' ? ' — ' + rowCount + (rowCount === 1 ? ' row' : ' rows') : '';
-    showAutosaveToast('Exported ' + savedName + rows + '.');
+    let message = 'Exported ' + savedName + rows + '.';
+    // R2-C-5 (F8): after a successful relevant export from a session with
+    // meaningful unsaved changes, extend the success toast with the
+    // unsaved-export warning — the file's source data still exists only in
+    // memory. Strictly additive: the R2-A success message stays
+    // byte-identical as the prefix.
+    if (UNSAVED_WARNING_EXPORT_KINDS.has(kind) && unsavedExportWarningApplies()) {
+      message += ' ' + UNSAVED_EXPORT_WARNING;
+    }
+    showAutosaveToast(message);
   }
 
   btnExportSeasonCsv.addEventListener('click', async () => {

@@ -19,6 +19,19 @@
 //     silent header-only dumps
 //   - SEASON_SUMMARY: the 63-column contract stays intact, summary rows
 //     keep their sentinel labeling, and the help text documents it
+//   - R2-C-5 ADDITIVE AMENDMENT (save-flow spec Part F, ruling F8): after a
+//     successful current-match CSV export from a session with meaningful
+//     unsaved changes, the success toast extends with the unsaved-export
+//     warning ("Exported from an unsaved session — save the session to keep
+//     the source data."). The R2-A success message stays byte-identical as
+//     the prefix; the warning never appears on user cancel, on write
+//     failure, on a clean (saved) session, or on the two season exports
+//     (they serialize saved files from disk, not the unsaved in-memory
+//     session — not "relevant" exports under F8). The clip-playlist
+//     export is excluded from the warning by the approved Q2 ruling —
+//     its success alert is unchanged and never carries the warning.
+//     Existing pins are unchanged; the amendment is purely additive
+//     (Boot V3 + STATIC S4–S6/S8).
 //
 // Two parts, both behavioral:
 //   PART M  main process — the REAL main.js loaded under a stubbed
@@ -271,13 +284,17 @@ const fcontrols = {
   exportResult: { canceled: true },
   loadMultiple: [],
   autosave: null,
-  squad: null
+  squad: null,
+  // R2-C-5 (Boot V3): the manual-save stub result — null keeps the default
+  // { canceled: true } behavior every other boot relies on; a successful
+  // result drives the session clean so the warning lifecycle is testable.
+  saveSessionResult: null
 };
 
 function makeStub(calls) {
   return {
     openVideo: async () => null,
-    saveSession: async (d) => { calls.saveSession.push(d); return { canceled: true }; },
+    saveSession: async (d) => { calls.saveSession.push(d); return fcontrols.saveSessionResult || { canceled: true }; },
     exportCsv: async (csv, name) => { calls.exportCsv.push({ csv: String(csv), name: name === undefined ? null : name }); return fcontrols.exportResult; },
     exportClipPlaylist: async () => ({ canceled: true }),
     loadSession: async () => null,
@@ -617,6 +634,146 @@ console.log('\n== Boot V2 — fallback names, 1-row toast, empty season guards =
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n== Boot V3 — R2-C-5 unsaved-export warning (F8 additive R2-A amendment) ==');
+{
+  // Fresh boot: no autosave (no recovery modal), no squad, clean session.
+  fcontrols.autosave = null;
+  fcontrols.squad = null;
+  fcontrols.loadMultiple = [];
+  fcontrols.saveSessionResult = null;
+  const B = await boot();
+  const { win, doc, calls } = B;
+  const btnExport = doc.getElementById('btnExportCsv');
+
+  // Dirty the session the way an analyst does: match metadata + two events,
+  // never saved (risk B7's exact state — the export's source data exists
+  // only in memory).
+  doc.getElementById('matchDate').value = '2026-09-18';
+  doc.getElementById('matchOpponent').value = 'F8 Rulers';
+  click(win, doc.getElementById('btnSaveMatchSetup'));
+  await sleep(60);
+  click(win, tagBtn(doc, 'Shot'));
+  await sleep(60);
+  click(win, doc.getElementById('detailPanelDone'));
+  await sleep(60);
+  click(win, tagBtn(doc, 'Pass'));
+  await sleep(60);
+  click(win, doc.getElementById('detailPanelDone'));
+  await sleep(60);
+
+  // W1 — dirty + successful standard export: the success toast carries the
+  // untouched R2-A prefix AND the F8 warning sentence after it.
+  fcontrols.exportResult = { canceled: false, filePath: '/tmp/exports/match-events_2026-09-18_vs_F8 Rulers.csv' };
+  dismissToast(win, doc);
+  click(win, btnExport);
+  await sleep(150);
+  let st = toastState(doc);
+  ok('W1: DIRTY standard export -> R2-A prefix byte-identical + unsaved-session warning appended',
+    st.shown &&
+      /^Exported match-events_2026-09-18_vs_F8 Rulers\.csv — 2 rows\./.test(st.text) &&
+      /Exported from an unsaved session — save the session to keep the source data\.$/.test(st.text),
+    'toast="' + st.text + '"');
+
+  // W2 — the full-analysis (Shift+Click) current-match export warns too: it
+  // serializes the same unsaved in-memory session.
+  fcontrols.exportResult = { canceled: false, filePath: '/tmp/exports/match-events-full-analysis_2026-09-18_vs_F8 Rulers.csv' };
+  dismissToast(win, doc);
+  click(win, btnExport, { shiftKey: true });
+  await sleep(150);
+  st = toastState(doc);
+  ok('W2: DIRTY full-analysis export -> same unsaved-session warning',
+    st.shown &&
+      /^Exported match-events-full-analysis_2026-09-18_vs_F8 Rulers\.csv — 2 rows\./.test(st.text) &&
+      /Exported from an unsaved session/.test(st.text),
+    'toast="' + st.text + '"');
+
+  // W3 — a successful manual save flips the session clean: the warning
+  // disappears and the toast returns to its exact R2-A shape.
+  fcontrols.saveSessionResult = { canceled: false, filePath: '/tmp/saves/f8-session.json' };
+  click(win, doc.getElementById('btnSaveSession'));
+  await sleep(200);
+  fcontrols.exportResult = { canceled: false, filePath: '/tmp/exports/match-events_2026-09-18_vs_F8 Rulers.csv' };
+  dismissToast(win, doc);
+  click(win, btnExport);
+  await sleep(150);
+  st = toastState(doc);
+  ok('W3: after a manual save (clean session) the export toast is the exact R2-A message, NO warning',
+    st.shown && st.text === 'Exported match-events_2026-09-18_vs_F8 Rulers.csv — 2 rows.',
+    'toast="' + st.text + '"');
+
+  // W3b — re-dirty: the warning re-arms (it tracks sessionDirty, not a
+  // one-shot latch).
+  click(win, tagBtn(doc, 'Shot'));
+  await sleep(60);
+  click(win, doc.getElementById('detailPanelDone'));
+  await sleep(60);
+  dismissToast(win, doc);
+  click(win, btnExport);
+  await sleep(150);
+  st = toastState(doc);
+  ok('W3b: re-dirtied -> the warning re-arms on the next export (3 rows now)',
+    st.shown && /^Exported match-events_2026-09-18_vs_F8 Rulers\.csv — 3 rows\./.test(st.text) &&
+      /Exported from an unsaved session/.test(st.text),
+    'toast="' + st.text + '"');
+
+  // W4 — user cancel: no export happened, so no toast at all (F8 fires only
+  // AFTER a successful export).
+  fcontrols.exportResult = { canceled: true };
+  dismissToast(win, doc);
+  click(win, btnExport);
+  await sleep(150);
+  ok('W4: DIRTY session + user cancel -> no export, no toast, no warning',
+    !toastState(doc).shown, 'toast shown unexpectedly');
+
+  // W5 — write failure: the failure toast keeps the original error and
+  // never carries the unsaved-session warning.
+  fcontrols.exportResult = { canceled: true, error: 'EACCES: permission denied' };
+  dismissToast(win, doc);
+  click(win, btnExport);
+  await sleep(150);
+  st = toastState(doc);
+  ok('W5: DIRTY session + write failure -> failure toast only, no unsaved warning',
+    st.shown && /Export failed/i.test(st.text) && /EACCES/.test(st.text) &&
+      !/unsaved session/i.test(st.text),
+    'toast="' + st.text + '"');
+
+  // W6/W7 — the two season exports never warn, even from this dirty
+  // session: they serialize already-saved files loaded from disk, so they
+  // are not "relevant data exports" under F8.
+  fcontrols.loadMultiple = [
+    feSession(1, '2026-08-01', [feEvent(1, 60, 'Recovery', 'our', 'p1'), feEvent(2, 120, 'Pass', 'our', 'p2')]),
+    feSession(2, '2026-08-08', [feEvent(3, 600, 'Shot', 'our', 'p2'), feEvent(4, 900, 'Pass', 'our', 'p1'), feEvent(5, 1800, 'Goal', 'our', 'p1', '2H')])
+  ];
+  click(win, doc.getElementById('btnAddSeasonMatches'));
+  await sleep(300);
+  fcontrols.exportResult = { canceled: false, filePath: '/tmp/exports/season-events.csv' };
+  dismissToast(win, doc);
+  click(win, doc.getElementById('btnExportSeasonCsv'));
+  await sleep(200);
+  st = toastState(doc);
+  ok('W6: DIRTY session + season-events export -> success toast WITHOUT the warning',
+    st.shown && st.text === 'Exported season-events.csv — 5 rows.',
+    'toast="' + st.text + '"');
+
+  fcontrols.exportResult = { canceled: false, filePath: '/tmp/exports/season-player.csv' };
+  dismissToast(win, doc);
+  click(win, doc.getElementById('btnExportSeasonPlayerCsv'));
+  await sleep(300);
+  st = toastState(doc);
+  ok('W7: DIRTY session + season-player export -> success toast WITHOUT the warning',
+    st.shown && st.text === 'Exported season-player.csv — 6 rows.',
+    'toast="' + st.text + '"');
+
+  // W8 — the exported bytes/filenames are untouched by the warning: the
+  // suggested name and the CSV payload of a warned export are identical to
+  // the R2-A contract (19-column standard header, BOM-free renderer string).
+  const stdCall = calls.exportCsv.find((c) => c.name === 'match-events_2026-09-18_vs_F8 Rulers.csv');
+  ok('W8: a WARNED export still suggests the R2-A filename and the untouched 19-column payload',
+    !!stdCall && stdCall.csv.startsWith(STD_HEADER) && stdCall.csv.charCodeAt(0) !== 0xFEFF,
+    'name=' + (stdCall && JSON.stringify(stdCall.name)));
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n== STATIC — help text + boundary pins ==');
 {
   const htmlSrc = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf-8');
@@ -635,6 +792,32 @@ console.log('\n== STATIC — help text + boundary pins ==');
       (mainSrc.match(/'\\ufeff'/g) || []).length === 2 &&
       !/'\\ufeff'\s*\+\s*script/.test(mainSrc),
     'two BOM prepends: file:exportCsv + clip_playlist.csv');
+
+  // R2-C-5 (F8) — unsaved-export warning source-level pins.
+  ok('S4: the F8/C.5 warning sentence exists verbatim as the single warning constant (no scattered duplicates)',
+    /const UNSAVED_EXPORT_WARNING = 'Exported from an unsaved session — save the session to keep the source data\.';/.test(rendererSrc) &&
+      (rendererSrc.match(/save the session to keep the source data/g) || []).length === 1,
+    'constant present, single occurrence');
+  ok('S5: the warning kind-set is exactly the two current-match CSV kinds (season kinds excluded by name)',
+    /const UNSAVED_WARNING_EXPORT_KINDS = new Set\(\['match-events', 'match-events-full-analysis'\]\);/.test(rendererSrc) &&
+      !/UNSAVED_WARNING_EXPORT_KINDS[\s\S]{0,120}season-events/.test(rendererSrc) &&
+      !/UNSAVED_WARNING_EXPORT_KINDS[\s\S]{0,120}season-player/.test(rendererSrc),
+    'kinds = match-events, match-events-full-analysis');
+  ok('S6: exportCsvFile appends the warning only behind the kind-set + meaningful-unsaved predicate',
+    /UNSAVED_WARNING_EXPORT_KINDS\.has\(kind\) && unsavedExportWarningApplies\(\)/.test(rendererSrc) &&
+      /function unsavedExportWarningApplies\(\) \{\s*return sessionDirty && hasAutosavableWork\(\);\s*\}/.test(rendererSrc),
+    'kind gate + sessionDirty && hasAutosavableWork()');
+  // S8 — the season export blocks never reference the warning machinery:
+  // the warning scope stays the two current-match CSV kinds only.
+  const sA = rendererSrc.indexOf("btnExportSeasonCsv.addEventListener('click'");
+  const sB = rendererSrc.indexOf("btnExportSeasonPlayerCsv.addEventListener('click'");
+  const sC = rendererSrc.indexOf('function csvEscape');
+  const seasonBlocks = sA > -1 && sB > sA && sC > sB ? rendererSrc.slice(sA, sC) : '';
+  ok('S8: neither season export block references the unsaved-export warning (season exports are not relevant under F8)',
+    seasonBlocks.length > 0 &&
+      seasonBlocks.indexOf('UNSAVED_EXPORT_WARNING') === -1 &&
+      seasonBlocks.indexOf('unsavedExportWarningApplies') === -1,
+    'season blocks warning-free');
 }
 
 // ---------------------------------------------------------------------------
