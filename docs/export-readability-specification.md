@@ -414,6 +414,10 @@ doc-only commit — not fixed now, per the STOP rules):
 
 ## Part E — Open questions needing architect decision
 > Disposition: E1-E3 ruled at D2 (architect decisions D2-0..D2-8); E4-E8 ruled in Part F (BINDING).
+> R2-D-SPEC-AMEND note (baseline `a2e79a7`): the D2-round ruling body text
+> for E1-E3 was never committed to this repository. E1-E3 have been reissued
+> (R2-D-E1-E3-REISSUED) and are recorded as BINDING rulings in Part G below.
+> The line above is retained unchanged as the historical record.
 
 1. **Once Sport import format.** No in-repo document specifies which
    columns Once Sport actually consumes (only the ownership split,
@@ -522,3 +526,165 @@ F4 (=E7). Label language:
 
 F5 (=E8). CLOSED — executed in 480162c; r2b dictionary-contract suite
   verified green post-corrections (48/48) and full battery 26/26 at gate.
+
+---
+
+## Part G — R2-D-SPEC-AMEND: Architect Rulings (E1-E3, Reissued) — BINDING
+
+Status: BINDING. Source: R2-D-E1-E3-REISSUED (architect reissuance of the
+E1-E3 decisions, recorded under task R2-D-SPEC-AMEND at baseline `a2e79a7`).
+These rulings close Part E items E1-E3. This is a documentation-only
+amendment: it changes no source, tests, schema, exports, autosave, recovery,
+or UI behavior, and authorizes no implementation (G.10). Part F (E4-E8)
+remains BINDING and unmodified.
+
+### G.0 Provenance — why E1-E3 are ruled here
+
+Part E's disposition line records E1-E3 as "ruled at D2 (architect decisions
+D2-0..D2-8)", but the D2-round ruling body text for E1-E3 was never committed
+to this repository: this document's history contains only the original
+proposal (`b0cd92a`) and the D3-round Part F rulings (`ca0a13a`), and no
+D2-2..D2-8 decision text exists anywhere in the repository or its history.
+The only surviving in-repo traces of the D2 round are the inline D2-0 / D2-1
+citations in Part F (F1-d, F2-d) and `docs/save-flow-specification.md`.
+Rather than reconstruct unrecorded decisions, the architect reissued E1-E3
+(R2-D-E1-E3-REISSUED); this Part G is the ruling of record for E1-E3 and
+supersedes the D2-era disposition for those three items only. D2-0 and D2-1,
+as quoted in Part F and the save-flow spec, remain valid as cited.
+
+### G.1 (E1) Conservative compatibility — BINDING
+
+Adopt conservative compatibility. Canonical exports remain frozen until
+external compatibility requirements are confirmed.
+
+Effect: Part C.2 (MUST-NOT-CHANGE columns) and Part C.3 (additive-only
+rule) stay in force exactly as written for every canonical export until
+external compatibility requirements are confirmed. The confirmation itself
+(the actual external import column set — E1's underlying question) remains
+outstanding; until it arrives, every Part C.2 column is treated as frozen.
+
+### G.2 (E2-A) Readable companion exports for match-events and season-events — BINDING
+
+Create readable companion exports for: match-events, season-events.
+Do not append readable fields to canonical exports.
+
+Effect: resolves Part E item 2 for the event-level exports in favor of the
+separate-variant shape of option (b), rejecting option (a) — appended
+readable columns would displace the R1-pinned outcome-as-final-column
+invariant of match-events/season-events. This overrides the spec's earlier
+option-(a) recommendation for these two exports (Part E item 2's
+recommendation layer — a proposal, never a ruling). The canonical
+match-events (19-column) and season-events (20-column) exports remain
+unchanged and byte-compatible; readable columns for these exports (the B.3
+proposed set: side_name, outcome_label, clock_mmss, end_clock_mmss) ship
+only inside the new readable companion exports, never as appends. Final
+companion column lists are fixed by the G.10 implementation specification.
+
+### G.3 (E2-B) Separate readable full-analysis export — BINDING
+
+Create a separate readable full-analysis export. Preserve the existing
+36-column canonical contract.
+
+Effect: match-events-full-analysis keeps its 36-column contract and the
+R1 C22-pinned legacy quirk semantics (Category = Event = Label, legacy
+Outcome = qualifiers, empty Phase/Note/Created At/Updated At, Secondary
+Player ID = playerOffId) frozen. Readable columns for this export (the B.3
+proposed set: Team Name, Period Name, Score State Name, Event Outcome
+Label) ship only in the separate readable export — option (b), within the
+spec's recommendation range for this export. Final column list is fixed by
+the G.10 implementation specification.
+
+### G.4 (E3) Separate readable season-player export — BINDING
+
+Create a separate readable season-player export. Preserve the existing
+63-column canonical contract.
+
+Effect: resolves Part E item 3 by selecting the new-companion-export option
+(not the glossary-suffices option). The season-player 63-column contract
+(PSD-V2 §8.2 — no appends, no row_type column) remains frozen; readable
+participation/minutes/zone cells ship only in the separate readable
+companion export.
+
+### G.5 Readable time fields — BINDING
+
+Include clock_mmss in applicable readable exports. Preserve structured
+timing fields as authoritative.
+
+Consistent with Part F F1: TRUNCATE (floor) to minute:second, mm:ss format,
+column name clock_mmss, same-row derivability (D2-0). The structured timing
+fields (seconds, end_seconds, duration_seconds, and the machine timecodes)
+remain the authoritative source of truth; clock_mmss is a derived readable
+view of the same row's clock value. The exact per-companion clock columns
+are fixed by the G.10 implementation specification, deriving from the B.2
+and B.3 proposals.
+
+### G.6 Readable label fields — BINDING
+
+Use only approved, dictionary-backed label fields.
+
+Effect: readable cells in the companion exports draw exclusively from the
+approved value dictionaries — the B.1 master dictionaries as shipped in the
+glossary of record (`docs/pitchlog-data-dictionary.csv`). No label ships in
+a readable export without an approved dictionary entry behind it; no
+ad-hoc, free-form, or newly invented label vocabularies.
+
+### G.7 Missing values — BINDING
+
+Use EM DASH in readable exports. Preserve canonical null semantics.
+
+Restates Part F F3 exactly: EM DASH (U+2014 —) marks known-unknown /
+not-applicable in readable cells only; machine columns keep the
+empty-means-unknown discipline unchanged.
+
+### G.8 Glossary — BINDING
+
+Automatically generate a JSON glossary for each readable export.
+
+Effect: every readable companion export is accompanied at write time by an
+automatically generated JSON glossary. Part F F2's BINDING CSV-sidecar
+regime (pitchlog-data-dictionary.csv written next to data exports, clip
+folder excepted) is unaffected and remains in force; the JSON glossary
+required here is specific to the new readable exports. Its exact filename
+and shape are fixed by the implementation specification authorized under
+G.10 — not by this amendment.
+
+### G.9 Explicit exclusions — BINDING
+
+Clip playlist: excluded from this phase.
+
+Effect: no readable companion for clip_playlist. Its 7-column export, the
+cut_clips.bat contract, and the machine-watched clip export folder remain
+untouched — consistent with F2-d's clip-folder exception and the R2-C-5 Q2
+ruling that excluded clip exports from the unsaved-export warning.
+
+### G.10 Implementation gate — BINDING
+
+Documentation amendment first. Implementation will be separately
+authorized later.
+
+Effect: this amendment authorizes no implementation. Until implementation
+is separately authorized, no readable companion export, JSON glossary, or
+any other artifact described here may be implemented, pinned in tests, or
+shipped. The Tier 2 readability work (RF-Q3) that was blocked on the
+missing E1-E3 rulings is now unblocked at the decision level and proceeds
+as a separately authorized work package.
+
+### G.11 Ruling summary (audit view)
+
+| Required element | Ruling of record |
+|---|---|
+| Affected exports | match-events, season-events, match-events-full-analysis, season-player — each gains a separate readable companion; clip_playlist excluded (G.2-G.4, G.9) |
+| Frozen canonical contracts | All four canonical exports remain frozen: match-events 19 cols, season-events 20 cols, full-analysis 36 cols + R1 C22 semantics, season-player 63 cols (PSD-V2 §8.2); Part C.2/C.3 stay in force (G.1-G.4) |
+| Readable companion strategy | Separate readable exports only; readable fields are never appended to canonical exports (G.2-G.4) |
+| Readable-field policy | clock_mmss in applicable readable exports, structured timing fields authoritative (G.5); only approved, dictionary-backed label fields (G.6) |
+| EM DASH behavior | EM DASH for missing values in readable exports; canonical null semantics preserved (G.7, restating F3) |
+| JSON glossary | Automatically generated JSON glossary for each readable export (G.8) |
+| Explicit exclusions | Clip playlist — excluded from this phase (G.9) |
+| Implementation gate | Documentation amendment first; implementation separately authorized later (G.10) |
+
+Editorial note (no new ruling): Part F F1-d/F3 wording was written before
+the E2 delivery vehicle was ruled and reads as if readable columns live in
+the existing exports. Under Part G, those same column rules (truncation,
+clock_mmss naming, same-row derivability, EM DASH) govern the readable
+columns wherever they live — now the companion exports. Part F remains
+BINDING and unmodified.
