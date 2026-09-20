@@ -84,6 +84,19 @@
   // autosaving.
   const DEFAULT_TAGS_LENGTH = tags.length;
 
+  // R2-E Phase 1 (tag customization foundation): the default labels are the
+  // canonical analytical vocabulary — analytics.js buckets metrics by these
+  // label strings (TEAM_LABELS / metric spec §1.2) and Touchline Mode's
+  // QUICK_TAGS look tags up by them. Captured BEFORE any session load so
+  // rename protection works no matter what a loaded session contains.
+  const DEFAULT_TAG_LABELS = new Set(tags.map((t) => t.label));
+
+  // R2-E Phase 1: serialized signature of the untouched default set.
+  // hasAutosavableWork() compares against this so IN-PLACE customization
+  // (rename, shortcut/colour/size edit, deactivate) is recognized as
+  // autosavable work even when the array length is unchanged.
+  const DEFAULT_TAGS_SIGNATURE = JSON.stringify(tags);
+
   // ---------- R1: universal outcome field (first-class event field) ----------
   //
   // `outcome` is a FIRST-CLASS event field — stored values are exactly
@@ -308,13 +321,28 @@
   const detailPanel = document.getElementById('detailPanel');
 
   const addTagModal = document.getElementById('addTagModal');
+  const addTagModalTitle = document.getElementById('addTagModalTitle');
   const newTagName = document.getElementById('newTagName');
   const newTagKey = document.getElementById('newTagKey');
+  const newTagModCtrl = document.getElementById('newTagModCtrl');
+  const newTagModShift = document.getElementById('newTagModShift');
+  const newTagModAlt = document.getElementById('newTagModAlt');
   const newTagSubtypes = document.getElementById('newTagSubtypes');
   const newTagQualifiers = document.getElementById('newTagQualifiers');
   const newTagIsInterval = document.getElementById('newTagIsInterval');
+  const newTagUseColor = document.getElementById('newTagUseColor');
+  const newTagColor = document.getElementById('newTagColor');
+  const newTagSize = document.getElementById('newTagSize');
+  const addTagError = document.getElementById('addTagError');
   const btnCancelAddTag = document.getElementById('btnCancelAddTag');
   const btnConfirmAddTag = document.getElementById('btnConfirmAddTag');
+  const btnDeleteTag = document.getElementById('btnDeleteTag');
+
+  // R2-E Phase 1: the tag safety-confirmation modal (rename relink / delete).
+  const tagConfirmModal = document.getElementById('tagConfirmModal');
+  const tagConfirmText = document.getElementById('tagConfirmText');
+  const btnTagConfirmYes = document.getElementById('btnTagConfirmYes');
+  const btnTagConfirmNo = document.getElementById('btnTagConfirmNo');
 
   const btnExportClips = document.getElementById('btnExportClips');
   const clipExportModal = document.getElementById('clipExportModal');
@@ -980,12 +1008,98 @@
     return Object.prototype.hasOwnProperty.call(activeIntervals, tag.label);
   }
 
+  // ---------- R2-E Phase 1: tag customization foundation helpers ----------
+  //
+  // Optional per-tag fields (all default-safe; absent = pre-R2-E behavior):
+  //   color  — '#rrggbb' custom button colour (''/absent = default styling)
+  //   size   — 's' | 'l' (absent/'' = default size)
+  //   mods   — ['ctrl','shift','alt'] subset for the shortcut key
+  //   active — false = soft-deleted (hidden from every active surface; the
+  //            definition stays in the array so saved sessions remain
+  //            interpretable and historical events keep their tag def)
+  const TAG_SIZES = new Set(['s', 'm', 'l']);
+  const TAG_MODIFIERS = new Set(['ctrl', 'shift', 'alt']);
+
+  // Sanitize the optional customization fields of ONE tag object, in place.
+  // Absent fields stay absent (a v4 session without R2-E fields loads
+  // byte-compatibly); present-but-malformed fields are coerced to safe
+  // defaults instead of crashing the load or the render.
+  function normalizeTagFields(tag) {
+    if (!tag || typeof tag !== 'object') return tag;
+    if ('mods' in tag) {
+      tag.mods = Array.isArray(tag.mods)
+        ? tag.mods.filter((m) => TAG_MODIFIERS.has(m))
+        : [];
+    }
+    if ('color' in tag) {
+      tag.color = (typeof tag.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(tag.color))
+        ? tag.color.toLowerCase()
+        : '';
+    }
+    if ('size' in tag) {
+      // 'm' (medium) is the default size — normalized away to '' so files
+      // stay minimal.
+      tag.size = (typeof tag.size === 'string' && tag.size !== 'm' && TAG_SIZES.has(tag.size))
+        ? tag.size
+        : '';
+    }
+    if ('active' in tag) {
+      tag.active = tag.active !== false ? true : false;
+    }
+    return tag;
+  }
+
+  function isActiveTag(tag) {
+    return !!tag && tag.active !== false;
+  }
+
+  // Shortcut matching for the global keydown dispatcher. Tags WITHOUT mods
+  // keep the exact legacy rule (t.key === e.key, first match wins) — zero
+  // dispatch delta for every pre-R2-E tag, session, and test. Tags WITH mods
+  // require exactly those modifiers held (an unrequested modifier
+  // disqualifies) and compare the key case-insensitively (Shift+letter
+  // arrives as the uppercase e.key).
+  function tagShortcutMatches(tag, e) {
+    const mods = Array.isArray(tag.mods) ? tag.mods : [];
+    if (mods.length === 0) return tag.key === e.key;
+    if (e.ctrlKey !== mods.includes('ctrl')) return false;
+    if (e.shiftKey !== mods.includes('shift')) return false;
+    if (e.altKey !== mods.includes('alt')) return false;
+    return typeof tag.key === 'string' && tag.key.length === 1 &&
+      tag.key.toLowerCase() === String(e.key).toLowerCase();
+  }
+
+  // Whether a (key, mods) shortcut is already used by another ACTIVE tag.
+  // Inactive (deleted) tags keep their stored key for reactivation but never
+  // occupy a shortcut.
+  function shortcutTaken(key, mods, exceptTag) {
+    if (!key) return false;
+    const norm = (Array.isArray(mods) ? mods : []).slice().sort().join('+');
+    return tags.some((t) => {
+      if (t === exceptTag || !isActiveTag(t) || t.key !== key) return false;
+      const other = (Array.isArray(t.mods) ? t.mods : []).slice().sort().join('+');
+      return other === norm;
+    });
+  }
+
   function renderTagButtons() {
     tagButtonsEl.innerHTML = '';
     tags.forEach((tag) => {
+      // R2-E Phase 1: deleted (deactivated) tags leave the active grid.
+      if (!isActiveTag(tag)) return;
       const recording = tag.interval && isRecordingInterval(tag);
       const btn = document.createElement('button');
-      btn.className = 'tag-btn' + (recording ? ' tag-btn-recording' : '');
+      const sizeClass = tag.size === 's' ? ' tag-btn-s' : (tag.size === 'l' ? ' tag-btn-l' : '');
+      btn.className = 'tag-btn' + sizeClass + (recording ? ' tag-btn-recording' : '');
+      // R2-E Phase 1: per-tag custom colour, applied as CSS custom
+      // properties (styles.css falls back to the pre-R2-E palette when
+      // unset; the recording state's !important rules still win).
+      if (tag.color && /^#[0-9a-fA-F]{6}$/.test(tag.color)) {
+        btn.style.setProperty('--tag-color-bg', tag.color + '26');
+        btn.style.setProperty('--tag-color-border', tag.color + '66');
+        btn.style.setProperty('--tag-color-hover', tag.color + '2e');
+        btn.style.setProperty('--tag-color-accent', tag.color);
+      }
       btn.innerHTML = `
         <span>${escapeHtml(tag.label)}${tag.interval ? ' ⏱' : ''}</span>
         <span class="key">${escapeHtml(tag.key)}</span>
@@ -993,6 +1107,14 @@
         ${tagHasDetails(tag) ? '<span class="tag-detail-dot" title="Has extra detail options"></span>' : ''}
       `;
       btn.addEventListener('click', () => handleTagPress(tag));
+      // R2-E Phase 1: right-click opens this tag in the edit modal. A
+      // visible per-button affordance is deliberately avoided — the grid is
+      // hammered at match speed and an inline edit control would cause
+      // accidental edits; contextmenu cannot fire while tagging.
+      btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        openAddTagModal(tag);
+      });
       tagButtonsEl.appendChild(btn);
     });
   }
@@ -1441,8 +1563,21 @@
   }
 
   function populatePitchMapFilters() {
+    // R2-E Phase 1: same active-tags-plus-history union as the event type
+    // filter — deleted tags' historical events stay filterable on the map.
+    const labels = [];
+    const known = new Set();
+    tags.forEach((t) => {
+      if (isActiveTag(t) && !known.has(t.label)) { known.add(t.label); labels.push(t.label); }
+    });
+    events.forEach((ev) => {
+      if (ev && typeof ev.label === 'string' && ev.label && !known.has(ev.label)) {
+        known.add(ev.label);
+        labels.push(ev.label);
+      }
+    });
     const tagOptions = ['<option value="__all__">All events</option>']
-      .concat(tags.map((t) => `<option value="${escapeHtml(t.label)}">${escapeHtml(t.label)}</option>`));
+      .concat(labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`));
     pitchMapTagFilter.innerHTML = tagOptions.join('');
 
     const playerOptions = [
@@ -1742,19 +1877,91 @@
     document.getElementById('detailPanelDone').addEventListener('click', closeDetailPanel);
   }
 
-  // ---------- Add custom tag (modal) ----------
+  // ---------- Add / edit custom tag (modal) ----------
+  //
+  // R2-E Phase 1 extends the existing Add flow into a dual-mode modal:
+  // create (no argument — exactly the pre-R2-E flow, extended with the new
+  // optional fields) and edit (a tag object, opened by right-clicking a tag
+  // button). One modal, one confirm handler — no parallel tag-management
+  // architecture.
 
-  function openAddTagModal() {
-    newTagName.value = '';
-    newTagKey.value = '';
-    newTagSubtypes.value = '';
-    newTagQualifiers.value = '';
-    newTagIsInterval.checked = false;
+  // null = create mode; a tag object reference = edit mode for that tag.
+  let editingTag = null;
+
+  function readModsFromModal() {
+    const mods = [];
+    if (newTagModCtrl.checked) mods.push('ctrl');
+    if (newTagModShift.checked) mods.push('shift');
+    if (newTagModAlt.checked) mods.push('alt');
+    return mods;
+  }
+
+  function writeModsToModal(mods) {
+    const m = Array.isArray(mods) ? mods : [];
+    newTagModCtrl.checked = m.includes('ctrl');
+    newTagModShift.checked = m.includes('shift');
+    newTagModAlt.checked = m.includes('alt');
+  }
+
+  function readColorFromModal() {
+    if (!newTagUseColor.checked) return '';
+    return /^#[0-9a-fA-F]{6}$/.test(newTagColor.value) ? newTagColor.value.toLowerCase() : '';
+  }
+
+  function readSizeFromModal() {
+    return (newTagSize.value === 's' || newTagSize.value === 'l') ? newTagSize.value : '';
+  }
+
+  function showAddTagError(msg) {
+    if (!addTagError) return;
+    addTagError.textContent = msg || '';
+    addTagError.style.display = msg ? 'block' : 'none';
+  }
+
+  function openAddTagModal(tag) {
+    editingTag = tag || null;
+    if (tag) {
+      // ---- Edit mode: prefill every field from the tag's live config ----
+      addTagModalTitle.textContent = 'Edit tag';
+      btnConfirmAddTag.textContent = 'Save changes';
+      if (btnDeleteTag) btnDeleteTag.style.display = '';
+      newTagName.value = tag.label;
+      newTagKey.value = typeof tag.key === 'string' ? tag.key : '';
+      writeModsToModal(tag.mods);
+      newTagSubtypes.value = (Array.isArray(tag.subtypes) ? tag.subtypes : []).join(', ');
+      newTagQualifiers.value = (Array.isArray(tag.qualifierGroups) ? tag.qualifierGroups : [])
+        .map((g) => `${g.name}: ${(g.options || []).join(', ')}`)
+        .join('\n');
+      newTagIsInterval.checked = !!tag.interval;
+      const hasColor = typeof tag.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(tag.color);
+      newTagUseColor.checked = hasColor;
+      newTagColor.value = hasColor ? tag.color : '#2ecc71';
+      newTagColor.disabled = !hasColor;
+      newTagSize.value = (tag.size === 's' || tag.size === 'l') ? tag.size : '';
+    } else {
+      // ---- Create mode: the pre-R2-E reset, plus the new fields ----
+      addTagModalTitle.textContent = 'Add custom tag';
+      btnConfirmAddTag.textContent = 'Add tag';
+      if (btnDeleteTag) btnDeleteTag.style.display = 'none';
+      newTagName.value = '';
+      newTagKey.value = '';
+      writeModsToModal([]);
+      newTagSubtypes.value = '';
+      newTagQualifiers.value = '';
+      newTagIsInterval.checked = false;
+      newTagUseColor.checked = false;
+      newTagColor.value = '#2ecc71';
+      newTagColor.disabled = true;
+      newTagSize.value = '';
+    }
+    showAddTagError('');
     addTagModal.style.display = 'flex';
     newTagName.focus();
   }
 
   function closeAddTagModal() {
+    editingTag = null;
+    showAddTagError('');
     addTagModal.style.display = 'none';
   }
 
@@ -1774,41 +1981,232 @@
       .filter(Boolean);
   }
 
-  btnAddCustom.addEventListener('click', openAddTagModal);
+  btnAddCustom.addEventListener('click', () => openAddTagModal());
   btnCancelAddTag.addEventListener('click', closeAddTagModal);
 
-  btnConfirmAddTag.addEventListener('click', () => {
+  // Custom-colour checkbox gates the colour picker.
+  if (newTagUseColor) {
+    newTagUseColor.addEventListener('change', () => {
+      newTagColor.disabled = !newTagUseColor.checked;
+    });
+  }
+
+  // ---------- R2-E Phase 1: tag safety-confirmation modal ----------
+  // Promise-driven (same pattern as the unsaved-changes modal). Used for
+  // rename relinking and tag deletion — both are irreversible-in-bulk
+  // operations that must show the user exactly what will happen.
+  let tagConfirmResolve = null;
+
+  function showTagConfirm(message) {
+    return new Promise((resolve) => {
+      if (!tagConfirmModal) return resolve(false);
+      tagConfirmText.textContent = message;
+      tagConfirmModal.style.display = 'flex';
+      tagConfirmResolve = resolve;
+    });
+  }
+
+  function settleTagConfirm(result) {
+    if (tagConfirmModal) tagConfirmModal.style.display = 'none';
+    if (!tagConfirmResolve) return;
+    const resolve = tagConfirmResolve;
+    tagConfirmResolve = null;
+    resolve(!!result);
+  }
+
+  if (btnTagConfirmYes) btnTagConfirmYes.addEventListener('click', () => settleTagConfirm(true));
+  if (btnTagConfirmNo) btnTagConfirmNo.addEventListener('click', () => settleTagConfirm(false));
+
+  // ---------- Confirm: create or edit ----------
+
+  btnConfirmAddTag.addEventListener('click', async () => {
     const label = newTagName.value.trim();
     if (!label) return;
+    showAddTagError('');
 
     const subtypes = newTagSubtypes.value.split(',').map((s) => s.trim()).filter(Boolean);
     const qualifierGroups = parseQualifiersText(newTagQualifiers.value);
+    const mods = readModsFromModal();
+    const color = readColorFromModal();
+    const size = readSizeFromModal();
 
+    if (editingTag) {
+      await applyTagEdit(label, subtypes, qualifierGroups, mods, color, size);
+    } else {
+      applyTagCreate(label, subtypes, qualifierGroups, mods, color, size);
+    }
+  });
+
+  function applyTagCreate(label, subtypes, qualifierGroups, mods, color, size) {
+    // Duplicate ACTIVE label guard: every tag lookup is by label, so two
+    // active definitions with the same label would corrupt find-by-label
+    // (keydown key collisions, Touchline lookups, detail chips).
+    if (tags.some((t) => isActiveTag(t) && t.label === label)) {
+      showAddTagError(`A tag named "${label}" already exists.`);
+      return;
+    }
+
+    // Legacy key rule, extended from keys to (key, modifiers) combos: an
+    // empty key or an already-taken combo falls back to the first free
+    // digit with the chosen modifiers; if no digit combo is free, the tag
+    // is created keyless (the documented T5b trade-off, unchanged).
     let key = newTagKey.value.trim();
-    const usedKeys = new Set(tags.map((t) => t.key));
-    if (!key || usedKeys.has(key)) {
+    if (!key || shortcutTaken(key, mods, null)) {
       key = '';
       for (let i = 0; i <= 9; i++) {
-        if (!usedKeys.has(String(i))) { key = String(i); break; }
+        if (!shortcutTaken(String(i), mods, null)) { key = String(i); break; }
       }
     }
 
-    const newTag = { label, key };
-    if (subtypes.length) newTag.subtypes = subtypes;
-    if (qualifierGroups.length) newTag.qualifierGroups = qualifierGroups;
-    if (newTagIsInterval.checked) newTag.interval = true;
-
-    tags.push(newTag);
+    // Reactivation: creating a tag whose label matches a DELETED (inactive)
+    // tag reactivates that tag with the new configuration instead of adding
+    // a second definition with the same label.
+    const inactive = tags.find((t) => !isActiveTag(t) && t.label === label);
+    if (inactive) {
+      inactive.active = true;
+      inactive.key = key;
+      if (subtypes.length) inactive.subtypes = subtypes; else delete inactive.subtypes;
+      if (qualifierGroups.length) inactive.qualifierGroups = qualifierGroups; else delete inactive.qualifierGroups;
+      if (newTagIsInterval.checked) inactive.interval = true; else delete inactive.interval;
+      if (mods.length) inactive.mods = mods; else delete inactive.mods;
+      if (color) inactive.color = color; else delete inactive.color;
+      if (size) inactive.size = size; else delete inactive.size;
+    } else {
+      const newTag = { label, key };
+      if (subtypes.length) newTag.subtypes = subtypes;
+      if (qualifierGroups.length) newTag.qualifierGroups = qualifierGroups;
+      if (newTagIsInterval.checked) newTag.interval = true;
+      if (mods.length) newTag.mods = mods;
+      if (color) newTag.color = color;
+      if (size) newTag.size = size;
+      tags.push(newTag);
+    }
     renderTagButtons();
     populateEventTypeFilter();
     closeAddTagModal();
     markAutosaveDirty();
-  });
+  }
+
+  async function applyTagEdit(label, subtypes, qualifierGroups, mods, color, size) {
+    const tag = editingTag;
+    if (!tag) return;
+    const oldLabel = tag.label;
+    const labelChanged = label !== oldLabel;
+
+    if (labelChanged) {
+      // Canonical-label protection: the 19 default labels are the analytics
+      // vocabulary (metric spec §1.2, analytics.js TEAM_LABELS) and the
+      // Touchline QUICK_TAGS surface. Renaming one would silently detach
+      // every metric that reads that label — blocked outright in Phase 1
+      // rather than silently damaging the analytical contract. Custom tags
+      // rename freely (with the controlled relink below).
+      if (DEFAULT_TAG_LABELS.has(oldLabel)) {
+        showAddTagError(`"${oldLabel}" is a canonical tag name used by analytics, exports, and Touchline Mode — it cannot be renamed.`);
+        return;
+      }
+      if (tags.some((t) => t !== tag && t.label === label)) {
+        showAddTagError(`A tag named "${label}" already exists.`);
+        return;
+      }
+    }
+
+    // Shortcut conflict guard (edit never silently reassigns — that would
+    // be surprising on an existing tag; the user sees the conflict and
+    // resolves it). An empty key means keyless, which conflicts with
+    // nothing.
+    const key = newTagKey.value.trim();
+    if (shortcutTaken(key, mods, tag)) {
+      showAddTagError('That shortcut (key + modifiers) is already used by another tag.');
+      return;
+    }
+
+    // Controlled historical relink: show the affected-event count, then —
+    // on confirmation — relabel every stored event from the old label to
+    // the new one. Events are the substrate of analytics, filters, and CSV
+    // exports; renaming the definition without relinking would orphan the
+    // history (the "rename visually" shortcut is explicitly forbidden).
+    if (labelChanged) {
+      const affected = events.filter((ev) => ev.label === oldLabel);
+      if (affected.length > 0) {
+        const okRename = await showTagConfirm(
+          `Rename "${oldLabel}" to "${label}"?\n\n` +
+          `${affected.length} stored event${affected.length === 1 ? '' : 's'} use "${oldLabel}". ` +
+          `All of them will be relinked to "${label}" so analytics, filtering, and exports stay consistent.`
+        );
+        if (!okRename) return;
+        events.forEach((ev) => {
+          if (ev.label === oldLabel) ev.label = label;
+        });
+        // A running interval for the renamed tag keeps recording — its
+        // activeIntervals entry is keyed by label and must move with it.
+        if (Object.prototype.hasOwnProperty.call(activeIntervals, oldLabel)) {
+          activeIntervals[label] = activeIntervals[oldLabel];
+          delete activeIntervals[oldLabel];
+        }
+      }
+    }
+
+    // Apply the edit. Only the fields the modal owns are written; unknown
+    // or future properties (and `substitution`, which the modal does not
+    // expose) are preserved untouched — editing never discards properties.
+    tag.label = label;
+    tag.key = key;
+    if (subtypes.length) tag.subtypes = subtypes; else delete tag.subtypes;
+    if (qualifierGroups.length) tag.qualifierGroups = qualifierGroups; else delete tag.qualifierGroups;
+    if (newTagIsInterval.checked) tag.interval = true; else delete tag.interval;
+    if (mods.length) tag.mods = mods; else delete tag.mods;
+    if (color) tag.color = color; else delete tag.color;
+    if (size) tag.size = size; else delete tag.size;
+
+    renderTagButtons();
+    populateEventTypeFilter();
+    if (labelChanged) renderEventList();
+    closeAddTagModal();
+    markAutosaveDirty();
+  }
+
+  // ---------- Delete (soft) ----------
+
+  if (btnDeleteTag) {
+    btnDeleteTag.addEventListener('click', async () => {
+      const tag = editingTag;
+      if (!tag) return;
+      showAddTagError('');
+
+      const usedCount = events.filter((ev) => ev.label === tag.label).length;
+      const msg = usedCount > 0
+        ? `Delete "${tag.label}"?\n\n` +
+          `It is used by ${usedCount} stored event${usedCount === 1 ? '' : 's'}. ` +
+          `Those events are kept unchanged — they stay in the event list, analytics, filters, and CSV exports. ` +
+          `The tag is only removed as an active tagging button (and can be re-created later under the same name).`
+        : `Delete "${tag.label}"? No stored events use it.`;
+      const okDelete = await showTagConfirm(msg);
+      if (!okDelete) return;
+
+      // Soft delete: the definition (label, key, subtypes, qualifier
+      // groups, interval flag, colour, size) stays in the tags array and
+      // therefore in every saved session, so historical sessions keep a
+      // complete, interpretable tag definition. The tag disappears from
+      // every ACTIVE surface: button grid, keyboard dispatch, type filter,
+      // and the Touchline quick-tag grid (whose auto-create path is also
+      // guarded so a deleted tag cannot be silently resurrected).
+      tag.active = false;
+      // An interval recording for a deleted tag is aborted, NOT finished —
+      // deleting a tag must not log an event.
+      if (Object.prototype.hasOwnProperty.call(activeIntervals, tag.label)) {
+        delete activeIntervals[tag.label];
+      }
+      renderTagButtons();
+      populateEventTypeFilter();
+      closeAddTagModal();
+      markAutosaveDirty();
+    });
+  }
 
   // Keyboard shortcuts: number keys tag, spacebar toggles play/pause, Escape closes overlays.
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
-      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); }
+      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); settleTagConfirm(false); }
       return;
     }
 
@@ -1820,6 +2218,7 @@
       closePitchMapModal();
       closeMatchSetupModal();
       closeSeasonModal();
+      settleTagConfirm(false);
       return;
     }
 
@@ -1845,7 +2244,10 @@
       return;
     }
 
-    const tag = tags.find((t) => t.key === e.key);
+    // R2-E Phase 1: dispatch only ACTIVE tags. Tags without modifiers keep
+    // the exact legacy rule (t.key === e.key); tags with a mods[] subset
+    // additionally require exactly those modifiers held (tagShortcutMatches).
+    const tag = tags.find((t) => isActiveTag(t) && tagShortcutMatches(t, e));
     if (tag) handleTagPress(tag);
   });
 
@@ -1891,8 +2293,22 @@
 
   function populateEventTypeFilter() {
     const currentValue = eventTypeFilter.value || '__all__';
+    // R2-E Phase 1: options come from ACTIVE tags, plus any label that
+    // still exists on stored events (a deleted/deactivated tag's history
+    // stays filterable — deleting a tag must not hide its events).
+    const labels = [];
+    const known = new Set();
+    tags.forEach((t) => {
+      if (isActiveTag(t) && !known.has(t.label)) { known.add(t.label); labels.push(t.label); }
+    });
+    events.forEach((ev) => {
+      if (ev && typeof ev.label === 'string' && ev.label && !known.has(ev.label)) {
+        known.add(ev.label);
+        labels.push(ev.label);
+      }
+    });
     const options = ['<option value="__all__">All types</option>']
-      .concat(tags.map((t) => `<option value="${escapeHtml(t.label)}">${escapeHtml(t.label)}</option>`));
+      .concat(labels.map((label) => `<option value="${escapeHtml(label)}">${escapeHtml(label)}</option>`));
     eventTypeFilter.innerHTML = options.join('');
     eventTypeFilter.value = currentValue;
     if (eventTypeFilter.value !== currentValue) {
@@ -4167,7 +4583,9 @@
     const data = await window.matchtag.loadSession();
     if (!data) return;
 
-    tags = Array.isArray(data.tags) && data.tags.length ? data.tags : tags;
+    tags = Array.isArray(data.tags) && data.tags.length
+      ? data.tags.map(normalizeTagFields) // R2-E Phase 1: sanitize optional customization fields
+      : tags;
     events = Array.isArray(data.events)
       ? data.events.map((ev) => ({
           ...ev,
@@ -4659,6 +5077,11 @@
     if (events.length > 0) return true;
     if (currentVideoPath) return true;
     if (tags.length !== DEFAULT_TAGS_LENGTH) return true;
+    // R2-E Phase 1: in-place customization (rename, shortcut/colour/size
+    // edit, deactivate/reactivate) does not change the array length —
+    // compare the serialized set against the pristine default signature
+    // so those edits count as autosavable work too.
+    if (JSON.stringify(tags) !== DEFAULT_TAGS_SIGNATURE) return true;
     if (JSON.stringify(matchInfo) !== JSON.stringify(blankMatchInfo())) return true;
     // Check matchClock state — if the match has started, the clock is running,
     // the score has changed, a team/player is selected, a sequence is active,
@@ -4971,7 +5394,9 @@
     // Restore tags (only if the autosave's tags array is non-empty;
     // otherwise keep the defaults, same as loadSession).
     if (Array.isArray(autosave.tags) && autosave.tags.length) {
-      tags = autosave.tags;
+      // R2-E Phase 1: sanitize the optional customization fields
+      // (mods/color/size/active) of every restored tag.
+      tags = autosave.tags.map(normalizeTagFields);
     }
 
     // Restore events (defensive null-coalescing, same as loadSession).
@@ -5402,6 +5827,14 @@
   function renderTouchlineQuickTags() {
     const c = document.getElementById('touchlineQuickTags'); if (!c) return; c.innerHTML = '';
     QUICK_TAGS.forEach((label) => {
+      // R2-E Phase 1: a quick tag whose definition was DELETED (inactive)
+      // renders no button — and (see the click guard below) can never be
+      // auto-created back. Without this guard the F1.4 auto-create path
+      // would resurrect a deleted tag as a fresh flat tag on first tap,
+      // silently undoing the deletion and (for interval labels like
+      // Possession) corrupting the interval semantics.
+      const deletedDef = tags.find((t) => t.label === label && !isActiveTag(t));
+      if (deletedDef) return;
       // F1.4: interval quick tags (Possession) must show their recording
       // state in Touchline Mode — the analyst needs to see that an interval
       // is running and which button stops it. Mirrors the desktop
@@ -5409,14 +5842,17 @@
       // from the LIVE tag definition and activeIntervals so an interval
       // started on the desktop button is reflected here too (e.g. after
       // exiting and re-entering Touchline Mode mid-recording).
-      const tagDef = tags.find((t) => t.label === label);
+      const tagDef = tags.find((t) => t.label === label && isActiveTag(t));
       const recording = !!(tagDef && tagDef.interval && isRecordingInterval(tagDef));
       const btn = document.createElement('button');
       btn.className = 'touchline-tag-btn' + (label === 'Goal' ? ' goal-tag' : '') + (recording ? ' recording' : '');
       btn.textContent = label + (recording ? ' ⏱' : '');
       btn.addEventListener('click', () => {
-        let tag = tags.find((t) => t.label === label);
+        let tag = tags.find((t) => t.label === label && isActiveTag(t));
         if (!tag) {
+          // R2-E Phase 1: an inactive definition for this label means the
+          // tag was deleted — never resurrect it via auto-create.
+          if (tags.some((t) => t.label === label)) return;
           tag = { label: label, key: '' };
           // F1.4: a Possession quick tag that is auto-created because a
           // loaded session's tag array lacks the default definition must

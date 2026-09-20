@@ -148,7 +148,10 @@ section('STATIC — F1.5 wiring (source-level checks)');
     /if \(label === 'Possession'\) tag\.interval = true;/.test(rendererSrc));
 
   ok('TS-S9: loader tag-replacement semantics unchanged (embedded non-empty array wins)',
-    /tags = Array\.isArray\(data\.tags\) && data\.tags\.length \? data\.tags : tags;/.test(rendererSrc));
+    // R2-E Phase 1: the load line gained .map(normalizeTagFields) (sanitize
+    // optional customization fields); the replacement semantics are
+    // unchanged — an embedded non-empty tags array still wins wholesale.
+    /tags = Array\.isArray\(data\.tags\) && data\.tags\.length\s*\n\s*\? data\.tags\.map\(normalizeTagFields\).*\n\s*: tags;/.test(rendererSrc));
 
   // Engine oracle: every canonical label the engine counts is a default tag.
   const engineLabelsSrc = analyticsSrc.slice(
@@ -162,7 +165,12 @@ section('STATIC — F1.5 wiring (source-level checks)');
     'engineLabels=' + engineLabels.join(',') + ' missing=' + engineLabels.filter((l) => !CANONICAL_19.includes(l)).join(','));
 
   ok('TS-S11: keydown tag-key lookup unchanged (digit family only)',
-    /const tag = tags\.find\(\(t\) => t\.key === e\.key\);\s*\n\s*if \(tag\) handleTagPress\(tag\);/.test(rendererSrc));
+    // R2-E Phase 1: the dispatch line gained the active-tag filter and the
+    // modifier-aware matcher. The digit-family rule itself is unchanged —
+    // tagShortcutMatches() returns exactly `tag.key === e.key` for tags
+    // without mods (the pre-R2-E rule, pinned separately below).
+    /const tag = tags\.find\(\(t\) => isActiveTag\(t\) && tagShortcutMatches\(t, e\)\);\s*\n\s*if \(tag\) handleTagPress\(tag\);/.test(rendererSrc) &&
+    /if \(mods\.length === 0\) return tag\.key === e\.key;/.test(rendererSrc));
 
   // Spec doc honesty: §1.1 documents 19 rows + the F1.5 delta note.
   const specTable = specSrc.slice(specSrc.indexOf('### 1.1'), specSrc.indexOf('### 1.2'));

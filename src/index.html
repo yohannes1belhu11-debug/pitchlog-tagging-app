@@ -261,13 +261,22 @@
 
   <div id="addTagModal" class="modal-overlay" style="display:none;">
     <div class="modal">
-      <h3>Add custom tag</h3>
+      <h3 id="addTagModalTitle">Add custom tag</h3>
       <label>Name
         <input id="newTagName" type="text" placeholder="e.g. Tackle" />
       </label>
-      <label>Shortcut key (0–9, optional — picked automatically if left blank)
+      <label>Shortcut key (a single key, optional — digits are picked automatically if left blank)
         <input id="newTagKey" type="text" maxlength="1" placeholder="e.g. 8" />
       </label>
+      <!-- R2-E Phase 1: shortcut modifiers for the shortcut key above. The
+           combination of key + modifiers is the shortcut; plain (unmodified)
+           keys keep their exact pre-R2-E dispatch behavior. -->
+      <div class="tag-mod-row">
+        <span class="tag-mod-label">With modifiers:</span>
+        <label class="checkbox-label"><input id="newTagModCtrl" type="checkbox" />Ctrl</label>
+        <label class="checkbox-label"><input id="newTagModShift" type="checkbox" />Shift</label>
+        <label class="checkbox-label"><input id="newTagModAlt" type="checkbox" />Alt</label>
+      </div>
       <label>Subtypes (comma-separated, optional)
         <input id="newTagSubtypes" type="text" placeholder="e.g. Won, Lost" />
       </label>
@@ -278,9 +287,39 @@
         <input id="newTagIsInterval" type="checkbox" />
         This is a start/end phase (like Possession), not a single instant
       </label>
+      <!-- R2-E Phase 1: per-tag appearance foundation — custom colour and
+           button size (Default / Small / Large). -->
+      <div class="tag-style-row">
+        <label class="checkbox-label"><input id="newTagUseColor" type="checkbox" />Custom colour</label>
+        <input id="newTagColor" type="color" value="#2ecc71" title="Tag button colour" disabled />
+        <label>Size
+          <select id="newTagSize">
+            <option value="">Default</option>
+            <option value="s">Small</option>
+            <option value="l">Large</option>
+          </select>
+        </label>
+      </div>
+      <div id="addTagError" class="modal-error" style="display:none;"></div>
+      <p class="modal-hint">Right-click a tag button to edit or delete it.</p>
       <div class="modal-actions">
+        <button id="btnDeleteTag" class="btn btn-danger" style="display:none;">Delete tag</button>
         <button id="btnCancelAddTag" class="btn btn-ghost">Cancel</button>
         <button id="btnConfirmAddTag" class="btn btn-accent">Add tag</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- R2-E Phase 1: tag confirmation modal — the safety prompt for rename
+       relinking and tag deletion. Same modal pattern as unsavedConfirmModal,
+       promise-driven (showTagConfirm resolves true/false). -->
+  <div id="tagConfirmModal" class="modal-overlay" style="display:none;">
+    <div class="modal">
+      <h3>Confirm</h3>
+      <p id="tagConfirmText" class="recovery-description"></p>
+      <div class="modal-actions">
+        <button id="btnTagConfirmNo" class="btn btn-ghost">Cancel</button>
+        <button id="btnTagConfirmYes" class="btn btn-accent">Confirm</button>
       </div>
     </div>
   </div>

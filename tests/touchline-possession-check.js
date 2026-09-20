@@ -120,7 +120,10 @@ section('STATIC — F1.4 wiring (source-level checks)');
     /const QUICK_TAGS = \['Possession','Shot'/.test(rendererSrc));
 
   ok('TP-S3: quick-tag grid computes the recording state from the LIVE tag definition',
-    /const tagDef = tags\.find\(\(t\) => t\.label === label\);/.test(rtqFn) &&
+    // R2-E Phase 1: the lookup gained the active-tag filter (a deleted tag
+    // renders no quick-tag button — see the deletedDef guard) — the LIVE
+    // definition semantics are unchanged.
+    /const tagDef = tags\.find\(\(t\) => t\.label === label && isActiveTag\(t\)\);/.test(rtqFn) &&
     /isRecordingInterval\(tagDef\)/.test(rtqFn));
   ok('TP-S4: recording class + ⏱ glyph wired into the quick-tag button',
     /\(recording \? ' recording' : ''\)/.test(rtqFn) &&

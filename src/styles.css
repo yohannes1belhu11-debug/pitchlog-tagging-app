@@ -449,8 +449,13 @@ button {
 
 .tag-btn {
   position: relative;
-  background: var(--panel-alt);
-  border: 1px solid var(--border);
+  /* R2-E Phase 1: per-tag custom colour. renderTagButtons sets the
+     --tag-color-* custom properties on the button when the tag has a
+     colour; when unset these fall back to the exact pre-R2-E values, so
+     uncolored tags are byte-identical in appearance. The recording state
+     keeps its !important overrides below. */
+  background: var(--tag-color-bg, var(--panel-alt));
+  border: 1px solid var(--tag-color-border, var(--border));
   color: var(--text);
   border-radius: var(--radius);
   padding: 10px 8px;
@@ -463,6 +468,23 @@ button {
   gap: 3px;
   transition: transform 0.08s ease, background 0.15s ease, border-color 0.15s ease;
 }
+
+/* R2-E Phase 1: per-tag button size (Small / Large; Default = no class). */
+.tag-btn-s {
+  padding: 6px 6px;
+  font-size: 11px;
+  gap: 2px;
+}
+
+.tag-btn-s .key { font-size: 9px; }
+
+.tag-btn-l {
+  padding: 14px 10px;
+  font-size: 14.5px;
+  gap: 4px;
+}
+
+.tag-btn-l .key { font-size: 11px; }
 
 .tag-detail-dot {
   position: absolute;
@@ -488,8 +510,8 @@ button {
 }
 
 .tag-btn:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--tag-color-hover, var(--accent-soft));
+  border-color: var(--tag-color-accent, var(--accent));
 }
 
 .tag-btn:active {
@@ -506,6 +528,84 @@ button {
   margin-top: 10px;
   width: 100%;
   padding: 8px;
+}
+
+/* ---------- R2-E Phase 1: tag customization modal controls ---------- */
+
+.tag-mod-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 10px;
+}
+
+.tag-mod-label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.tag-mod-row .checkbox-label,
+.tag-style-row .checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.tag-style-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 10px;
+}
+
+.tag-style-row input[type="color"] {
+  width: 34px;
+  height: 26px;
+  padding: 1px 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-alt);
+  cursor: pointer;
+}
+
+.tag-style-row input[type="color"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tag-style-row select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-alt);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.modal-error {
+  color: #d84b4b;
+  font-size: 12px;
+  margin: 8px 0 0;
+  white-space: pre-line;
+}
+
+.modal-hint {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  margin: 10px 0 0;
+}
+
+.btn-danger {
+  color: #d84b4b;
+  border-color: rgba(216, 75, 75, 0.45);
+}
+
+.btn-danger:hover {
+  background: rgba(216, 75, 75, 0.12);
+  border-color: #d84b4b;
 }
 
 /* ---------- Event list ---------- */
