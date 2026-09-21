@@ -337,6 +337,9 @@
   const btnCancelAddTag = document.getElementById('btnCancelAddTag');
   const btnConfirmAddTag = document.getElementById('btnConfirmAddTag');
   const btnDeleteTag = document.getElementById('btnDeleteTag');
+  // R2-E Phase 2A (ruling R8): Clear button — resets key + all modifier
+  // checkboxes to NONE (keyless) in the tag modal.
+  const btnClearShortcut = document.getElementById('btnClearShortcut');
 
   // R2-E Phase 1: the tag safety-confirmation modal (rename relink / delete).
   const tagConfirmModal = document.getElementById('tagConfirmModal');
@@ -1018,19 +1021,21 @@
   //            definition stays in the array so saved sessions remain
   //            interpretable and historical events keep their tag def)
   const TAG_SIZES = new Set(['s', 'm', 'l']);
-  const TAG_MODIFIERS = new Set(['ctrl', 'shift', 'alt']);
 
   // Sanitize the optional customization fields of ONE tag object, in place.
   // Absent fields stay absent (a v4 session without R2-E fields loads
-  // byte-compatibly); present-but-malformed fields are coerced to safe
-  // defaults instead of crashing the load or the render.
+  // byte-compatibly).
+  //
+  // R2-E Phase 2A (spec §6, no-silent-mutation constraint): the SHORTCUT
+  // fields (key, mods) are deliberately NOT coerced here. Malformed stored
+  // values load exactly as they are stored: they are inert at the identity
+  // layer (storedShortcutIdentity → invalid → the tag cannot fire on any
+  // key), they are flagged by the warn-dot + console diagnostics (§15),
+  // and they are rewritten only by an explicit user edit through the tag
+  // modal. The appearance/lifecycle fields (color/size/active) keep the
+  // Phase 1 safe coercion — they are not shortcut fields.
   function normalizeTagFields(tag) {
     if (!tag || typeof tag !== 'object') return tag;
-    if ('mods' in tag) {
-      tag.mods = Array.isArray(tag.mods)
-        ? tag.mods.filter((m) => TAG_MODIFIERS.has(m))
-        : [];
-    }
     if ('color' in tag) {
       tag.color = (typeof tag.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(tag.color))
         ? tag.color.toLowerCase()
@@ -1053,37 +1058,330 @@
     return !!tag && tag.active !== false;
   }
 
-  // Shortcut matching for the global keydown dispatcher. Tags WITHOUT mods
-  // keep the exact legacy rule (t.key === e.key, first match wins) — zero
-  // dispatch delta for every pre-R2-E tag, session, and test. Tags WITH mods
-  // require exactly those modifiers held (an unrequested modifier
-  // disqualifies) and compare the key case-insensitively (Shift+letter
-  // arrives as the uppercase e.key).
-  function tagShortcutMatches(tag, e) {
-    const mods = Array.isArray(tag.mods) ? tag.mods : [];
-    if (mods.length === 0) return tag.key === e.key;
-    if (e.ctrlKey !== mods.includes('ctrl')) return false;
-    if (e.shiftKey !== mods.includes('shift')) return false;
-    if (e.altKey !== mods.includes('alt')) return false;
-    return typeof tag.key === 'string' && tag.key.length === 1 &&
-      tag.key.toLowerCase() === String(e.key).toLowerCase();
+  // =========================================================================
+  // R2-E Phase 2A: the shortcut identity system (spec v4.1 §5/§6/§7/§10/§15)
+  // =========================================================================
+  //
+  // A tag's shortcut is the IDENTITY (normalized key character + exact
+  // modifier set), derived from the stored key/mods fields — never stored
+  // as a separate shape, never silently rewritten. NONE (empty or absent
+  // key) is the explicit keyless identity: it dispatches nothing and
+  // conflicts with nothing, including another NONE (§5). Malformed stored
+  // shortcut fields are preserved as loaded and treated as inert (§6,
+  // no-inference rule).
+
+  // Canonical single-character form of a stored key. Identity comparison is
+  // case-insensitive; the stored field itself is never rewritten.
+  function parseStoredKeyChar(key) {
+    if (typeof key !== 'string' || key.length !== 1) return null;
+    return key.toLowerCase();
   }
 
-  // Whether a (key, mods) shortcut is already used by another ACTIVE tag.
-  // Inactive (deleted) tags keep their stored key for reactivation but never
-  // occupy a shortcut.
-  function shortcutTaken(key, mods, exceptTag) {
-    if (!key) return false;
-    const norm = (Array.isArray(mods) ? mods : []).slice().sort().join('+');
-    return tags.some((t) => {
-      if (t === exceptTag || !isActiveTag(t) || t.key !== key) return false;
-      const other = (Array.isArray(t.mods) ? t.mods : []).slice().sort().join('+');
-      return other === norm;
-    });
+  // Canonical modifier set of stored mods. Accepts case-insensitive
+  // 'ctrl' / 'shift' / 'alt' tokens ('Ctrl' → ctrl, without rewriting the
+  // stored field). Any other shape — a non-array, a non-string entry, or an
+  // unknown token such as 'meta' (never storable per ruling R5) — is
+  // MALFORMED: inert, preserved, diagnosed (no inference, §6).
+  function parseStoredMods(mods) {
+    if (mods === undefined || mods === null) return [];
+    if (!Array.isArray(mods)) return null;
+    const out = [];
+    for (const m of mods) {
+      if (typeof m !== 'string') return null;
+      const t = m.toLowerCase();
+      if (t !== 'ctrl' && t !== 'shift' && t !== 'alt') return null;
+      if (!out.includes(t)) out.push(t);
+    }
+    return out;
   }
+
+  // The identity of a stored tag's shortcut:
+  //   { none: true }   keyless (NONE) — never dispatches, never conflicts
+  //   { key, mods }    a valid identity (lowercase char + canonical set)
+  //   { invalid: true }  malformed stored shortcut fields — inert + preserved
+  function storedShortcutIdentity(tag) {
+    if (!tag || typeof tag !== 'object') return { invalid: true };
+    if (tag.key === undefined || tag.key === null || tag.key === '') return { none: true };
+    const key = parseStoredKeyChar(tag.key);
+    const mods = parseStoredMods(tag.mods);
+    if (key === null || mods === null) return { invalid: true };
+    return { key, mods };
+  }
+
+  // The identity of a keydown event. Ruling R5: Meta maps to Ctrl for
+  // DISPATCH (and undo) only — Cmd+K fires a Ctrl+K tag; 'meta' is never
+  // a storable modifier.
+  function eventShortcutIdentity(e) {
+    if (!e || typeof e.key !== 'string') return null;
+    const mods = [];
+    if (e.ctrlKey || e.metaKey) mods.push('ctrl');
+    if (e.altKey) mods.push('alt');
+    if (e.shiftKey) mods.push('shift');
+    return { key: e.key.toLowerCase(), mods };
+  }
+
+  // Comparable identity key: character + lexically-sorted modifier set.
+  function identityKey(key, mods) {
+    return key + '|' + (mods || []).slice().sort().join('+');
+  }
+
+  function modsSetEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    return a.every((m) => b.includes(m));
+  }
+
+  // ---------- §7: reserved / protected shortcuts (two enforcement layers) ----------
+  //
+  // ONE set, TWO layers:
+  //   Assignment layer — validateTagShortcut() REJECTS these identities
+  //     when creating / editing / reactivating a tag (category diagnostic,
+  //     §15 channel 1 inline + channel 3 console).
+  //   Dispatch layer — the keydown dispatcher SKIPS these identities even
+  //     when stored data contains one (a Phase 1 session or a hand-edited
+  //     file), so the menu accelerator / app function always wins and a tag
+  //     never double-fires (Case B).
+  //
+  // Evidence base (Stage 0 xdotool probe on THIS app, Linux / US layout —
+  // recorded in the R2E-PHASE2A-STAGE0-PROBE worklog entry): every reserved
+  // accelerator identity below was confirmed firing through Electron's
+  // DEFAULT menu (this app registers no custom menu, main.js); the free
+  // list (ctrl+x/c/v/a, ctrl+=, alt+f/e/v/h, f12) was confirmed NOT firing
+  // any menu action. The numpad ctrl+'+' question is deliberately NOT
+  // inferred here — that is the NAT-4 pre-delivery gate (AMD-1).
+  const RESERVED_SHORTCUTS = new Map();
+  function reserveShortcut(key, mods, why) {
+    RESERVED_SHORTCUTS.set(identityKey(key, mods), why);
+  }
+  // Electron default-menu accelerators (Stage 0 xdotool-confirmed).
+  reserveShortcut('r', ['ctrl'], 'menu accelerator: reload');
+  reserveShortcut('r', ['ctrl', 'shift'], 'menu accelerator: force reload');
+  reserveShortcut('i', ['ctrl', 'shift'], 'menu accelerator: developer tools');
+  reserveShortcut('-', ['ctrl'], 'menu accelerator: zoom out');
+  reserveShortcut('0', ['ctrl'], 'menu accelerator: reset zoom');
+  // Zoom-in fires on Ctrl+Shift+'+' (key '+', code Equal on US layout).
+  // Per the v4 keyboard-identification contract, Ctrl+Shift+= IS this
+  // identity (Shift+'=' types '+') — it is NOT auto-converted to a separate
+  // "Ctrl+Plus" identity, and the numpad ctrl+'+' variant is left to NAT-4.
+  reserveShortcut('+', ['ctrl', 'shift'], 'menu accelerator: zoom in');
+  reserveShortcut('w', ['ctrl'], 'menu accelerator: close window');
+  reserveShortcut('f11', [], 'menu accelerator: toggle fullscreen');
+  // In-app function keys. The app's own keydown branches handle these
+  // modifier-agnostically (Space on e.code, Escape / arrows on e.key, undo
+  // on the §13 guard), so EVERY modifier state of these keys is reserved —
+  // a stored tag with one of these identities could never dispatch and
+  // must not be assignable.
+  const RESERVED_APP_KEYS = [
+    [' ', 'app function: play/pause (Space)'],
+    ['escape', 'app function: close overlays (Escape)'],
+    ['arrowleft', 'app function: video seek (Left arrow)'],
+    ['arrowright', 'app function: video seek (Right arrow)']
+  ];
+  const ALL_MOD_COMBOS = [
+    [], ['ctrl'], ['alt'], ['shift'],
+    ['ctrl', 'alt'], ['ctrl', 'shift'], ['alt', 'shift'],
+    ['ctrl', 'alt', 'shift']
+  ];
+  for (const reservedAppKey of RESERVED_APP_KEYS) {
+    for (const mods of ALL_MOD_COMBOS) reserveShortcut(reservedAppKey[0], mods, reservedAppKey[1]);
+  }
+  // Undo z-family (spec §13): the exact guard matches (Ctrl OR Meta) with
+  // key 'z' case-insensitively and does NOT exclude Shift/Alt — so every
+  // ctrl-superset of 'z' is an undo trigger and reserved.
+  reserveShortcut('z', ['ctrl'], 'app function: undo (Ctrl/Cmd+Z)');
+  reserveShortcut('z', ['ctrl', 'shift'], 'app function: undo (Ctrl/Cmd+Shift+Z — the §13 guard has no shift exclusion)');
+  reserveShortcut('z', ['ctrl', 'alt'], 'app function: undo (Ctrl/Cmd+Alt+Z — the §13 guard has no alt exclusion)');
+  reserveShortcut('z', ['ctrl', 'alt', 'shift'], 'app function: undo (Ctrl/Cmd+Alt+Shift+Z — the §13 guard has no shift/alt exclusion)');
+
+  function reservedShortcutWhy(key, mods) {
+    return RESERVED_SHORTCUTS.get(identityKey(key, mods)) || null;
+  }
+
+  // ---------- R4/R7: effective-form derived views ----------
+  //
+  // Every DISPLAYED shortcut is derived from the stored identity — there is
+  // no separate stored display string (single source of truth). Modifier
+  // order is fixed: Ctrl → Alt → Shift (ruling R7). NONE and malformed
+  // identities display nothing. The key character is shown exactly as
+  // stored (no case inference).
+  function shortcutDisplayLabel(tag) {
+    const stored = storedShortcutIdentity(tag);
+    if (!stored || stored.none || stored.invalid) return '';
+    const parts = [];
+    if (stored.mods.includes('ctrl')) parts.push('Ctrl');
+    if (stored.mods.includes('alt')) parts.push('Alt');
+    if (stored.mods.includes('shift')) parts.push('Shift');
+    parts.push(tag.key);
+    return parts.join('+');
+  }
+
+  // The same derivation for a raw (key, mods) candidate — used in validator
+  // diagnostics so messages name the effective form the user is choosing.
+  function candidateShortcutLabel(key, mods) {
+    const parts = [];
+    if (mods.includes('ctrl')) parts.push('Ctrl');
+    if (mods.includes('alt')) parts.push('Alt');
+    if (mods.includes('shift')) parts.push('Shift');
+    parts.push(key);
+    return parts.join('+');
+  }
+
+  // ---------- §10 / AMD-2 clause R-1: the ONE shared shortcut validator ----------
+  //
+  // Every write path — create, edit, and soft-delete REACTIVATION —
+  // validates through this single function. The validation order is fixed
+  // (§10): identity validity (§6) FIRST, then reserved/protected (§7), then
+  // duplicates (§10). NONE (empty key) is valid and conflicts with nothing.
+  // Duplicate detection is NON-MUTATING (ruling R1): it reports, it never
+  // reassigns anything by itself.
+  //
+  // Returns:
+  //   { ok: true, identity|null, warn? }  valid (identity null = NONE);
+  //                                        warn = { message } for the
+  //                                        non-blocking duplicate-inactive
+  //                                        notice
+  //   { ok: false, category, message }     'invalid' | 'reserved' |
+  //                                        'duplicate-active'
+  function validateTagShortcut(key, mods, exceptTag) {
+    // §6 — identity validity (no inference: a malformed candidate is
+    // rejected outright, never coerced).
+    if (key !== undefined && key !== null && key !== '' && parseStoredKeyChar(key) === null) {
+      return { ok: false, category: 'invalid',
+        message: 'That shortcut is not valid — use a single key character, or leave the key blank for a keyless tag.' };
+    }
+    const parsedMods = parseStoredMods(mods);
+    if (parsedMods === null) {
+      return { ok: false, category: 'invalid',
+        message: 'Those modifiers are not valid — use only the Ctrl / Shift / Alt checkboxes.' };
+    }
+    // §5 — NONE: keyless. Conflicts with nothing (including another NONE).
+    if (key === undefined || key === null || key === '') {
+      return { ok: true, identity: null };
+    }
+    const parsedKey = parseStoredKeyChar(key);
+
+    // §7 — reserved/protected (assignment layer).
+    const why = reservedShortcutWhy(parsedKey, parsedMods);
+    if (why) {
+      return { ok: false, category: 'reserved',
+        message: candidateShortcutLabel(key, parsedMods) + ' is reserved (' + why + ') — choose another key or modifier combination.' };
+    }
+
+    // §10 — duplicates. An ACTIVE tag holding the exact identity blocks;
+    // an INACTIVE (soft-deleted) tag holding it is a non-mutating warning
+    // (the inactive definition keeps its stored fields; reactivating it
+    // later runs this same validator and will block if still taken).
+    let warn = null;
+    for (const t of tags) {
+      if (t === exceptTag) continue;
+      const sid = storedShortcutIdentity(t);
+      if (!sid || sid.none || sid.invalid) continue;
+      if (sid.key !== parsedKey || !modsSetEqual(sid.mods, parsedMods)) continue;
+      if (isActiveTag(t)) {
+        return { ok: false, category: 'duplicate-active',
+          message: 'That shortcut (' + candidateShortcutLabel(key, parsedMods) + ') is already used by tag "' + t.label + '".' };
+      }
+      warn = { message: 'Note: the deleted tag "' + t.label + '" still stores ' +
+        candidateShortcutLabel(key, parsedMods) + ' — reactivating it later will require revalidation.' };
+    }
+    return { ok: true, identity: { key: parsedKey, mods: parsedMods }, warn };
+  }
+
+  // §15 diagnostics, channel 3: structured console warnings (machine-
+  // traceable), alongside the inline modal error (channel 1) and the
+  // per-button warn-dot (channel 2).
+  function warnShortcutDiagnostics(message) {
+    console.warn('[PitchLog][shortcut] ' + message);
+  }
+
+  // T5b digit fallback (CREATE path only — AMD-2 prohibits it for
+  // reactivation). Ruling R3: the scan skips reserved identities (no digit
+  // combination is reserved today, but the rule is normative so the
+  // fallback can never hand out a protected combo) and identities held by
+  // ACTIVE tags. Returns '' (keyless) when no digit combination is free —
+  // the documented T5b trade-off.
+  function firstFreeDigitCombo(mods) {
+    for (let i = 0; i <= 9; i++) {
+      const d = String(i);
+      if (reservedShortcutWhy(d, mods)) continue;
+      const taken = tags.some((t) => {
+        if (!isActiveTag(t)) return false;
+        const sid = storedShortcutIdentity(t);
+        return !!sid && !sid.none && !sid.invalid && sid.key === d && modsSetEqual(sid.mods, mods);
+      });
+      if (!taken) return d;
+    }
+    return '';
+  }
+
+  // R2-E Phase 2A (spec §6): UNIFIED shortcut matching. A tag matches an
+  // event iff its stored identity is valid, non-NONE, and EXACTLY equals
+  // the event identity — same key character (case-insensitive) AND the
+  // same modifier set (a missing or extra modifier disqualifies). This
+  // closes the Phase 1 legacy quirk where a mods-less tag fired on ANY
+  // modifier state of its key (Ctrl+3 fired the plain '3' tag): the plain
+  // '3' tag now requires the bare '3' press, exactly like every other
+  // identity.
+  function tagShortcutMatches(tag, e) {
+    if (!isActiveTag(tag)) return false;
+    const stored = storedShortcutIdentity(tag);
+    if (!stored || stored.none || stored.invalid) return false;
+    const ev = eventShortcutIdentity(e);
+    if (!ev) return false;
+    return stored.key === ev.key && modsSetEqual(stored.mods, ev.mods);
+  }
+
+  // R2-E Phase 2A (spec §15): grid-level shortcut diagnostics — the
+  // warn-dot (channel 2) + console warnings (channel 3) for shortcut states
+  // that exist in STORED data (loaded from a file; assignment-time conflicts
+  // are blocked in the modal and never reach the grid). NON-MUTATING:
+  // nothing is ever auto-fixed. Case B = a reserved identity in stored data;
+  // Case A = duplicate identities among active tags (only possible in
+  // externally edited data — the validator blocks both at assignment).
+  function computeShortcutDiagnostics() {
+    const issues = []; // { tag, kind: 'reserved'|'duplicate'|'malformed', message }
+    const byIdentity = new Map();
+    tags.forEach((tag) => {
+      if (!isActiveTag(tag)) return;
+      const sid = storedShortcutIdentity(tag);
+      if (!sid || sid.none) return;
+      if (sid.invalid) {
+        issues.push({ tag, kind: 'malformed',
+          message: 'tag "' + tag.label + '" has malformed stored shortcut fields — it will not fire on any key (edit the tag to fix them)' });
+        return;
+      }
+      const label = shortcutDisplayLabel(tag);
+      const why = RESERVED_SHORTCUTS.get(identityKey(sid.key, sid.mods));
+      if (why) {
+        issues.push({ tag, kind: 'reserved',
+          message: 'tag "' + tag.label + '" holds the reserved shortcut ' + label + ' (' + why + ') — it will not dispatch; edit the tag to choose another key' });
+      }
+      const idk = identityKey(sid.key, sid.mods);
+      if (!byIdentity.has(idk)) byIdentity.set(idk, []);
+      byIdentity.get(idk).push({ tag, label });
+    });
+    byIdentity.forEach((holders) => {
+      if (holders.length < 2) return;
+      holders.forEach((h) => issues.push({ tag: h.tag, kind: 'duplicate',
+        message: 'tag "' + h.tag.label + '" shares the shortcut ' + h.label + ' with another active tag — only the first definition fires; edit one of them' }));
+    });
+    return issues;
+  }
+
+  // §15 channel 3 spam guard: console warnings are emitted once per CHANGED
+  // diagnostic set, so frequent re-renders (interval start/finish, CRUD)
+  // do not repeat the same warnings.
+  let lastShortcutDiagnosticsSignature = '';
 
   function renderTagButtons() {
     tagButtonsEl.innerHTML = '';
+    const shortcutIssues = computeShortcutDiagnostics();
+    const issueByTag = new Map();
+    shortcutIssues.forEach((i) => { if (!issueByTag.has(i.tag)) issueByTag.set(i.tag, i); });
+    const signature = shortcutIssues.map((i) => i.kind + ':' + i.tag.label).sort().join(';');
+    if (shortcutIssues.length && signature !== lastShortcutDiagnosticsSignature) {
+      shortcutIssues.forEach((i) => warnShortcutDiagnostics(i.message));
+    }
+    lastShortcutDiagnosticsSignature = shortcutIssues.length ? signature : '';
     tags.forEach((tag) => {
       // R2-E Phase 1: deleted (deactivated) tags leave the active grid.
       if (!isActiveTag(tag)) return;
@@ -1100,11 +1398,21 @@
         btn.style.setProperty('--tag-color-hover', tag.color + '2e');
         btn.style.setProperty('--tag-color-accent', tag.color);
       }
+      // R2-E Phase 2A (R4/R7): the badge shows the DERIVED effective form
+      // ("Ctrl+k", "Ctrl+Alt+Shift+K", …) — legacy single-key tags render
+      // exactly their key character, so pre-Phase-2A grids are visually
+      // unchanged. NONE and malformed identities render an empty badge.
+      const badge = shortcutDisplayLabel(tag);
+      // R2-E Phase 2A (§15 channel 2): the warn-dot flags stored-data
+      // shortcut states (reserved / duplicate / malformed) — never rendered
+      // for a clean shortcut, and it never changes anything by itself.
+      const issue = issueByTag.get(tag) || null;
       btn.innerHTML = `
         <span>${escapeHtml(tag.label)}${tag.interval ? ' ⏱' : ''}</span>
-        <span class="key">${escapeHtml(tag.key)}</span>
+        <span class="key"${badge ? ' title="' + escapeAttr(badge) + '"' : ''}>${escapeHtml(badge)}</span>
         ${recording ? '<span class="tag-recording-label">Recording…</span>' : ''}
         ${tagHasDetails(tag) ? '<span class="tag-detail-dot" title="Has extra detail options"></span>' : ''}
+        ${issue ? '<span class="tag-warn-dot" role="img" aria-label="Shortcut warning: ' + escapeAttr(issue.message) + '" title="' + escapeAttr(issue.message) + '"></span>' : ''}
       `;
       btn.addEventListener('click', () => handleTagPress(tag));
       // R2-E Phase 1: right-click opens this tag in the edit modal. A
@@ -1991,6 +2299,19 @@
     });
   }
 
+  // R2-E Phase 2A (ruling R8): Clear resets the whole shortcut — the key
+  // input AND all three modifier checkboxes — to NONE (keyless). It only
+  // touches the form; nothing is applied until Confirm.
+  if (btnClearShortcut) {
+    btnClearShortcut.addEventListener('click', () => {
+      newTagKey.value = '';
+      newTagModCtrl.checked = false;
+      newTagModShift.checked = false;
+      newTagModAlt.checked = false;
+      newTagKey.focus();
+    });
+  }
+
   // ---------- R2-E Phase 1: tag safety-confirmation modal ----------
   // Promise-driven (same pattern as the unsaved-changes modal). Used for
   // rename relinking and tag deletion — both are irreversible-in-bulk
@@ -2046,25 +2367,27 @@
       return;
     }
 
-    // Legacy key rule, extended from keys to (key, modifiers) combos: an
-    // empty key or an already-taken combo falls back to the first free
-    // digit with the chosen modifiers; if no digit combo is free, the tag
-    // is created keyless (the documented T5b trade-off, unchanged).
-    let key = newTagKey.value.trim();
-    if (!key || shortcutTaken(key, mods, null)) {
-      key = '';
-      for (let i = 0; i <= 9; i++) {
-        if (!shortcutTaken(String(i), mods, null)) { key = String(i); break; }
-      }
-    }
+    const key = newTagKey.value.trim();
 
-    // Reactivation: creating a tag whose label matches a DELETED (inactive)
-    // tag reactivates that tag with the new configuration instead of adding
-    // a second definition with the same label.
+    // Reactivation (AMD-2 clause R-1): creating a tag whose label matches a
+    // DELETED (inactive) tag reactivates that definition — through the SAME
+    // shared validator as edit/save (§6 validity → §7 reserved → §10
+    // duplicates). The T5b silent digit fallback is PROHIBITED here: the
+    // SUBMITTED values are applied as-is (an empty key reactivates the tag
+    // as keyless — NONE), and a blocked reactivation mutates NOTHING on the
+    // stored inactive definition.
     const inactive = tags.find((t) => !isActiveTag(t) && t.label === label);
+    let assignedKey = key;
     if (inactive) {
+      const check = validateTagShortcut(key, mods, inactive);
+      if (!check.ok) {
+        showAddTagError(check.message);
+        warnShortcutDiagnostics('reactivation of "' + label + '" blocked (' + check.category + '): ' + check.message);
+        return;
+      }
+      if (check.warn) warnShortcutDiagnostics('reactivation of "' + label + '": ' + check.warn.message);
       inactive.active = true;
-      inactive.key = key;
+      inactive.key = assignedKey;
       if (subtypes.length) inactive.subtypes = subtypes; else delete inactive.subtypes;
       if (qualifierGroups.length) inactive.qualifierGroups = qualifierGroups; else delete inactive.qualifierGroups;
       if (newTagIsInterval.checked) inactive.interval = true; else delete inactive.interval;
@@ -2072,7 +2395,24 @@
       if (color) inactive.color = color; else delete inactive.color;
       if (size) inactive.size = size; else delete inactive.size;
     } else {
-      const newTag = { label, key };
+      // New definition. The shortcut candidate runs through the ONE shared
+      // validator: 'invalid' and 'reserved' BLOCK (a reserved combo is
+      // never silently reassigned around — the user must see why), while
+      // the legacy T5b trade-off is preserved for the empty-key and
+      // duplicate cases — silent fallback to the first free digit with the
+      // chosen modifiers (R3: the scan skips reserved identities), keyless
+      // when none is free.
+      const check = validateTagShortcut(key, mods, null);
+      if (!check.ok && check.category !== 'duplicate-active') {
+        showAddTagError(check.message);
+        warnShortcutDiagnostics('create of "' + label + '" blocked (' + check.category + '): ' + check.message);
+        return;
+      }
+      if (check.warn) warnShortcutDiagnostics('create of "' + label + '": ' + check.warn.message);
+      if (key === '' || (!check.ok && check.category === 'duplicate-active')) {
+        assignedKey = firstFreeDigitCombo(mods);
+      }
+      const newTag = { label, key: assignedKey };
       if (subtypes.length) newTag.subtypes = subtypes;
       if (qualifierGroups.length) newTag.qualifierGroups = qualifierGroups;
       if (newTagIsInterval.checked) newTag.interval = true;
@@ -2110,15 +2450,18 @@
       }
     }
 
-    // Shortcut conflict guard (edit never silently reassigns — that would
-    // be surprising on an existing tag; the user sees the conflict and
-    // resolves it). An empty key means keyless, which conflicts with
-    // nothing.
+    // R2-E Phase 2A: the shortcut candidate runs through the ONE shared
+    // validator (same as create and reactivation — §6 validity → §7
+    // reserved → §10 duplicates). Edit never silently reassigns; an empty
+    // key means keyless (NONE), which conflicts with nothing.
     const key = newTagKey.value.trim();
-    if (shortcutTaken(key, mods, tag)) {
-      showAddTagError('That shortcut (key + modifiers) is already used by another tag.');
+    const shortcutCheck = validateTagShortcut(key, mods, tag);
+    if (!shortcutCheck.ok) {
+      showAddTagError(shortcutCheck.message);
+      warnShortcutDiagnostics('edit of "' + oldLabel + '" blocked (' + shortcutCheck.category + '): ' + shortcutCheck.message);
       return;
     }
+    if (shortcutCheck.warn) warnShortcutDiagnostics('edit of "' + label + '": ' + shortcutCheck.warn.message);
 
     // Controlled historical relink: show the affected-event count, then —
     // on confirmation — relabel every stored event from the old label to
@@ -2222,7 +2565,14 @@
       return;
     }
 
-    if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+    // R2-E Phase 2A (spec §13): the EXACT undo guard — modifier assertion
+    // (Ctrl OR Meta) AND key assertion (a string 'z', compared case-
+    // insensitively). The typeof guard protects against edge/synthetic
+    // events whose key is not a string; the deliberate absence of a
+    // Shift/Alt exclusion means Ctrl+Shift+Z (and Ctrl+Alt+Z) also land
+    // here. Meta maps to Ctrl for undo per ruling R5 (dispatch + undo
+    // only — 'meta' is never a storable modifier).
+    if ((e.ctrlKey || e.metaKey) && typeof e.key === 'string' && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       undoLastTag();
       return;
@@ -2244,11 +2594,18 @@
       return;
     }
 
-    // R2-E Phase 1: dispatch only ACTIVE tags. Tags without modifiers keep
-    // the exact legacy rule (t.key === e.key); tags with a mods[] subset
-    // additionally require exactly those modifiers held (tagShortcutMatches).
-    const tag = tags.find((t) => isActiveTag(t) && tagShortcutMatches(t, e));
-    if (tag) handleTagPress(tag);
+    // R2-E Phase 2A: unified shortcut dispatch (spec §6/§7/§10). Reserved
+    // identities never dispatch — the §7 DISPATCH layer protects the menu
+    // accelerator / app function even when stored data contains one (Case
+    // B: a Phase 1 session or hand-edited file). Every tag — legacy
+    // single-key or modifier combo — then dispatches on EXACT identity
+    // match (tagShortcutMatches); duplicate identities in stored data
+    // (Case A) are non-mutating first-match-wins.
+    const evIdentity = eventShortcutIdentity(e);
+    if (evIdentity && !reservedShortcutWhy(evIdentity.key, evIdentity.mods)) {
+      const tag = tags.find((t) => isActiveTag(t) && tagShortcutMatches(t, e));
+      if (tag) handleTagPress(tag);
+    }
   });
 
   // ---------- Event list ----------
@@ -2422,6 +2779,18 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  // R2-E Phase 2A: attribute-safe escaping (escapeHtml does not escape
+  // quotes, and badge/warn-dot titles are injected into HTML attributes
+  // where a stored '"' key character could otherwise break out).
+  function escapeAttr(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   // ---------- Live stats ----------

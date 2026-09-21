@@ -226,8 +226,11 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
     await sleep(30);
 
     const btn = tagBtn(doc, 'Tackle');
-    ok('TC-C1b: custom tag created with key badge q',
-      !!btn && btn.querySelector('.key').textContent === 'q');
+    // R2-E Phase 2A (R4/R7): the badge now shows the DERIVED effective form
+    // ("Ctrl+q") instead of the bare key character.
+    ok('TC-C1b: custom tag created with effective-form key badge (Ctrl+q)',
+      !!btn && btn.querySelector('.key').textContent === 'Ctrl+q' &&
+      btn.querySelector('.key').getAttribute('title') === 'Ctrl+q');
     ok('TC-C1c: size class applied (tag-btn-l)',
       !!btn && /tag-btn-l/.test(btn.className), 'class="' + (btn && btn.className) + '"');
     ok('TC-C1d: colour applied via CSS custom property',
@@ -348,14 +351,18 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
       tagBtn(doc, 'Beta Tag') && tagBtn(doc, 'Beta Tag').querySelector('.key').textContent === '' &&
       tagBtn(doc, 'Alpha Tag').querySelector('.key').textContent === 'z');
 
-    // (z, ctrl) vs plain z: NOT a conflict — different combos.
+    // (z, alt) vs plain z: NOT a conflict — different combos.
+    // R2-E Phase 2A: the original variant used z+ctrl, which is now a
+    // RESERVED identity (the §13 undo z-family) and correctly BLOCKED —
+    // the different-combo semantics are re-pinned on the free z+alt combo.
     contextmenu(tagBtn(doc, 'Alpha Tag'));
     await sleep(30);
     doc.getElementById('newTagKey').value = 'z';
-    doc.getElementById('newTagModCtrl').checked = true;
+    doc.getElementById('newTagModCtrl').checked = false;
+    doc.getElementById('newTagModAlt').checked = true;
     click(doc.getElementById('btnConfirmAddTag'));
     await sleep(30);
-    ok('TC-E5b: different modifier combo is NOT a conflict (z+ctrl accepted alongside plain z)',
+    ok('TC-E5b: different modifier combo is NOT a conflict (z+alt accepted alongside plain z)',
       !modalVisible(doc, 'addTagModal'), 'modal still open');
 
     // Exact conflict: a third tag holds plain 'y'; editing Alpha onto plain
@@ -367,6 +374,7 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
     await sleep(30);
     doc.getElementById('newTagKey').value = 'y';
     doc.getElementById('newTagModCtrl').checked = false;
+    doc.getElementById('newTagModAlt').checked = false;
     click(doc.getElementById('btnConfirmAddTag'));
     await sleep(30);
     ok('TC-E5c: exact (key, mods) conflict on edit is blocked with an inline error',
@@ -750,14 +758,32 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
       !!tagBtn(doc, 'Bad Mods') && !!tagBtn(doc, 'Bad Color') &&
       !!tagBtn(doc, 'Bad Size') && !!tagBtn(doc, 'Bad Active'));
 
+    // R2-E Phase 2A (no-silent-mutation): malformed SHORTCUT fields are
+    // preserved as loaded (inert + warn-dotted), never coerced. The
+    // appearance/lifecycle fields (color/size/active) keep the Phase 1
+    // safe coercion.
+    const badModsBtn = tagBtn(doc, 'Bad Mods');
+    ok('TC-P2b: malformed shortcut fields get the warn-dot (diagnostics channel 2)',
+      !!badModsBtn && !!badModsBtn.querySelector('.tag-warn-dot'));
+
+    // The malformed tag is dispatch-inert: pressing its stored key 'b'
+    // fires nothing (no inference — Phase 1 coerced mods:'ctrl' to [] and
+    // fired the plain 'b'; Phase 2A preserves and diagnoses instead).
+    pressKey(win, 'b');
+    await sleep(30);
+    click(doc.getElementById('btnSaveSession'));
+    const savedInert = lastSave(B.stub);
+    ok('TC-P2c: malformed stored shortcut is dispatch-inert (press b -> no event)',
+      savedInert.events.length === 0, 'events=' + savedInert.events.length);
+
     click(doc.getElementById('btnSaveSession'));
     const saved = lastSave(B.stub);
     const bm = saved.tags.find((t) => t.label === 'Bad Mods');
     const bc = saved.tags.find((t) => t.label === 'Bad Color');
     const bs = saved.tags.find((t) => t.label === 'Bad Size');
     const ba = saved.tags.find((t) => t.label === 'Bad Active');
-    ok('TC-P3: malformed fields coerced to safe defaults (mods->[], color->\'\', size->\'\', active->true)',
-      JSON.stringify(bm.mods) === '[]' && bc.color === '' && bs.size === '' && ba.active === true,
+    ok('TC-P3: shortcut fields PRESERVED as stored (mods:\'ctrl\' intact); appearance/lifecycle fields still coerced (color->\'\', size->\'\', active->true)',
+      bm.mods === 'ctrl' && bc.color === '' && bs.size === '' && ba.active === true,
       JSON.stringify({ bm: bm.mods, bc: bc.color, bs: bs.size, ba: ba.active }));
     B.dom.window.close();
   }
@@ -768,7 +794,10 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
     const B1 = boot({});
     await sleep(300);
     click(B1.doc.getElementById('btnAddCustom'));
-    fillModal(B1.doc, { name: 'Round Trip', key: 'r', ctrl: true, color: '#4f8fdb', size: 'l', subtypes: 'A, B' });
+    // R2-E Phase 2A: this Phase 1 test originally used key 'r' + Ctrl — a
+    // RESERVED identity (menu reload accelerator) that Phase 2A now
+    // correctly blocks at assignment. Re-pinned on the free ctrl+j combo.
+    fillModal(B1.doc, { name: 'Round Trip', key: 'j', ctrl: true, color: '#4f8fdb', size: 'l', subtypes: 'A, B' });
     await sleep(30);
     click(B1.doc.getElementById('btnSaveSession'));
     const payload = lastSave(B1.stub);
@@ -784,18 +813,18 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
     ok('TC-P4: new fields survive create -> save -> load (button restored with colour + size)',
       !!btn && /tag-btn-l/.test(btn.className) &&
       btn.style.getPropertyValue('--tag-color-bg') === '#4f8fdb26' &&
-      btn.querySelector('.key').textContent === 'r');
+      btn.querySelector('.key').textContent === 'Ctrl+j');
 
     // And the restored modifier shortcut still dispatches exactly.
-    pressKey(B2.win, 'r');
+    pressKey(B2.win, 'j');
     await sleep(30);
-    pressKey(B2.win, 'r', { ctrlKey: true });
+    pressKey(B2.win, 'j', { ctrlKey: true });
     await sleep(30);
     click(B2.doc.getElementById('detailPanelDone'));
     await sleep(30);
     click(B2.doc.getElementById('btnSaveSession'));
     const saved2 = lastSave(B2.stub);
-    ok('TC-P5: restored modifier shortcut dispatches exactly (plain r: 0 events, Ctrl+R: 1)',
+    ok('TC-P5: restored modifier shortcut dispatches exactly (plain j: 0 events, Ctrl+J: 1)',
       saved2.events.filter((e) => e.label === 'Round Trip').length === 1 &&
       saved2.events.length === 1,
       'events=' + JSON.stringify(saved2.events.map((e) => e.label)));

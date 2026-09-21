@@ -496,6 +496,22 @@ button {
   background: var(--accent-bright);
 }
 
+/* R2-E Phase 2A (spec §15, diagnostics channel 2): the shortcut warn-dot.
+   Amber, top-LEFT corner (the detail dot keeps the top-right) — flags a
+   tag whose STORED shortcut is reserved, duplicated, or malformed. It is
+   an indicator only: it never mutates anything. */
+.tag-warn-dot {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f39c12;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  cursor: help;
+}
+
 .tag-btn-recording {
   background: var(--accent) !important;
   border-color: var(--accent-bright) !important;
@@ -522,12 +538,38 @@ button {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-dim);
+  /* R2-E Phase 2A: the badge now shows the derived effective form
+     ("Ctrl+Alt+Shift+K") — long labels truncate with an ellipsis; the
+     full label is always in the title tooltip + aria context. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .btn-add-custom {
   margin-top: 10px;
   width: 100%;
   padding: 8px;
+}
+
+/* ---------- R2-E Phase 2A: Clear-shortcut button (ruling R8) ---------- */
+
+.btn-clear-shortcut {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-clear-shortcut:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 /* ---------- R2-E Phase 1: tag customization modal controls ---------- */

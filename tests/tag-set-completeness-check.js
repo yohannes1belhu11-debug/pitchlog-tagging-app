@@ -164,13 +164,15 @@ section('STATIC — F1.5 wiring (source-level checks)');
     engineLabels.length > 0 && engineLabels.every((l) => CANONICAL_19.includes(l)),
     'engineLabels=' + engineLabels.join(',') + ' missing=' + engineLabels.filter((l) => !CANONICAL_19.includes(l)).join(','));
 
-  ok('TS-S11: keydown tag-key lookup unchanged (digit family only)',
-    // R2-E Phase 1: the dispatch line gained the active-tag filter and the
-    // modifier-aware matcher. The digit-family rule itself is unchanged —
-    // tagShortcutMatches() returns exactly `tag.key === e.key` for tags
-    // without mods (the pre-R2-E rule, pinned separately below).
-    /const tag = tags\.find\(\(t\) => isActiveTag\(t\) && tagShortcutMatches\(t, e\)\);\s*\n\s*if \(tag\) handleTagPress\(tag\);/.test(rendererSrc) &&
-    /if \(mods\.length === 0\) return tag\.key === e\.key;/.test(rendererSrc));
+  ok('TS-S11: keydown tag lookup + unified exact-identity dispatch (R2-E Phase 2A)',
+    // R2-E Phase 2A: the dispatch find-line shape is unchanged, now wrapped
+    // in the §7 dispatch-layer reserved guard; tagShortcutMatches became
+    // the UNIFIED exact-identity matcher (spec §6) — the Phase 1 legacy
+    // quirk line (mods-less tags firing on ANY modifier state of their
+    // key, e.g. Ctrl+3 firing the plain '3' tag) is pinned ABSENT.
+    /const evIdentity = eventShortcutIdentity\(e\);\s*\n\s*if \(evIdentity && !reservedShortcutWhy\(evIdentity\.key, evIdentity\.mods\)\) \{\s*\n\s*const tag = tags\.find\(\(t\) => isActiveTag\(t\) && tagShortcutMatches\(t, e\)\);\s*\n\s*if \(tag\) handleTagPress\(tag\);/.test(rendererSrc) &&
+    /function tagShortcutMatches\(tag, e\) \{[\s\S]*?const stored = storedShortcutIdentity\(tag\);[\s\S]*?return stored\.key === ev\.key && modsSetEqual\(stored\.mods, ev\.mods\);/.test(rendererSrc) &&
+    !/if \(mods\.length === 0\) return tag\.key === e\.key;/.test(rendererSrc));
 
   // Spec doc honesty: §1.1 documents 19 rows + the F1.5 delta note.
   const specTable = specSrc.slice(specSrc.indexOf('### 1.1'), specSrc.indexOf('### 1.2'));

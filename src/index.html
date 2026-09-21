@@ -276,6 +276,9 @@
         <label class="checkbox-label"><input id="newTagModCtrl" type="checkbox" />Ctrl</label>
         <label class="checkbox-label"><input id="newTagModShift" type="checkbox" />Shift</label>
         <label class="checkbox-label"><input id="newTagModAlt" type="checkbox" />Alt</label>
+        <!-- R2-E Phase 2A (ruling R8): Clear resets the whole shortcut
+             (key + modifiers) to NONE — the tag becomes keyless. -->
+        <button type="button" id="btnClearShortcut" class="btn-clear-shortcut" title="Clear the shortcut (key + modifiers) — the tag will have no key">Clear</button>
       </div>
       <label>Subtypes (comma-separated, optional)
         <input id="newTagSubtypes" type="text" placeholder="e.g. Won, Lost" />
