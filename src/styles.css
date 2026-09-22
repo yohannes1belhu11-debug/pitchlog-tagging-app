@@ -445,10 +445,20 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
   gap: 8px;
+  /* NAT-4 tag-size fix: grid items must NOT be stretched to the row's
+     tallest button. With the default (stretch), per-tag sizes are visually
+     inert — Small rendered an identical box and Large only made the whole
+     row taller. start lets every button keep its own height. */
+  align-items: start;
 }
 
 .tag-btn {
   position: relative;
+  /* NAT-4 tag-size fix: vertical size floors for the three per-tag sizes
+     (Small < Default < Large). Together with align-items: start on
+     .tag-grid these make the Size setting visibly effective per button;
+     the font/padding behaviour below is unchanged. */
+  min-height: 48px;
   /* R2-E Phase 1: per-tag custom colour. renderTagButtons sets the
      --tag-color-* custom properties on the button when the tag has a
      colour; when unset these fall back to the exact pre-R2-E values, so
@@ -471,6 +481,8 @@ button {
 
 /* R2-E Phase 1: per-tag button size (Small / Large; Default = no class). */
 .tag-btn-s {
+  /* NAT-4 fix: Small floor (~39px rendered). */
+  min-height: 38px;
   padding: 6px 6px;
   font-size: 11px;
   gap: 2px;
@@ -479,6 +491,8 @@ button {
 .tag-btn-s .key { font-size: 9px; }
 
 .tag-btn-l {
+  /* NAT-4 fix: Large floor (~61px rendered). */
+  min-height: 60px;
   padding: 14px 10px;
   font-size: 14.5px;
   gap: 4px;
