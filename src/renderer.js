@@ -78,11 +78,16 @@
     { label: 'Negative Transition', key: '' }
   ];
 
-  // Captured at startup so hasAutosavableWork() can detect whether the
-  // tag set has been customized (loaded from a session or extended with
-  // custom tags). Used to decide whether the current state is worth
-  // autosaving.
-  const DEFAULT_TAGS_LENGTH = tags.length;
+  // R2-E Phase 3 (persistent tag library): a PRISTINE deep copy of the
+  // untouched default set, captured before anything can mutate or replace
+  // the working array (in-place tag edits mutate the working objects — a
+  // reference would leak those edits back into "defaults").
+  // buildDefaultTags() hands out fresh deep clones: used at startup when
+  // no library file exists yet, by "Restore default tags", and as the
+  // comparison base for the restore-confirmation message. The literal
+  // above stays the single source of truth for the default set.
+  const DEFAULT_TAGS_PRISTINE = cloneTags(tags);
+  function buildDefaultTags() { return cloneTags(DEFAULT_TAGS_PRISTINE); }
 
   // R2-E Phase 1 (tag customization foundation): the default labels are the
   // canonical analytical vocabulary — analytics.js buckets metrics by these
@@ -91,11 +96,22 @@
   // rename protection works no matter what a loaded session contains.
   const DEFAULT_TAG_LABELS = new Set(tags.map((t) => t.label));
 
-  // R2-E Phase 1: serialized signature of the untouched default set.
-  // hasAutosavableWork() compares against this so IN-PLACE customization
-  // (rename, shortcut/colour/size edit, deactivate) is recognized as
-  // autosavable work even when the array length is unchanged.
-  const DEFAULT_TAGS_SIGNATURE = JSON.stringify(tags);
+  // R2-E Phase 3: the SESSION-START TAG BASELINE — replaces the Phase 1
+  // pristine-default signature as the hasAutosavableWork() comparison
+  // base. The baseline is recaptured whenever the working tag set is
+  // (re)established: startup library load, manual session load, autosave
+  // recovery, and restore-defaults. A customized LIBRARY therefore boots
+  // clean (no phantom "autosavable work" from state that is already
+  // durably persisted in tags.json), while any tag edit made during the
+  // session still differs from the baseline and counts as autosavable
+  // work exactly as before (in-place edits included — the Phase 1 goal).
+  let tagsBaselineSignature = JSON.stringify(tags);
+  let tagsBaselineLength = tags.length;
+
+  function captureTagsBaseline() {
+    tagsBaselineSignature = JSON.stringify(tags);
+    tagsBaselineLength = tags.length;
+  }
 
   // ---------- R1: universal outcome field (first-class event field) ----------
   //
@@ -340,6 +356,11 @@
   // R2-E Phase 2A (ruling R8): Clear button — resets key + all modifier
   // checkboxes to NONE (keyless) in the tag modal.
   const btnClearShortcut = document.getElementById('btnClearShortcut');
+
+  // R2-E Phase 3: Restore-default-tags button (lives in the Add/Edit Tag
+  // modal — the single tag-management surface; no parallel UI). Resets the
+  // persistent global library (tags.json) after a strong confirmation.
+  const btnRestoreDefaultTags = document.getElementById('btnRestoreDefaultTags');
 
   // R2-E Phase 1: the tag safety-confirmation modal (rename relink / delete).
   const tagConfirmModal = document.getElementById('tagConfirmModal');
@@ -1056,6 +1077,230 @@
 
   function isActiveTag(tag) {
     return !!tag && tag.active !== false;
+  }
+
+  // =========================================================================
+  // R2-E Phase 3: the persistent global tag library (tags.json)
+  // =========================================================================
+  //
+  // tags.json is the PERSISTENT GLOBAL LIBRARY: the durable home of the
+  // analyst's tag set, so tag configuration survives a normal app close +
+  // reopen (the NAT-4 persistence defect — before Phase 3 every normal
+  // close deleted the only carrier, the autosave, and startup rebuilt the
+  // set from the hardcoded defaults).
+  //
+  // Architect rulings implemented here:
+  //   1. Creating / editing / deleting / reactivating / configuring a tag
+  //      persists to tags.json REGARDLESS of which session is currently
+  //      loaded (no session-scope gate on persistence).
+  //   2. A loaded session's embedded tag definitions remain AUTHORITATIVE
+  //      for that session's historical data: loading a session replaces
+  //      the WORKING set only; library changes never silently rewrite the
+  //      loaded session's historical tag definitions/events.
+  //   3. Session load and autosave recovery NEVER write tags.json.
+  //   4. autosave.json keeps its strict crash-recovery role — its
+  //      delete-on-normal-close behavior is untouched.
+  //
+  // Model:
+  //   tags       the WORKING set (what the grid renders / dispatches).
+  //              'global' scope at startup (== the library); 'session'
+  //              scope after a manual load or a recovery restore.
+  //   tagLibrary the library shadow (deep clones; never shares objects
+  //              with the working set). Global-scope ops mirror the whole
+  //              working set into it; session-scope ops upsert the single
+  //              affected definition by label identity (no tag IDs — label
+  //              is the existing identity of the whole tag system).
+
+  function cloneTag(tag) { return tag == null ? tag : JSON.parse(JSON.stringify(tag)); }
+  function cloneTags(list) { return Array.isArray(list) ? list.map(cloneTag) : []; }
+
+  // The library shadow. Materialized by loadTagLibraryAtStartup() — either
+  // the file's set or the defaults. null only before the startup chain
+  // resolves (op sites below defend against that microsecond window).
+  let tagLibrary = null;
+
+  // 'global'  = the working set IS the library (startup state).
+  // 'session' = the working set belongs to a loaded session / recovered
+  //             autosave (sticky for the rest of the app run — there is no
+  //             "unload session" action; the next app start is global
+  //             again).
+  let tagsScope = 'global';
+
+  // persistTagLibrary(): write the library shadow to tags.json via the
+  // main process. Fire-and-forget by design (tag ops never block on disk
+  // I/O; main serializes writes through its own queue); failures surface
+  // through the reused autosave toast channel. A missing bridge method
+  // (older preload / test stub) degrades to the pre-Phase-3 session-scoped
+  // behavior instead of crashing the op.
+  async function persistTagLibrary() {
+    if (!Array.isArray(tagLibrary)) return;
+    try {
+      const result = await window.matchtag.saveTagLibrary(cloneTags(tagLibrary));
+      if (result && result.ok === false) {
+        showAutosaveToast('Could not save the tag library. Check disk space and file permissions.' +
+          (result.error ? ' (' + result.error + ')' : ''));
+      }
+    } catch (e) {
+      // Bridge method unavailable or IPC failure — the change still lives
+      // in the working set and in any session file saved afterwards.
+    }
+  }
+
+  // syncTagLibraryAfterOp(kind, matchLabel, tag): the ONE library-sync
+  // point every tag-management op calls AFTER it succeeds.
+  //   kind 'upsert'  explicit user ops (create / edit / delete /
+  //                  reactivate): replace the library entry matched by
+  //                  matchLabel (the PRE-edit label — renames relink), or
+  //                  push when absent (a session-only tag edited during a
+  //                  loaded session thereby joins the library).
+  //   kind 'ensure'  implicit creation (Touchline auto-create): ADD the
+  //                  definition only if the library lacks it — never
+  //                  replace (a configured library tag must not be
+  //                  flattened by a session that happens to lack the
+  //                  definition).
+  // In 'global' scope the whole working set is mirrored (the library IS
+  // the working set — wholesale mirroring is robust against any mutation
+  // path this function does not know about).
+  function syncTagLibraryAfterOp(kind, matchLabel, tag) {
+    if (tagsScope === 'global') {
+      tagLibrary = cloneTags(tags);
+    } else {
+      if (!Array.isArray(tagLibrary)) tagLibrary = cloneTags(tags); // pre-startup defensive
+      let idx = tagLibrary.findIndex((t) => t && t.label === matchLabel);
+      if (idx === -1 && tag && typeof tag.label === 'string' && tag.label !== matchLabel) {
+        // Rename relink in the library: an entry already holding the NEW
+        // label is replaced rather than duplicated.
+        idx = tagLibrary.findIndex((t) => t && t.label === tag.label);
+      }
+      if (kind === 'ensure') {
+        if (idx === -1 && tag) tagLibrary.push(cloneTag(tag));
+      } else if (idx >= 0 && tag) {
+        tagLibrary[idx] = cloneTag(tag);
+      } else if (tag) {
+        tagLibrary.push(cloneTag(tag));
+      }
+    }
+    persistTagLibrary();
+  }
+
+  // loadTagLibraryAtStartup(): startup step between loadSquad and
+  // checkForRecoverableAutosave. Establishes the GLOBAL working set from
+  // tags.json; never writes the file. Corrupt file → notice + defaults;
+  // missing file → defaults (nothing written back until the first tag
+  // change); IPC/bridge failure → defaults (graceful degradation).
+  async function loadTagLibraryAtStartup() {
+    let lib = null;
+    try {
+      lib = await window.matchtag.loadTagLibrary();
+    } catch (e) {
+      lib = null; // bridge missing (older preload) or IPC failure — keep defaults
+    }
+    if (lib && lib.corrupt) {
+      // The main process preserved the unreadable file as
+      // tags.json.corrupt for manual inspection (R2-C-3 philosophy).
+      showAutosaveToast(
+        'A saved tag library exists but couldn\u2019t be read — it was preserved for manual inspection at ' +
+        (lib.path ? lib.path + '.corrupt' : 'an unknown location') +
+        '. The default tags are being used.'
+      );
+    } else if (lib && Array.isArray(lib.tags)) {
+      // The persistent library replaces the default working set (global
+      // scope). Entries are filtered to usable definitions (an object
+      // with a non-empty string label) and sanitized with the SAME
+      // normalizer as session tags; shortcut fields load exactly as
+      // stored (no silent mutation), unknown per-tag fields pass through.
+      tags = lib.tags
+        .filter((t) => t && typeof t === 'object' && typeof t.label === 'string' && t.label)
+        .map(normalizeTagFields);
+    }
+    // Materialize the library shadow either way — it is the mirror target
+    // for global-scope ops and the upsert base for session-scope ops.
+    tagLibrary = cloneTags(tags);
+    tagsScope = 'global';
+    captureTagsBaseline();
+    renderTagButtons();
+    populateEventTypeFilter();
+  }
+
+  // describeLibraryDeltaAgainstDefaults(): counts what "Restore default
+  // tags" would discard, measured against the PRISTINE default set — used
+  // by the strong confirmation message.
+  function describeLibraryDeltaAgainstDefaults() {
+    const pristine = buildDefaultTags();
+    const lib = Array.isArray(tagLibrary) ? tagLibrary : tags;
+    const delta = { customized: 0, deactivated: 0, custom: [] };
+    (lib || []).forEach((t) => {
+      if (!t || typeof t.label !== 'string') return;
+      if (DEFAULT_TAG_LABELS.has(t.label)) {
+        const p = pristine.find((x) => x.label === t.label);
+        if (!isActiveTag(t)) delta.deactivated++;
+        else if (!p || JSON.stringify(t) !== JSON.stringify(p)) delta.customized++;
+      } else {
+        delta.custom.push(t.label);
+      }
+    });
+    return delta;
+  }
+
+  // restoreDefaultTags(): the library-level reset ("Restore default
+  // tags" in the Add/Edit Tag modal — the single tag-management surface).
+  // Resets the LIBRARY to the pristine 19 defaults and persists it. In
+  // 'global' scope the working set is reset with it (it IS the library);
+  // in 'session' scope the loaded session's working set is left exactly
+  // as it is (ruling 2: library changes never rewrite the session's
+  // historical tag definitions). Saved session files are never touched.
+  function restoreDefaultTags() {
+    tagLibrary = buildDefaultTags();
+    persistTagLibrary();
+    if (tagsScope === 'global') {
+      tags = buildDefaultTags();
+      // Abort interval recordings whose tag definition no longer exists
+      // (abort, never finish — deleting/resetting a tag must not log an
+      // event); recordings for labels that survive the reset keep running.
+      activeIntervals = Object.fromEntries(
+        Object.entries(activeIntervals).filter(([label]) =>
+          tags.some((t) => t.label === label && t.interval && isActiveTag(t)))
+      );
+      captureTagsBaseline();
+      renderTagButtons();
+      populateEventTypeFilter();
+      closeAddTagModal();
+      markAutosaveDirty();
+      showAutosaveToast('Default tags restored.');
+    } else {
+      closeAddTagModal();
+      showAutosaveToast('Default tags restored to the library. The current session keeps its own tags.');
+    }
+  }
+
+  // Restore-defaults wiring — strong confirmation through the EXISTING
+  // tagConfirmModal (same promise-driven pattern as rename relink and tag
+  // deletion; no new modal, no parallel UI).
+  if (btnRestoreDefaultTags) {
+    btnRestoreDefaultTags.addEventListener('click', async () => {
+      showAddTagError('');
+      const delta = describeLibraryDeltaAgainstDefaults();
+      const plural = (n) => (n === 1 ? '' : 's');
+      const lines = [
+        'Restore the DEFAULT tag library for the whole app?',
+        '',
+        'This discards, from the persistent tag library:',
+        '- ' + delta.custom.length + ' custom tag' + plural(delta.custom.length) +
+          (delta.custom.length ? ' (' + delta.custom.join(', ') + ')' : ''),
+        '- ' + delta.customized + ' customized default tag' + plural(delta.customized) +
+          ' (colour / size / shortcut / subtypes / qualifiers / interval)',
+        '- ' + delta.deactivated + ' deactivated default tag' + plural(delta.deactivated) +
+          ' (they become active again)',
+        '',
+        'Saved session files on disk are NOT modified.' +
+          (tagsScope === 'session'
+            ? ' The currently loaded session keeps its own tags — only the global library is reset.'
+            : ' The current tag set is replaced with the pristine defaults.')
+      ];
+      const okRestore = await showTagConfirm(lines.join('\n'));
+      if (!okRestore) return;
+      restoreDefaultTags();
+    });
   }
 
   // =========================================================================
@@ -2368,6 +2613,10 @@
     }
 
     const key = newTagKey.value.trim();
+    // R2-E Phase 3: the definition this create ends up touching (the
+    // reactivated inactive def OR the newly pushed one) — persisted to the
+    // global library at the tail, regardless of scope.
+    let librarySyncTag = null;
 
     // Reactivation (AMD-2 clause R-1): creating a tag whose label matches a
     // DELETED (inactive) tag reactivates that definition — through the SAME
@@ -2394,6 +2643,7 @@
       if (mods.length) inactive.mods = mods; else delete inactive.mods;
       if (color) inactive.color = color; else delete inactive.color;
       if (size) inactive.size = size; else delete inactive.size;
+      librarySyncTag = inactive;
     } else {
       // New definition. The shortcut candidate runs through the ONE shared
       // validator: 'invalid' and 'reserved' BLOCK (a reserved combo is
@@ -2420,7 +2670,11 @@
       if (color) newTag.color = color;
       if (size) newTag.size = size;
       tags.push(newTag);
+      librarySyncTag = newTag;
     }
+    // R2-E Phase 3: the create / reactivation persists to the GLOBAL
+    // LIBRARY regardless of which session is loaded (ruling 1).
+    syncTagLibraryAfterOp('upsert', label, librarySyncTag);
     renderTagButtons();
     populateEventTypeFilter();
     closeAddTagModal();
@@ -2501,6 +2755,11 @@
     if (color) tag.color = color; else delete tag.color;
     if (size) tag.size = size; else delete tag.size;
 
+    // R2-E Phase 3: the edit persists to the GLOBAL LIBRARY (matched by
+    // the PRE-edit label so renames relink the library entry too),
+    // regardless of which session is loaded (ruling 1).
+    syncTagLibraryAfterOp('upsert', oldLabel, tag);
+
     renderTagButtons();
     populateEventTypeFilter();
     if (labelChanged) renderEventList();
@@ -2539,6 +2798,10 @@
       if (Object.prototype.hasOwnProperty.call(activeIntervals, tag.label)) {
         delete activeIntervals[tag.label];
       }
+      // R2-E Phase 3: the soft delete persists to the GLOBAL LIBRARY (the
+      // definition stays, active:false — preserving both the library's
+      // interpretability and the reactivation path), regardless of scope.
+      syncTagLibraryAfterOp('upsert', tag.label, tag);
       renderTagButtons();
       populateEventTypeFilter();
       closeAddTagModal();
@@ -4955,6 +5218,13 @@
     tags = Array.isArray(data.tags) && data.tags.length
       ? data.tags.map(normalizeTagFields) // R2-E Phase 1: sanitize optional customization fields
       : tags;
+    // R2-E Phase 3: the loaded session's embedded tag definitions are
+    // AUTHORITATIVE for this session's historical data — the working set
+    // is now session-scoped. The GLOBAL library (tags.json) is NOT
+    // touched by a load (ruling 3); subsequent tag ops still persist to
+    // it (ruling 1). The session's set becomes the autosave baseline.
+    tagsScope = 'session';
+    captureTagsBaseline();
     events = Array.isArray(data.events)
       ? data.events.map((ev) => ({
           ...ev,
@@ -5445,12 +5715,14 @@
   function hasAutosavableWork() {
     if (events.length > 0) return true;
     if (currentVideoPath) return true;
-    if (tags.length !== DEFAULT_TAGS_LENGTH) return true;
-    // R2-E Phase 1: in-place customization (rename, shortcut/colour/size
+    if (tags.length !== tagsBaselineLength) return true;
+    // R2-E Phase 3: in-place customization (rename, shortcut/colour/size
     // edit, deactivate/reactivate) does not change the array length —
-    // compare the serialized set against the pristine default signature
-    // so those edits count as autosavable work too.
-    if (JSON.stringify(tags) !== DEFAULT_TAGS_SIGNATURE) return true;
+    // compare the serialized set against the SESSION-START BASELINE so
+    // those edits count as autosavable work (the Phase 1 goal), while a
+    // customized LIBRARY — already durably persisted in tags.json — boots
+    // clean instead of counting as phantom work.
+    if (JSON.stringify(tags) !== tagsBaselineSignature) return true;
     if (JSON.stringify(matchInfo) !== JSON.stringify(blankMatchInfo())) return true;
     // Check matchClock state — if the match has started, the clock is running,
     // the score has changed, a team/player is selected, a sequence is active,
@@ -5767,6 +6039,12 @@
       // (mods/color/size/active) of every restored tag.
       tags = autosave.tags.map(normalizeTagFields);
     }
+    // R2-E Phase 3: recovery restores the crashed session's own tags
+    // (session scope) — the GLOBAL library is never overwritten by
+    // recovery (ruling 3), and the recovered set becomes the autosave
+    // baseline (the recovered work IS unsaved; edits during it count).
+    tagsScope = 'session';
+    captureTagsBaseline();
 
     // Restore events (defensive null-coalescing, same as loadSession).
     if (Array.isArray(autosave.events)) {
@@ -6230,6 +6508,10 @@
           // duration metrics (interval bounds are the possession substrate).
           if (label === 'Possession') tag.interval = true;
           tags.push(tag); renderTagButtons(); populateEventTypeFilter();
+          // R2-E Phase 3: an auto-created definition joins the GLOBAL
+          // LIBRARY additively ('ensure') — an existing library entry for
+          // the label is never replaced by the flat auto-created fallback.
+          syncTagLibraryAfterOp('ensure', label, tag);
         }
         handleTagPress(tag);
         // F1.4: re-render the quick-tag grid ONLY for interval tags so the
@@ -6515,9 +6797,16 @@
     })
     .finally(() => {
       // Now that the squad is loaded (or we've decided to start empty),
-      // check for a recoverable autosave. This runs after the squad load
-      // so that recovery uses the local squad (which is always at least
-      // as up-to-date as the autosave's squad snapshot).
-      checkForRecoverableAutosave();
+      // load the persistent GLOBAL tag library, THEN check for a
+      // recoverable autosave. Strict order (R2-E Phase 3): the library
+      // establishes the global working set first; a recovery then
+      // REPLACES it with the recovered session's own tags (session
+      // scope). Neither step writes tags.json, and the recovery check
+      // can never race the library load.
+      loadTagLibraryAtStartup()
+        .catch(() => { /* library load is best-effort — defaults already stand */ })
+        .finally(() => {
+          checkForRecoverableAutosave();
+        });
     });
 })();

@@ -11,6 +11,14 @@ contextBridge.exposeInMainWorld('matchtag', {
   loadMultipleSessions: () => ipcRenderer.invoke('file:loadMultipleSessions'),
   loadSquad: () => ipcRenderer.invoke('squad:load'),
   saveSquad: (squad) => ipcRenderer.invoke('squad:save', squad),
+  // R2-E Phase 3: the persistent global tag library (userData/tags.json) —
+  // the app-scoped tag store, same bridge pattern as the squad roster.
+  // tags:load returns null (no library yet), { tags } (success), or
+  // { corrupt: true, path } (unreadable/invalid file, preserved as
+  // tags.json.corrupt by the main process). tags:save returns
+  // { ok, path? , error? } and writes atomically (see main.js).
+  loadTagLibrary: () => ipcRenderer.invoke('tags:load'),
+  saveTagLibrary: (tags) => ipcRenderer.invoke('tags:save', tags),
   detachVideo: (state) => ipcRenderer.invoke('video:detach', state),
   reattachVideo: () => ipcRenderer.invoke('video:reattach'),
   sendVideoCommand: (cmd) => ipcRenderer.send('video:command', cmd),

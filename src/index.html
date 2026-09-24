@@ -306,6 +306,10 @@
       <div id="addTagError" class="modal-error" style="display:none;"></div>
       <p class="modal-hint">Right-click a tag button to edit or delete it.</p>
       <div class="modal-actions">
+        <!-- R2-E Phase 3: library-level reset with a strong confirmation
+             (the existing tagConfirmModal) — resets the persistent global
+             tag library (tags.json); saved session files are untouched. -->
+        <button type="button" id="btnRestoreDefaultTags" class="btn btn-ghost">Restore default tags</button>
         <button id="btnDeleteTag" class="btn btn-danger" style="display:none;">Delete tag</button>
         <button id="btnCancelAddTag" class="btn btn-ghost">Cancel</button>
         <button id="btnConfirmAddTag" class="btn btn-accent">Add tag</button>

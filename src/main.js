@@ -130,8 +130,8 @@ if (!gotTheLock) {
 
 // --- Schema versioning & migration ---
 //
-// Every persisted file (session JSON, squad JSON, autosave JSON) carries a
-// `__schemaVersion` field. Files saved by the original (pre-Phase-1C) app
+// Every persisted file (session JSON, squad JSON, autosave JSON, tag
+// library JSON) carries a `__schemaVersion` field. Files saved by the original (pre-Phase-1C) app
 // have no version field — those are treated as version 0 and migrated to
 // the current version on load. This establishes the framework for all
 // future schema changes: instead of silently breaking old files, the
@@ -686,6 +686,166 @@ ipcMain.handle('squad:save', async (_event, squad) => {
   }
 });
 
+// --- R2-E Phase 3: persistent global tag library (tags.json) ---
+//
+// The app-scoped TAG LIBRARY — the durable home for the analyst's tag set
+// (default tags with their customizations + custom tags), so tag
+// configuration survives a normal app close + reopen. Before Phase 3 tag
+// customizations were SESSION-scoped only (autosave + manual session files):
+// every normal-close resolution deliberately deletes the autosave and the
+// next startup rebuilt the tag set from the hardcoded defaults — the
+// documented NAT-4 persistence defect.
+//
+// File format (its OWN schema — session files stay at v4, untouched):
+//   { __schemaVersion: 1, __savedAt: <ISO>, tags: [ ...tag objects ] }
+// The tags array holds the SAME per-tag objects session files embed
+// (label, key, mods, subtypes, qualifierGroups, interval, substitution,
+// color, size, active) — no new tag shape, no tag IDs.
+//
+// Scope rules (architect rulings, R2-E Phase 3):
+//   - tags.json is the PERSISTENT GLOBAL LIBRARY. Creating / editing /
+//     deleting / reactivating / configuring a tag persists here regardless
+//     of which session is currently loaded (the renderer decides what to
+//     write; main only stores).
+//   - Loading a session or recovering an autosave NEVER writes tags.json
+//     (a session's embedded tag definitions stay authoritative for that
+//     session's historical data).
+//   - autosave.json keeps its strict crash-recovery role; nothing here
+//     changes its delete-on-normal-close behavior.
+//
+// Write path: 'tags:save' — atomic (temp + rename via the shared
+// writeFileAtomic helper), serialized through a small promise queue so
+// rapid successive saves (create → edit → delete) can never interleave
+// their temp-file writes/renames (same pattern as the autosave queue).
+// Read path: 'tags:load' — null when the file is missing (fresh install:
+// the renderer keeps the default set and nothing is written back until the
+// first tag change); { tags } on success; { corrupt: true, path } when the
+// file exists but cannot be read / parsed / migrated (truncated JSON,
+// non-object JSON, missing tags array, or a newer unsupported schema
+// version). A corrupt file is PRESERVED for manual inspection as
+// tags.json.corrupt (single generation — an existing .corrupt is replaced;
+// best-effort rename, never a delete) so the living store is unblocked:
+// the next tags:save can write a fresh library without destroying the old
+// bytes. This mirrors the R2-C-3 corrupt-autosave philosophy (never
+// silently destroy possibly-rescuable data) while keeping the library
+// usable.
+
+// The tag library schema version — deliberately SEPARATE from the session
+// schema version (ruling: preserve session schema v4). Bump ONLY on a
+// breaking change to the tags.json wrapper shape.
+const TAG_LIBRARY_SCHEMA_VERSION = 1;
+
+function tagLibraryFilePath() {
+  return path.join(app.getPath('userData'), 'tags.json');
+}
+
+function tagLibraryTempPath() {
+  return path.join(app.getPath('userData'), 'tags.json.tmp');
+}
+
+function tagLibraryCorruptPath() {
+  return path.join(app.getPath('userData'), 'tags.json.corrupt');
+}
+
+// Migrate/validate tag-library data. Accepts:
+//   - the v1 wrapper { __schemaVersion: 1, tags: [...] }
+//   - a v0-style BARE ARRAY of tag objects (defensive: a hand-edited file)
+//   - a v0-style wrapper without a version field (tolerated)
+// Throws on anything else (non-object JSON, missing/non-array tags, or a
+// newer unsupported __schemaVersion) — the handler reports that as corrupt.
+// Per-tag ENTRY semantics (label validity, color/size/active coercion,
+// shortcut no-mutation) belong to the renderer's tag layer
+// (normalizeTagFields); this function only validates the wrapper shape,
+// exactly like migrateSquadData does for the roster.
+function migrateTagLibraryData(data) {
+  if (Array.isArray(data)) {
+    return { __schemaVersion: TAG_LIBRARY_SCHEMA_VERSION, tags: data };
+  }
+  if (data && typeof data === 'object') {
+    const fileVersion = (typeof data.__schemaVersion === 'number') ? data.__schemaVersion : 0;
+    if (fileVersion > TAG_LIBRARY_SCHEMA_VERSION) {
+      throw new Error(
+        'The tag library was saved by a newer version of MatchTag ' +
+        '(schema v' + fileVersion + '). Please update MatchTag.'
+      );
+    }
+    if (fileVersion === TAG_LIBRARY_SCHEMA_VERSION) {
+      if (!Array.isArray(data.tags)) {
+        throw new Error('Invalid tag library: "tags" must be an array.');
+      }
+      return data;
+    }
+    // v0-style wrapper (no version field): tolerate if the tags array exists.
+    if (Array.isArray(data.tags)) {
+      return { __schemaVersion: TAG_LIBRARY_SCHEMA_VERSION, tags: data.tags };
+    }
+    throw new Error('Invalid tag library: "tags" must be an array.');
+  }
+  throw new Error('Invalid tag library: expected a JSON object with a "tags" array.');
+}
+
+// Serialize the tag-library fs operations in arrival order (same pattern
+// as enqueueAutosaveOp): ipcMain.handle starts handlers in IPC arrival
+// order, but async handlers interleave at their await points — two rapid
+// tags:save calls could otherwise interleave their writeFile/rename on the
+// SAME temp path (the later write's rename would fail on the vanished
+// temp file, surfacing a spurious error).
+let tagLibraryWriteQueue = Promise.resolve();
+function enqueueTagLibraryOp(op) {
+  const run = tagLibraryWriteQueue.then(op, op);
+  tagLibraryWriteQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+async function writeTagLibraryAsync(tagsList) {
+  const wrapped = {
+    __schemaVersion: TAG_LIBRARY_SCHEMA_VERSION,
+    __savedAt: new Date().toISOString(),
+    tags: Array.isArray(tagsList) ? tagsList : []
+  };
+  await writeFileAtomic(tagLibraryTempPath(), tagLibraryFilePath(), JSON.stringify(wrapped, null, 2));
+}
+
+ipcMain.handle('tags:load', async () => {
+  const dst = tagLibraryFilePath();
+  try {
+    await fs.promises.access(dst);
+  } catch (e) {
+    // No library file yet (fresh install / first run after upgrading to
+    // Phase 3): the renderer keeps the default tag set. Nothing is written
+    // back here — tags.json is only created by an actual tag change.
+    return null;
+  }
+  try {
+    const raw = await fs.promises.readFile(dst, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const migrated = migrateTagLibraryData(parsed);
+    return { tags: migrated.tags };
+  } catch (err) {
+    // Corrupt / unreadable / newer-version library. PRESERVE the bytes for
+    // manual inspection as tags.json.corrupt (single generation, best
+    // effort) so the next tags:save can write a fresh library without
+    // destroying the old file, and report the corruption — the renderer
+    // falls back to the default set and tells the analyst where the old
+    // file was preserved.
+    const corruptDst = tagLibraryCorruptPath();
+    try { await fs.promises.unlink(corruptDst); } catch (e) { /* best effort */ }
+    try { await fs.promises.rename(dst, corruptDst); } catch (e) { /* best effort */ }
+    return { corrupt: true, path: dst };
+  }
+});
+
+ipcMain.handle('tags:save', async (_event, tagsList) => {
+  try {
+    await enqueueTagLibraryOp(async () => {
+      await writeTagLibraryAsync(tagsList);
+    });
+    return { ok: true, path: tagLibraryFilePath() };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+});
+
 // --- Autosave: a safety-net copy of the current working session, kept at
 // userData/autosave.json. Written atomically (temp file + rename) so a
 // crash mid-write never corrupts the previous valid autosave. Read on
@@ -981,5 +1141,13 @@ ipcMain.on('detach-video:state', (_event, state) => {
 // point; this block only enables plain-Node testing of the migration and
 // atomic-write logic without launching Electron.
 if (typeof module === 'object' && module.exports) {
-  module.exports = { CURRENT_SCHEMA_VERSION, migrateSessionData, migrateSquadData };
+  module.exports = {
+    CURRENT_SCHEMA_VERSION,
+    migrateSessionData,
+    migrateSquadData,
+    // R2-E Phase 3: the tags.json store (plain-Node test hook — see
+    // tests/tag-library-main-check.js).
+    TAG_LIBRARY_SCHEMA_VERSION,
+    migrateTagLibraryData
+  };
 }

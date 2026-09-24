@@ -165,12 +165,22 @@ function captureSession(win, doc, stub) { click(doc.getElementById('btnSaveSessi
   {
     ok('TC-S1: DEFAULT_TAG_LABELS captured at startup (canonical rename protection basis)',
       /const DEFAULT_TAG_LABELS = new Set\(tags\.map\(\(t\) => t\.label\)\);/.test(rendererSrc));
-    ok('TC-S2: DEFAULT_TAGS_SIGNATURE captured at startup (in-place autosave detection basis)',
-      /const DEFAULT_TAGS_SIGNATURE = JSON\.stringify\(tags\);/.test(rendererSrc));
-    ok('TC-S3: hasAutosavableWork compares the serialized tag set (in-place edits count)',
-      /if \(JSON\.stringify\(tags\) !== DEFAULT_TAGS_SIGNATURE\) return true;/.test(rendererSrc));
-    ok('TC-S4: DEFAULT_TAGS_LENGTH capture unchanged (TS-S6 pin intact)',
-      /const DEFAULT_TAGS_LENGTH = tags\.length;/.test(rendererSrc));
+    // R2-E Phase 3: the pristine-default signature (DEFAULT_TAGS_SIGNATURE)
+    // was REPLACED by the session-start baseline — a customized persistent
+    // library (tags.json) boots clean instead of counting as phantom
+    // autosavable work, while in-place edits during a session still count.
+    ok('TC-S2: session-start tag baseline captured at startup (in-place autosave detection basis, R2-E Phase 3)',
+      /let tagsBaselineSignature = JSON\.stringify\(tags\);/.test(rendererSrc) &&
+      /function captureTagsBaseline\(\) \{/.test(rendererSrc));
+    ok('TC-S3: hasAutosavableWork compares the serialized tag set against the baseline (in-place edits count)',
+      /if \(JSON\.stringify\(tags\) !== tagsBaselineSignature\) return true;/.test(rendererSrc));
+    ok('TC-S4: baseline recaptured at every working-set establishment point (startup library load / session load / recovery / restore-defaults)',
+      // loadTagLibraryAtStartup, restoreDefaultTags, and BOTH scope
+      // switches (doLoadSession + recoverFromAutosave share the
+      // "tagsScope = 'session'; captureTagsBaseline();" idiom).
+      /function loadTagLibraryAtStartup[\s\S]*?captureTagsBaseline\(\);/.test(rendererSrc) &&
+      /function restoreDefaultTags[\s\S]*?captureTagsBaseline\(\);/.test(rendererSrc) &&
+      (rendererSrc.match(/tagsScope = 'session';\s*\n\s*captureTagsBaseline\(\);/g) || []).length === 2);
     ok('TC-S5: session schema version NOT bumped (additive fields only, v4 stands)',
       /CURRENT_SCHEMA_VERSION = 4/.test(mainSrc));
     ok('TC-S6: default tag literals untouched (19 defaults, keys 1-8/9/0 pinned shapes intact)',

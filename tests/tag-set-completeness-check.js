@@ -138,8 +138,16 @@ section('STATIC — F1.5 wiring (source-level checks)');
     /subtypes: \['On target', 'Off target', 'Blocked'\]/.test(tagsSrc) &&
     /label: 'Sub', key: '7', substitution: true/.test(tagsSrc));
 
-  ok('TS-S6: DEFAULT_TAGS_LENGTH still captured from tags.length (autosave consistency)',
-    /const DEFAULT_TAGS_LENGTH = tags\.length;/.test(rendererSrc));
+  ok('TS-S6: session-start tag baseline captured (autosave consistency, R2-E Phase 3)',
+    // The Phase 1 DEFAULT_TAGS_LENGTH / DEFAULT_TAGS_SIGNATURE pair was
+    // replaced by the session-start baseline: hasAutosavableWork() must
+    // detect in-place edits during a session, but a customized persistent
+    // library (tags.json) must boot CLEAN (no phantom autosavable work).
+    /let tagsBaselineSignature = JSON\.stringify\(tags\);/.test(rendererSrc) &&
+    /let tagsBaselineLength = tags\.length;/.test(rendererSrc) &&
+    /function captureTagsBaseline\(\) \{/.test(rendererSrc) &&
+    /if \(tags\.length !== tagsBaselineLength\) return true;/.test(rendererSrc) &&
+    /if \(JSON\.stringify\(tags\) !== tagsBaselineSignature\) return true;/.test(rendererSrc));
 
   ok('TS-S7: QUICK_TAGS unchanged (16 entries incl. Possession, F1.4)',
     /const QUICK_TAGS = \['Possession','Shot','Chance','Cross','Key Pass','Press','Press Win','Turnover','Recovery','Interception','Duel','Positive Transition','Negative Transition','Goal','Card','Sub'\];/.test(rendererSrc));
