@@ -150,8 +150,30 @@ button {
 
 /* ---------- Layout ---------- */
 
+/* R2-E Phase 3A (tag-grid cutoff fix — root cause): the app shell is a
+   fixed-height column (html/body stay height:100% + overflow:hidden — the
+   app NEVER page-scrolls). The bars keep their natural height; .layout
+   fills exactly the space REMAINING below them. This replaces
+   height: calc(100% - 52px), which budgeted only for the 52px topbar and
+   ignored the matchday bar + match-clock bar stacked above .layout — the
+   column was ~80px taller than the viewport and body{overflow:hidden}
+   silently clipped the bottom of the app (the tag grid and the Add-tag
+   button). A wrapping topbar/matchday bar (narrow windows) is now handled
+   automatically instead of clipping more. */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar,
+.matchday-bar,
+.match-clock-bar {
+  flex-shrink: 0;
+}
+
 .layout {
-  height: calc(100% - 52px);
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
 }
 
@@ -172,6 +194,13 @@ button {
   background: var(--panel);
 }
 
+/* R2-E Phase 3A: the video transport/scrub bars are fixed app chrome —
+   they never shrink or scroll; the tag grid owns the vertical scroll. */
+.timeline-strip-wrapper,
+.transport {
+  flex-shrink: 0;
+}
+
 /* ---------- Video ---------- */
 
 .video-frame {
@@ -181,7 +210,11 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 0;
+  /* R2-E Phase 3A: the video keeps a visible strip when vertical space runs
+     short; below that the TAG EVENTS grid scrolls instead of the video
+     collapsing to zero (the flexible filler still grows to fill all spare
+     space in roomy windows — unchanged behaviour there). */
+  min-height: 80px;
 }
 
 #video {
@@ -396,9 +429,20 @@ button {
 
 /* ---------- Tag panel ---------- */
 
+/* R2-E Phase 3A (tag-grid cutoff fix): the panel is a bounded flex column
+   inside .video-pane. With room it keeps its natural height; when space
+   runs short it shrinks (min-height: 0) and the grid inside becomes the
+   scroll container — the TAG EVENTS area consumes the remaining vertical
+   space instead of pushing the app past the viewport. The header and the
+   Add-tag button are flex-shrink: 0, so they stay fully visible at every
+   window size; only the grid rows scroll. */
 .tagpanel {
   padding: 14px 16px 16px;
   background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 .tagpanel-header {
@@ -407,6 +451,9 @@ button {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
 .tagpanel-header-text {
@@ -450,6 +497,42 @@ button {
      inert — Small rendered an identical box and Large only made the whole
      row taller. start lets every button keep its own height. */
   align-items: start;
+}
+
+/* R2-E Phase 3A (tag-grid cutoff fix): the grid itself is the bounded
+   vertical scroll container. overflow-y: auto + min-height: 0 let it
+   shrink inside .tagpanel and scroll its rows; overscroll-behavior
+   contains the wheel so it never chains to the app shell. The grid
+   definition above (columns / gap / align-items: start) and the per-size
+   min-height floors below are untouched — cd48114 sizing behaviour is
+   unchanged; only tags scroll, never the page. */
+.tag-grid {
+  overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+  flex: 0 1 auto;
+}
+
+/* R2-E Phase 3A: a clearly visible, usable scrollbar for the tag grid on
+   every platform Electron ships on (styled for the dark theme; Windows
+   default scrollbars remain usable — this just guarantees the affordance
+   and keeps it on-theme). */
+.tag-grid::-webkit-scrollbar {
+  width: 10px;
+}
+
+.tag-grid::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 5px;
+}
+
+.tag-grid::-webkit-scrollbar-thumb {
+  background: #3a3d42;
+  border-radius: 5px;
+}
+
+.tag-grid::-webkit-scrollbar-thumb:hover {
+  background: #4a4e54;
 }
 
 .tag-btn {
@@ -561,10 +644,14 @@ button {
   white-space: nowrap;
 }
 
+/* R2-E Phase 3A: the Add-tag button now sits directly under the TAG
+   EVENTS header (always visible, above the scrollable grid) instead of
+   below the grid where an overflowing tag set used to cut it off. */
 .btn-add-custom {
-  margin-top: 10px;
+  margin: 0 0 10px;
   width: 100%;
   padding: 8px;
+  flex-shrink: 0;
 }
 
 /* ---------- R2-E Phase 2A: Clear-shortcut button (ruling R8) ---------- */

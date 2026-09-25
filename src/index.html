@@ -224,8 +224,14 @@
           </div>
           <button id="btnUndo" class="btn btn-ghost btn-undo" disabled>Undo last tag <span class="key-hint">Ctrl+Z</span></button>
         </div>
-        <div id="tagButtons" class="tag-grid"></div>
-        <button id="btnAddCustom" class="btn btn-ghost btn-add-custom">+ Add custom tag</button>
+        <!-- R2-E Phase 3A: the Add-tag control sits BETWEEN the TAG EVENTS
+             header and the grid — always visible, no hidden interaction and
+             nothing to scroll past (it used to live below the grid, where an
+             overflowing tag set cut it off below the viewport). Same id and
+             handler as before: opens the existing Add/Edit Tag modal in
+             CREATE mode. -->
+        <button id="btnAddCustom" class="btn btn-ghost btn-add-custom">+ Add New Tag</button>
+        <div id="tagButtons" class="tag-grid" role="region" aria-label="Tag buttons"></div>
       </div>
 
       <div id="detailPanel" class="detail-panel" style="display:none;"></div>
