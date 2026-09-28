@@ -52,6 +52,7 @@
       <button id="btnOpenVideo" class="btn">Open video</button>
       <button id="btnManageSquad" class="btn">Manage squad</button>
       <button id="btnMatchSetup" class="btn">Match setup</button>
+      <button id="btnMatchdaySquad" class="btn">Matchday squads</button>
       <button id="btnLoadSession" class="btn">Load session</button>
       <button id="btnSaveSession" class="btn">Save session</button>
       <button id="btnPitchMap" class="btn">Pitch map</button>
@@ -424,6 +425,24 @@
       <div class="modal-actions">
         <button id="btnCancelMatchSetup" class="btn btn-ghost">Cancel</button>
         <button id="btnSaveMatchSetup" class="btn btn-accent">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="matchdaySquadModal" class="modal-overlay" style="display:none;">
+    <div class="modal modal-wide modal-matchdaysquad">
+      <h3>Matchday squads</h3>
+      <p class="modal-note">Pick this match's squad from your global squad. Shirt number, position, role and starter status apply to <strong>this match only</strong> — the global squad is never modified. (Opponent squad management arrives in a later stage.)</p>
+      <div id="matchdaySquadCounts" class="matchday-squad-counts"></div>
+      <div class="match-setup-section-label">Starting XI <span id="matchdaySquadXiHint" class="matchday-squad-xi-hint"></span></div>
+      <div id="matchdaySquadXi" class="matchday-squad-xi"></div>
+      <div class="match-setup-section-label">Our match squad</div>
+      <div id="matchdaySquadList" class="matchday-squad-list"></div>
+      <div class="match-setup-section-label">Add from global squad</div>
+      <div id="matchdaySquadAddList" class="matchday-squad-add"></div>
+      <div class="modal-actions">
+        <button id="btnAddAllMatchdaySquad" class="btn btn-ghost">Add all remaining</button>
+        <button id="btnCloseMatchdaySquad" class="btn btn-accent">Done</button>
       </div>
     </div>
   </div>

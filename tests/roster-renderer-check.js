@@ -7,7 +7,9 @@
 // player-season.js + renderer.js into jsdom with a stubbed window.matchtag
 // bridge (call capture — same architecture as tag-library-renderer-check.js)
 // and verifies the R3-A renderer wiring BEHAVIORALLY, through the pure
-// mutation path (window.matchRosterApi — R3-A ships no roster UI):
+// mutation path (window.matchRosterApi; R3-A shipped no roster UI — R3-B
+// Stage 1 has since added the Matchday-squads modal, and W5 below now pins
+// that UI to its approved surface instead of asserting its absence):
 //
 //   R3-15  dirty-state eligibility: a roster mutation marks the session
 //          dirty AND counts as autosavable work (the debounced autosave
@@ -211,9 +213,29 @@ delete LEGACY_V4_SESSION.matchRoster;
       /if \(!window\.Roster\.isEmptyMatchRoster\(matchRoster\)\) return true;/.test(rendererSrc));
     ok('R3-W4: BOTH restore paths normalize the loaded roster (load + recovery)',
       (rendererSrc.match(/matchRoster = window\.Roster\.normalizeMatchRoster\((?:data|autosave)\.matchRoster\);/g) || []).length === 2);
-    ok('R3-W5: NO roster UI — renderer looks up no roster DOM ids; index.html has none',
+    // R3-W5 (R3-B Stage 1 supersession): R3-A shipped no roster UI; R3-B
+    // Stage 1 added the FIRST one — the "Matchday squads" modal. The
+    // original protections are KEPT (clause 1: renderer looks up no
+    // roster-labeled DOM id; clause 2: index.html defines none) and
+    // EXTENDED with an approved-surface whitelist: every matchday-squad
+    // DOM id defined in index.html and every one looked up in renderer.js
+    // must be exactly one of the nine approved Stage 1 ids — the roster UI
+    // cannot silently grow beyond the approved modal.
+    const APPROVED_MATCHDAY_SQUAD_IDS = [
+      'btnMatchdaySquad', 'matchdaySquadModal', 'matchdaySquadCounts', 'matchdaySquadXiHint',
+      'matchdaySquadXi', 'matchdaySquadList', 'matchdaySquadAddList',
+      'btnAddAllMatchdaySquad', 'btnCloseMatchdaySquad'
+    ];
+    const htmlMdIds = (html.match(/id="[^"]*atchday[^"]*quad[^"]*"/g) || []).map((s) => s.slice(4, -1));
+    const rendererMdLookups = (rendererSrc.match(/getElementById\('[^']*atchday[^']*quad[^']*'\)/g) || []).map((s) => s.slice(s.indexOf("'") + 1, s.lastIndexOf("'")));
+    ok('R3-W5: roster UI confined to the approved Matchday-squads modal (original no-unapproved-roster-id clauses kept)',
       !/getElementById\('[^']*[Rr]oster[^']*'\)/.test(rendererSrc) &&
-      !(html.match(/id="[^"]*[Rr]oster[^"]*"/g) || []).length);
+      !(html.match(/id="[^"]*[Rr]oster[^"]*"/g) || []).length &&
+      APPROVED_MATCHDAY_SQUAD_IDS.every((id) => (html.match(new RegExp('id="' + id + '"', 'g')) || []).length === 1) &&
+      APPROVED_MATCHDAY_SQUAD_IDS.every((id) => rendererSrc.indexOf("getElementById('" + id + "')") !== -1) &&
+      htmlMdIds.every((id) => APPROVED_MATCHDAY_SQUAD_IDS.indexOf(id) !== -1) &&
+      rendererMdLookups.every((id) => APPROVED_MATCHDAY_SQUAD_IDS.indexOf(id) !== -1),
+      'html ids: ' + JSON.stringify(htmlMdIds) + ' | lookups: ' + JSON.stringify(rendererMdLookups));
     ok('R3-W6: NO new IPC channel — the roster rides the existing opaque payloads (preload unchanged)',
       !/roster:/.test(preloadSrc));
     ok('R3-W7: NO substitution wiring — renderer never writes roster statuses from events',

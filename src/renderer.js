@@ -397,6 +397,17 @@
   const btnCancelMatchSetup = document.getElementById('btnCancelMatchSetup');
   const btnSaveMatchSetup = document.getElementById('btnSaveMatchSetup');
 
+  // R3-B Stage 1 — Matchday squads modal (our-team panel).
+  const btnMatchdaySquad = document.getElementById('btnMatchdaySquad');
+  const matchdaySquadModal = document.getElementById('matchdaySquadModal');
+  const matchdaySquadCountsEl = document.getElementById('matchdaySquadCounts');
+  const matchdaySquadXiHintEl = document.getElementById('matchdaySquadXiHint');
+  const matchdaySquadXiEl = document.getElementById('matchdaySquadXi');
+  const matchdaySquadListEl = document.getElementById('matchdaySquadList');
+  const matchdaySquadAddListEl = document.getElementById('matchdaySquadAddList');
+  const btnAddAllMatchdaySquad = document.getElementById('btnAddAllMatchdaySquad');
+  const btnCloseMatchdaySquad = document.getElementById('btnCloseMatchdaySquad');
+
   const btnPitchMap = document.getElementById('btnPitchMap');
   const pitchMapModal = document.getElementById('pitchMapModal');
   const pitchMapTagFilter = document.getElementById('pitchMapTagFilter');
@@ -730,6 +741,394 @@
     closeMatchSetupModal();
     markAutosaveDirty();
   });
+
+  // ---------- Matchday squads — our-team panel (R3-B Stage 1) ----------
+  //
+  // UI for the R3-A matchday roster, OUR side only (the opponent panel is
+  // a later stage). All roster data flows EXCLUSIVELY through
+  // window.matchRosterApi mutators (upsertPlayer / removePlayer), so every
+  // change marks the session dirty and rides the existing autosave/save
+  // persistence — no new channels, no schema change, no new script file.
+  //
+  // Data contract (unchanged R3-A): each entry is the canonical six-field
+  // { playerId, displayName, shirtNumber, position, role, status }. Because
+  // the model's upsert REPLACES the whole entry, every edit here is a
+  // read-merge-write of the current entry — fields are never lost. Statuses
+  // are never assigned directly on a stored object; they are only carried
+  // in the object handed to the mutator (the R3-W7 discipline: nothing
+  // writes roster statuses from the event flow — the Sub tag stays
+  // event-only).
+  //
+  // D1 (approved): matchInfo.startingXI (the formation-slot → playerId
+  // mapping) and roster starter statuses are reconciled ONLY through
+  // explicit user actions in this panel:
+  //   - assigning a player to a slot promotes a 'bench' player to 'starter'
+  //     (live 'on'/'substituted' statuses are never overwritten);
+  //   - clearing or replacing a slot returns a displaced 'starter' to
+  //     'bench';
+  //   - promoting via the row control fills the player's first free slot
+  //     (when a formation is set); demoting clears their slot.
+  // NOTHING is derived automatically at load/save time — roster data never
+  // rewrites startingXI and startingXI never manufactures roster entries
+  // (the R3-16 invariants hold; the sync lives only in these handlers).
+  //
+  // D5 (approved): shirt numbers (and position/role/displayName) edited
+  // here change ONLY the match-scoped roster entry — this panel never
+  // calls persistSquad/saveSquad and never writes squad.json.
+  //
+  // D4/D6 (approved): validation is advisory — duplicate shirt numbers and
+  // starter/XI counts are surfaced as hints; nothing blocks.
+
+  function ourRosterEntries() {
+    return matchRosterApi.get().our;
+  }
+
+  function findOurRosterEntry(playerId) {
+    return ourRosterEntries().find((p) => p.playerId === playerId) || null;
+  }
+
+  // Display name for a roster row: the match overlay name, falling back to
+  // the global-squad name (a squad player added with no overlay name must
+  // never render an empty row).
+  function ourRosterDisplayName(entry) {
+    if (entry.displayName) return entry.displayName;
+    const squadPlayer = squad.find((p) => p.id === entry.playerId);
+    return squadPlayer && squadPlayer.name ? squadPlayer.name : '(unnamed player)';
+  }
+
+  function ourRosterRowLabel(entry) {
+    const name = ourRosterDisplayName(entry);
+    return entry.shirtNumber != null ? `#${entry.shirtNumber} ${name}` : name;
+  }
+
+  // ----- starting-XI slot helpers (D1 reconciliation) -----
+
+  // The XI view for this panel: the current formation's slots. When the
+  // stored startingXI length matches the formation, this IS the stored
+  // mapping; on mismatch (legacy or hand-edited files) a fresh skeleton is
+  // shown that PRESERVES any stored assignment whose slot position exists
+  // in the formation — and it is materialized into matchInfo only on the
+  // first user write. Merely OPENING the panel never rewrites the stored
+  // mapping.
+  function matchdayXiView() {
+    const positions = FORMATIONS[matchInfo.formation] || [];
+    if (!positions.length) return { formationSet: false, slots: [] };
+    const stored = matchInfo.startingXI || [];
+    if (stored.length === positions.length) return { formationSet: true, slots: stored };
+    const byPosition = {};
+    stored.forEach((s) => {
+      if (s && s.playerId && s.position) byPosition[s.position] = s.playerId;
+    });
+    return {
+      formationSet: true,
+      slots: positions.map((pos) => ({ position: pos, playerId: byPosition[pos] || '' }))
+    };
+  }
+
+  // Materialize the panel's XI view into matchInfo.startingXI (rebuilds a
+  // stale mapping to the formation's slot list). Returns true when the
+  // stored mapping actually changed. Fires only inside explicit user
+  // actions (the write path then marks the session dirty).
+  function materializeMatchdayXi() {
+    const view = matchdayXiView();
+    if (!view.formationSet || view.slots === matchInfo.startingXI) return false;
+    matchInfo.startingXI = view.slots.map((s) => ({ position: s.position, playerId: s.playerId }));
+    markAutosaveDirty();
+    return true;
+  }
+
+  function matchdayXiSlotIndexOf(playerId) {
+    return (matchInfo.startingXI || []).findIndex((s) => s.playerId === playerId);
+  }
+
+  function setMatchdayXiSlotPlayer(index, playerId) {
+    materializeMatchdayXi();
+    const slot = (matchInfo.startingXI || [])[index];
+    if (!slot || slot.playerId === playerId) return;
+    slot.playerId = playerId;
+    markAutosaveDirty();
+  }
+
+  // D1: assign/clear one XI slot from the panel's slot editor.
+  function assignPlayerToMatchdayXiSlot(index, playerId) {
+    materializeMatchdayXi();
+    const slot = (matchInfo.startingXI || [])[index];
+    if (!slot) return;
+    if (playerId) {
+      // move semantics: the player's previous slot (if any) is emptied
+      const prev = matchdayXiSlotIndexOf(playerId);
+      if (prev !== -1 && prev !== index) setMatchdayXiSlotPlayer(prev, '');
+      const displacedId = slot.playerId;
+      setMatchdayXiSlotPlayer(index, playerId);
+      // a bench player promoted into the XI becomes a starter; live
+      // 'on'/'substituted' statuses are never overwritten
+      const entry = findOurRosterEntry(playerId);
+      if (entry && entry.status === 'bench') {
+        matchRosterApi.upsertPlayer('our', Object.assign({}, entry, { status: 'starter' }));
+      }
+      if (displacedId && displacedId !== playerId) {
+        const displaced = findOurRosterEntry(displacedId);
+        if (displaced && displaced.status === 'starter') {
+          matchRosterApi.upsertPlayer('our', Object.assign({}, displaced, { status: 'bench' }));
+        }
+      }
+    } else {
+      // clearing the slot: a displaced starter returns to the bench
+      const displacedId = slot.playerId;
+      setMatchdayXiSlotPlayer(index, '');
+      if (displacedId) {
+        const displaced = findOurRosterEntry(displacedId);
+        if (displaced && displaced.status === 'starter') {
+          matchRosterApi.upsertPlayer('our', Object.assign({}, displaced, { status: 'bench' }));
+        }
+      }
+    }
+  }
+
+  // D1: explicit status change from a row's status control.
+  function setOurRosterStatus(playerId, nextStatus) {
+    const entry = findOurRosterEntry(playerId);
+    if (!entry) return;
+    matchRosterApi.upsertPlayer('our', Object.assign({}, entry, { status: nextStatus }));
+    if (nextStatus === 'bench') {
+      const slot = matchdayXiSlotIndexOf(playerId);
+      if (slot !== -1) setMatchdayXiSlotPlayer(slot, '');
+    } else if (nextStatus === 'starter') {
+      if (matchdayXiSlotIndexOf(playerId) === -1) {
+        materializeMatchdayXi();
+        const free = (matchInfo.startingXI || []).findIndex((s) => !s.playerId);
+        if (free !== -1) setMatchdayXiSlotPlayer(free, playerId);
+        // no free slot or no formation: the starter stays unslotted — the
+        // XI hint surfaces the gap (advisory only, D4/D6)
+      }
+    }
+    // 'on' / 'substituted' are live match states: deliberate user writes
+    // through the sanctioned mutator, with no automatic slot side-effects.
+  }
+
+  // Remove one player from OUR match squad. The global squad is untouched
+  // (no persistSquad/saveSquad anywhere in this panel); a held XI slot is
+  // released.
+  function removeOurRosterPlayer(playerId) {
+    const slot = matchdayXiSlotIndexOf(playerId);
+    const removed = matchRosterApi.removePlayer('our', playerId);
+    if (removed && slot !== -1) setMatchdayXiSlotPlayer(slot, '');
+    return removed;
+  }
+
+  // Add one global-squad player to OUR match squad. D5: the entry starts
+  // from the squad facts (name/number) but lives its own match-scoped life
+  // afterwards — nothing here ever writes back to squad.json.
+  function addSquadPlayerToMatchRoster(squadPlayer) {
+    if (!squadPlayer || typeof squadPlayer.id !== 'string' || !squadPlayer.id) return null;
+    // hostile/corrupt squad entry in the opponent namespace: the model
+    // would reject it anyway — never offer it on the our-side path
+    if (window.Roster.isOpponentId(squadPlayer.id)) return null;
+    return matchRosterApi.upsertPlayer('our', {
+      playerId: squadPlayer.id,
+      displayName: typeof squadPlayer.name === 'string' ? squadPlayer.name : '',
+      shirtNumber: squadPlayer.number, // normalized by the model ('10' → 10, junk → null)
+      position: '',
+      role: '',
+      status: 'bench'
+    });
+  }
+
+  function addAllRemainingSquadPlayersToMatchRoster() {
+    const inRoster = new Set(ourRosterEntries().map((p) => p.playerId));
+    squad.forEach((p) => {
+      if (!inRoster.has(p.id)) addSquadPlayerToMatchRoster(p);
+    });
+    renderMatchdaySquadPanel();
+  }
+
+  // ----- panel rendering -----
+
+  function renderMatchdaySquadCounts(our) {
+    const starters = our.filter((p) => p.status === 'starter').length;
+    const bench = our.filter((p) => p.status === 'bench').length;
+    const onPitch = our.filter((p) => p.status === 'on').length;
+    const substituted = our.filter((p) => p.status === 'substituted').length;
+    let html = `<span>Starters <b>${starters}</b></span>` +
+      `<span>Subs <b>${bench}</b></span>`;
+    if (onPitch) html += `<span>On pitch <b>${onPitch}</b></span>`;
+    if (substituted) html += `<span>Substituted <b>${substituted}</b></span>`;
+    html += `<span>Match squad <b>${our.length}</b></span>`;
+    // D4 (advisory): duplicate shirt numbers within OUR match squad
+    const shirtCounts = {};
+    our.forEach((p) => {
+      if (p.shirtNumber != null) shirtCounts[p.shirtNumber] = (shirtCounts[p.shirtNumber] || 0) + 1;
+    });
+    const dupes = Object.keys(shirtCounts)
+      .filter((n) => shirtCounts[n] > 1)
+      .sort((a, b) => Number(a) - Number(b));
+    if (dupes.length) {
+      html += `<span class="mds-count-warn">⚠ Duplicate shirt numbers: ${escapeHtml(dupes.join(', '))}</span>`;
+    }
+    matchdaySquadCountsEl.innerHTML = html;
+  }
+
+  function nonRosterXiSlotOptionHtml(playerId) {
+    // A slot may reference a player outside OUR match roster (a squad-only
+    // player assigned through Match setup, or a legacy ref). Preserve the
+    // stored value visibly instead of silently showing "— Empty —".
+    const resolved = resolveMatchdayPlayer(playerId);
+    let label = 'Unknown player';
+    if (resolved) {
+      const name = resolved.displayName || 'Player';
+      label = resolved.shirtNumber != null ? `#${resolved.shirtNumber} ${name}` : name;
+    }
+    return `<option value="${escapeAttr(playerId)}">${escapeHtml(label)} (not in this match squad)</option>`;
+  }
+
+  function renderMatchdaySquadXi(our) {
+    const view = matchdayXiView();
+    if (!view.formationSet) {
+      matchdaySquadXiHintEl.textContent = '';
+      matchdaySquadXiEl.innerHTML = '<div class="detail-empty-note">No formation set — choose one in Match setup to map the starting XI.</div>';
+      return view;
+    }
+    const filled = view.slots.filter((s) => s.playerId).length;
+    matchdaySquadXiHintEl.textContent = `${matchInfo.formation} · ${filled}/${view.slots.length} filled`;
+    const rosterOptions = ['<option value="">— Empty —</option>']
+      .concat(our.map((entry) => `<option value="${escapeAttr(entry.playerId)}">${escapeHtml(ourRosterRowLabel(entry))}</option>`))
+      .join('');
+    const inRoster = new Set(our.map((p) => p.playerId));
+
+    matchdaySquadXiEl.innerHTML =
+      (our.length ? '' : '<div class="detail-empty-note">Add players below to fill the starting XI.</div>') +
+      view.slots.map((slot, i) => {
+        const preserved = slot.playerId && !inRoster.has(slot.playerId)
+          ? nonRosterXiSlotOptionHtml(slot.playerId)
+          : '';
+        return `
+          <div class="lineup-slot">
+            <span class="lineup-position">${escapeHtml(slot.position)}</span>
+            <select class="lineup-player-select" data-mds-xi-index="${i}">
+              ${rosterOptions}${preserved}
+            </select>
+          </div>`;
+      }).join('');
+
+    view.slots.forEach((slot, i) => {
+      const sel = matchdaySquadXiEl.querySelector(`select[data-mds-xi-index="${i}"]`);
+      if (!sel) return;
+      sel.value = slot.playerId || '';
+      sel.addEventListener('change', () => {
+        assignPlayerToMatchdayXiSlot(Number(sel.dataset.mdsXiIndex), sel.value);
+        renderEventList(); // XI positions can surface in event-row labels
+        renderMatchdaySquadPanel();
+      });
+    });
+    return view;
+  }
+
+  function renderMatchdaySquadList(our, xiView) {
+    if (!our.length) {
+      matchdaySquadListEl.innerHTML = '<div class="detail-empty-note">No players in this match\'s squad yet — add some below.</div>';
+      return;
+    }
+    const badgeSource = xiView.formationSet ? xiView.slots : [];
+    matchdaySquadListEl.innerHTML = our.map((entry) => {
+      const badge = badgeSource.find((s) => s.playerId === entry.playerId);
+      return `
+        <div class="matchday-squad-row" data-mds-player-id="${escapeAttr(entry.playerId)}">
+          <input class="mds-shirt" type="text" inputmode="numeric" placeholder="#" value="${entry.shirtNumber != null ? escapeAttr(String(entry.shirtNumber)) : ''}" title="Shirt number (this match only)" />
+          <span class="mds-name" title="${escapeAttr(ourRosterDisplayName(entry))}">${escapeHtml(ourRosterDisplayName(entry))}</span>
+          <input class="mds-position" type="text" placeholder="Pos" value="${escapeAttr(entry.position || '')}" title="Position (this match only)" />
+          <input class="mds-role" type="text" placeholder="Role" value="${escapeAttr(entry.role || '')}" title="Role, e.g. Captain (this match only)" />
+          <select class="mds-status" title="Matchday status">
+            <option value="starter"${entry.status === 'starter' ? ' selected' : ''}>Starter</option>
+            <option value="bench"${entry.status === 'bench' ? ' selected' : ''}>Sub</option>
+            <option value="on"${entry.status === 'on' ? ' selected' : ''}>On pitch</option>
+            <option value="substituted"${entry.status === 'substituted' ? ' selected' : ''}>Substituted</option>
+          </select>
+          ${badge ? `<span class="mds-xi-badge" title="Starting XI slot">XI ${escapeHtml(badge.position)}</span>` : ''}
+          <button class="mds-remove" title="Remove from this match's squad (the global squad is untouched)">✕</button>
+        </div>`;
+    }).join('');
+
+    matchdaySquadListEl.querySelectorAll('.matchday-squad-row').forEach((row) => {
+      const playerId = row.dataset.mdsPlayerId;
+      const shirtInput = row.querySelector('.mds-shirt');
+      const positionInput = row.querySelector('.mds-position');
+      const roleInput = row.querySelector('.mds-role');
+      const statusSelect = row.querySelector('.mds-status');
+      const removeBtn = row.querySelector('.mds-remove');
+
+      const updateEntryFields = (patch) => {
+        const entry = findOurRosterEntry(playerId);
+        if (!entry) return;
+        matchRosterApi.upsertPlayer('our', Object.assign({}, entry, patch));
+        renderMatchdaySquadPanel();
+      };
+
+      shirtInput.addEventListener('change', () => updateEntryFields({ shirtNumber: shirtInput.value.trim() }));
+      positionInput.addEventListener('change', () => updateEntryFields({ position: positionInput.value.trim() }));
+      roleInput.addEventListener('change', () => updateEntryFields({ role: roleInput.value.trim() }));
+      statusSelect.addEventListener('change', () => {
+        setOurRosterStatus(playerId, statusSelect.value);
+        renderMatchdaySquadPanel();
+      });
+      removeBtn.addEventListener('click', () => {
+        removeOurRosterPlayer(playerId);
+        renderMatchdaySquadPanel();
+      });
+    });
+  }
+
+  function renderMatchdaySquadAddList(our) {
+    if (!squad.length) {
+      matchdaySquadAddListEl.innerHTML = '<div class="detail-empty-note">No players in your global squad — use "Manage squad" in the top bar to add some first.</div>';
+      btnAddAllMatchdaySquad.disabled = true;
+      return;
+    }
+    const inRoster = new Set(our.map((p) => p.playerId));
+    // Squad entries in the opponent namespace are corrupt data — the model
+    // would reject them on the our-side path, so they are never offered.
+    const addable = squad.filter((p) => !inRoster.has(p.id) && !window.Roster.isOpponentId(p.id));
+    if (!addable.length) {
+      matchdaySquadAddListEl.innerHTML = '<div class="detail-empty-note">Every squad player is already in this match\'s squad.</div>';
+      btnAddAllMatchdaySquad.disabled = true;
+      return;
+    }
+    matchdaySquadAddListEl.innerHTML = addable.map((p) => `
+      <div class="squad-chip matchday-add-chip" data-mds-add-id="${escapeAttr(p.id)}">
+        ${p.number ? `<span class="squad-number">${escapeHtml(p.number)}</span>` : ''}
+        <span>${escapeHtml(p.name)}</span>
+        <button class="mds-add-btn" title="Add to this match's squad">+</button>
+      </div>`).join('');
+    matchdaySquadAddListEl.querySelectorAll('.mds-add-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const chip = btn.closest('.matchday-add-chip');
+        const squadPlayer = chip ? squad.find((p) => p.id === chip.dataset.mdsAddId) : null;
+        addSquadPlayerToMatchRoster(squadPlayer);
+        renderMatchdaySquadPanel();
+      });
+    });
+    btnAddAllMatchdaySquad.disabled = false;
+  }
+
+  function renderMatchdaySquadPanel() {
+    const our = ourRosterEntries();
+    renderMatchdaySquadCounts(our);
+    const xiView = renderMatchdaySquadXi(our);
+    renderMatchdaySquadList(our, xiView);
+    renderMatchdaySquadAddList(our);
+  }
+
+  function openMatchdaySquadModal() {
+    renderMatchdaySquadPanel();
+    matchdaySquadModal.style.display = 'flex';
+  }
+
+  function closeMatchdaySquadModal() {
+    matchdaySquadModal.style.display = 'none';
+  }
+
+  btnMatchdaySquad.addEventListener('click', openMatchdaySquadModal);
+  btnCloseMatchdaySquad.addEventListener('click', closeMatchdaySquadModal);
+  btnAddAllMatchdaySquad.addEventListener('click', addAllRemainingSquadPlayersToMatchRoster);
 
   // ---------- Time formatting ----------
 
@@ -2886,7 +3285,7 @@
   // Keyboard shortcuts: number keys tag, spacebar toggles play/pause, Escape closes overlays.
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
-      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); settleTagConfirm(false); }
+      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); closeMatchdaySquadModal(); settleTagConfirm(false); }
       return;
     }
 
@@ -2898,6 +3297,7 @@
       closePitchMapModal();
       closeMatchSetupModal();
       closeSeasonModal();
+      closeMatchdaySquadModal();
       settleTagConfirm(false);
       return;
     }
