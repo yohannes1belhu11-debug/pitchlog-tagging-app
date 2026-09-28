@@ -566,6 +566,14 @@
        function over the current session (events/matchInfo/matchClock/squad)
        and never mutates them. -->
   <script src="integrity.js"></script>
+  <!-- roster.js (R3-A): the matchday-roster data model
+       (window.Roster) — the two-team match-scoped roster with the
+       match_opp_* opponent id namespace, the two-team resolver, and the
+       canonical { playerId, displayName, shirtNumber, position, role,
+       status } player shape. Pure module: no DOM, no Electron; loaded
+       after integrity.js and before renderer.js (renderer state and
+       persistence wiring consume it). -->
+  <script src="roster.js"></script>
   <script src="analytics.js"></script>
   <!-- Player & Season Data Engine V1 (src/player-season.js): the deterministic
        multi-match aggregation layer (player match records, team match records,

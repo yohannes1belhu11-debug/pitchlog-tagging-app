@@ -546,6 +546,7 @@ if (CSV && PARSED.length === 56) {
   const srcDir = path.join(__dirname, '..', 'src');
   const html = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf-8');
   const integritySrc = fs.readFileSync(path.join(srcDir, 'integrity.js'), 'utf-8');
+  const rosterSrc = fs.readFileSync(path.join(srcDir, 'roster.js'), 'utf-8');
   const analyticsSrc = fs.readFileSync(path.join(srcDir, 'analytics.js'), 'utf-8');
   const playerSeasonSrc = fs.readFileSync(path.join(srcDir, 'player-season.js'), 'utf-8');
   const recentFormSrc = fs.readFileSync(path.join(srcDir, 'recent-form.js'), 'utf-8');
@@ -600,6 +601,7 @@ if (CSV && PARSED.length === 56) {
       loadMultipleSessions: async () => loadMultiple ? deepClone(loadMultiple) : []
     });
     win.eval(integritySrc);
+    win.eval(rosterSrc);
     win.eval(analyticsSrc);
     win.eval(playerSeasonSrc);
     win.eval(recentFormSrc);

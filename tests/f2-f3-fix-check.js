@@ -56,6 +56,7 @@ try {
 const srcDir = path.join(__dirname, '..', 'src');
 const html = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf-8');
 const integritySrc = fs.readFileSync(path.join(srcDir, 'integrity.js'), 'utf-8');
+const rosterSrc = fs.readFileSync(path.join(srcDir, 'roster.js'), 'utf-8');
 const rendererSrcNew = fs.readFileSync(path.join(srcDir, 'renderer.js'), 'utf-8');
 // Pre-fix renderer (the state the F2/F3 defects were recorded against).
 const rendererSrcOld = execSync('git show 0732b35:src/renderer.js', { cwd: path.join(__dirname, '..'), encoding: 'utf-8', maxBuffer: 32 * 1024 * 1024 });
@@ -136,6 +137,7 @@ function boot(initial) {
     win.document.body.appendChild(legacy);
   }
   win.eval(initial.integritySrc || integritySrc);
+  win.eval(rosterSrc);
   win.eval(initial.rendererSrc || rendererSrcNew);
   return { dom, win, doc: win.document, stub };
 }

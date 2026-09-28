@@ -547,6 +547,80 @@
 
   let matchInfo = blankMatchInfo();
 
+  // ---------- Matchday roster (R3-A — data model only, NO UI) ----------
+  //
+  // The match-scoped two-team roster { our: […], opponent: […] } where every
+  // entry is the canonical six-field player
+  // { playerId, displayName, shirtNumber, position, role, status } with
+  // status ∈ { starter, bench, on, substituted }. R3-A deliberately ships
+  // the data model + persistence + this programmatic mutation path ONLY:
+  //   - no roster UI (no selector redesign — the squad modal and detail
+  //     chips are untouched);
+  //   - no substitution transitions (statuses change only through the
+  //     explicit mutators below; the Sub tag stays event-only);
+  //   - opponent entries are strictly isolated from the GLOBAL squad
+  //     (`squad` / squad.json): nothing here ever adds to `squad` or calls
+  //     persistSquad(). Opponent ids live in the match_opp_* namespace,
+  //     generated collision-safe against roster + squad + event ids.
+  //   - startingXI stays exactly what it is (a formation-slot → playerId
+  //     mapping on matchInfo); roster data never rewrites it, and roster
+  //     entries are never manufactured from historical events.
+  let matchRoster = window.Roster.emptyMatchRoster();
+
+  // Collision-safe opponent-id generation against the FULL universe of ids
+  // known to this session (roster both sides + global squad + every player
+  // reference in the event log).
+  function generateMatchOpponentId() {
+    return window.Roster.generateOpponentId(
+      window.Roster.collectPlayerIds({ matchRoster: matchRoster, squad: squad, events: events })
+    );
+  }
+
+  // Matchday resolver (R3-A contract): our-team ids resolve through the
+  // match roster overlay first, then the global squad; opponent
+  // (match_opp_*) ids resolve through the opponent roster ONLY (never the
+  // squad); anything else is null. Exposed read-only via
+  // window.matchRosterApi.resolve.
+  function resolveMatchdayPlayer(playerId) {
+    return window.Roster.resolveMatchPlayer(playerId, matchRoster, squad);
+  }
+
+  // Mutations (programmatic path — the sanctioned R3-A way to change roster
+  // data without UI). Every successful mutation marks the session dirty so
+  // the debounced autosave picks the roster up (see hasAutosavableWork).
+  // A no-op (nothing changed) does not dirty the session.
+  function upsertMatchRosterPlayer(side, rawPlayer) {
+    const player = window.Roster.upsertPlayer(matchRoster, side, rawPlayer, generateMatchOpponentId);
+    if (player) markAutosaveDirty();
+    return player;
+  }
+
+  function removeMatchRosterPlayer(side, playerId) {
+    const removed = window.Roster.removePlayer(matchRoster, side, playerId);
+    if (removed) markAutosaveDirty();
+    return removed;
+  }
+
+  function setMatchRoster(rawRoster) {
+    const next = window.Roster.normalizeMatchRoster(rawRoster);
+    if (JSON.stringify(next) === JSON.stringify(matchRoster)) return false;
+    matchRoster = next;
+    markAutosaveDirty();
+    return true;
+  }
+
+  // Read-only integration/test surface (NOT UI — no DOM). Gives harnesses
+  // and future features the pure mutation path without any visual change.
+  window.matchRosterApi = {
+    get: () => window.Roster.normalizeMatchRoster(matchRoster),
+    upsertPlayer: upsertMatchRosterPlayer,
+    removePlayer: removeMatchRosterPlayer,
+    setRoster: setMatchRoster,
+    generateOpponentId: generateMatchOpponentId,
+    resolve: resolveMatchdayPlayer,
+    isSessionDirty: () => sessionDirty
+  };
+
   function renderMatchSummary() {
     const parts = [];
     if (matchInfo.opponent) parts.push(`vs ${matchInfo.opponent}`);
@@ -5191,7 +5265,11 @@
   // On success, marks the session clean and clears the autosave so it
   // never clobbers the deliberately-saved file.
   async function saveSession() {
-    const sessionData = { videoPath: currentVideoPath, tags, events, squad, matchInfo, matchClock };
+    // R3-A: the matchday roster rides in the session payload (optional
+    // schema-v4 field — see src/roster.js). Main stamps __schemaVersion and
+    // writes the payload opaquely, so the field persists without any
+    // main-process change.
+    const sessionData = { videoPath: currentVideoPath, tags, events, squad, matchInfo, matchClock, matchRoster };
     const result = await window.matchtag.saveSession(sessionData);
     if (!result || result.canceled) return false;
     // Manual save succeeded — the saved file is now the source of truth.
@@ -5292,6 +5370,13 @@
     matchInfo = data.matchInfo && typeof data.matchInfo === 'object'
       ? { ...blankMatchInfo(), ...data.matchInfo }
       : blankMatchInfo();
+    // R3-A: restore the matchday roster. Legacy v4 files (saved before
+    // R3-A) have no matchRoster field — normalizeMatchRoster(undefined)
+    // yields the canonical EMPTY roster, so they load exactly as before.
+    // Entries are never manufactured from the loaded events (the
+    // normalizer only reads raw.our / raw.opponent). The loaded file is
+    // the new source of truth; doLoadSession ends with setClean().
+    matchRoster = window.Roster.normalizeMatchRoster(data.matchRoster);
     renderMatchSummary();
 
     // Restore match clock (merged onto blank; stopped on load)
@@ -5705,7 +5790,10 @@
       events,
       squad,
       matchInfo,
-      matchClock
+      matchClock,
+      // R3-A: the matchday roster is autosaved with the rest of the
+      // session (and restored by the recovery path below).
+      matchRoster
     };
   }
 
@@ -5724,6 +5812,10 @@
     // clean instead of counting as phantom work.
     if (JSON.stringify(tags) !== tagsBaselineSignature) return true;
     if (JSON.stringify(matchInfo) !== JSON.stringify(blankMatchInfo())) return true;
+    // R3-A: a non-empty matchday roster is autosavable work on its own —
+    // a roster mutation on an otherwise fresh session must actually reach
+    // the autosave file (not be discarded as "dirty but no work").
+    if (!window.Roster.isEmptyMatchRoster(matchRoster)) return true;
     // Check matchClock state — if the match has started, the clock is running,
     // the score has changed, a team/player is selected, a sequence is active,
     // or the video offset is non-zero, there IS autosavable work.
@@ -6089,6 +6181,13 @@
     } else {
       matchInfo = blankMatchInfo();
     }
+
+    // R3-A: restore the matchday roster from the autosave. Same tolerance
+    // as loadSession — an autosave written before R3-A has no matchRoster
+    // field and recovers with an empty roster. The recovered work is
+    // unsaved; markAutosaveDirty() at the end of this function covers the
+    // restored roster like every other recovered state.
+    matchRoster = window.Roster.normalizeMatchRoster(autosave.matchRoster);
 
     // Restore video (if the path is still valid). loadVideoFromPath will
     // call markAutosaveDirty() + scheduleAutosave() — that's fine, because

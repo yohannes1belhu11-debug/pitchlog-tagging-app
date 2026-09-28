@@ -44,6 +44,7 @@ try {
   const srcDir = path.join(__dirname, '..', 'src');
   const html = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf-8');
   const integritySrc = fs.readFileSync(path.join(srcDir, 'integrity.js'), 'utf-8');
+  const rosterSrc = fs.readFileSync(path.join(srcDir, 'roster.js'), 'utf-8');
   const rendererSrc = fs.readFileSync(path.join(srcDir, 'renderer.js'), 'utf-8');
 
   const results = [];
@@ -105,6 +106,7 @@ try {
   const win = dom.window;
   win.matchtag = stub;
   win.eval(integritySrc);
+  win.eval(rosterSrc);
   win.eval(rendererSrc);
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

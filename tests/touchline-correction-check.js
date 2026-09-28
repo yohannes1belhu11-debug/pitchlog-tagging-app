@@ -67,6 +67,7 @@ try {
 const srcDir = path.join(__dirname, '..', 'src');
 const html = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf8');
 const integritySrc = fs.readFileSync(path.join(srcDir, 'integrity.js'), 'utf8');
+const rosterSrc = fs.readFileSync(path.join(srcDir, 'roster.js'), 'utf8');
 const analyticsSrc = fs.readFileSync(path.join(srcDir, 'analytics.js'), 'utf8');
 const playerSeasonSrc = fs.readFileSync(path.join(srcDir, 'player-season.js'), 'utf8');
 const rendererSrc = fs.readFileSync(path.join(srcDir, 'renderer.js'), 'utf8');
@@ -189,6 +190,7 @@ function boot(initial) {
   const stub = makeStub(initial);
   win.matchtag = stub;
   win.eval(integritySrc);
+  win.eval(rosterSrc);
   win.eval(analyticsSrc);
   win.eval(playerSeasonSrc);
   win.eval(rendererSrc);

@@ -44,6 +44,7 @@ try {
 const srcDir = path.join(__dirname, '..', 'src');
 const html = fs.readFileSync(path.join(srcDir, 'index.html'), 'utf-8');
 const integritySrc = fs.readFileSync(path.join(srcDir, 'integrity.js'), 'utf-8');
+const rosterSrc = fs.readFileSync(path.join(srcDir, 'roster.js'), 'utf-8');
 const analyticsSrc = fs.readFileSync(path.join(srcDir, 'analytics.js'), 'utf-8');
 const playerSeasonSrc = fs.readFileSync(path.join(srcDir, 'player-season.js'), 'utf-8');
 // The Recent Form engine may not be wired into the UI yet — load it when the
@@ -94,6 +95,7 @@ async function boot(loadMultiple, withRF) {
     loadMultipleSessions: async () => loadMultiple ? JSON.parse(JSON.stringify(loadMultiple)) : []
   });
   win.eval(integritySrc);
+  win.eval(rosterSrc);
   win.eval(analyticsSrc);
   win.eval(playerSeasonSrc);
   if (withRF !== false && recentFormSrc) win.eval(recentFormSrc);
@@ -390,8 +392,8 @@ function staticChecks() {
     idx('player-season.js') !== -1 && idx('recent-form.js') !== -1 && idx('player-season.js') < idx('recent-form.js'), '');
   ok('RFU-2c script order: recent-form.js before renderer.js',
     idx('recent-form.js') !== -1 && idx('renderer.js') !== -1 && idx('recent-form.js') < idx('renderer.js'), '');
-  ok('RFU-2d script order: integrity.js and analytics.js still first',
-    idx('integrity.js') === 0 && idx('analytics.js') === 1 && idx('player-season.js') === 2, scripts.join(','));
+  ok('RFU-2d script order: integrity.js, roster.js (R3-A) and analytics.js still first',
+    idx('integrity.js') === 0 && idx('roster.js') === 1 && idx('analytics.js') === 2 && idx('player-season.js') === 3, scripts.join(','));
 
   // 2. Renderer references the engine correctly
   const callSites = (rendererSrc.match(/window\.RecentFormEngine\.computeRecentForm\(/g) || []).length;
