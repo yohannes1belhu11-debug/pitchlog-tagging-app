@@ -407,6 +407,12 @@
   const matchdaySquadAddListEl = document.getElementById('matchdaySquadAddList');
   const btnAddAllMatchdaySquad = document.getElementById('btnAddAllMatchdaySquad');
   const btnCloseMatchdaySquad = document.getElementById('btnCloseMatchdaySquad');
+  // R3-B Stage 2 — opponent panel (second zone of the SAME modal).
+  const matchdaySquadOppCountsEl = document.getElementById('matchdaySquadOppCounts');
+  const matchdaySquadOppListEl = document.getElementById('matchdaySquadOppList');
+  const matchdaySquadOppNameEl = document.getElementById('matchdaySquadOppName');
+  const matchdaySquadOppNumberEl = document.getElementById('matchdaySquadOppNumber');
+  const btnAddMatchdaySquadOpp = document.getElementById('btnAddMatchdaySquadOpp');
 
   const btnPitchMap = document.getElementById('btnPitchMap');
   const pitchMapModal = document.getElementById('pitchMapModal');
@@ -745,7 +751,8 @@
   // ---------- Matchday squads — our-team panel (R3-B Stage 1) ----------
   //
   // UI for the R3-A matchday roster, OUR side only (the opponent panel is
-  // a later stage). All roster data flows EXCLUSIVELY through
+  // its own section below — R3-B Stage 2). All roster data flows
+  // EXCLUSIVELY through
   // window.matchRosterApi mutators (upsertPlayer / removePlayer), so every
   // change marks the session dirty and rides the existing autosave/save
   // persistence — no new channels, no schema change, no new script file.
@@ -1115,6 +1122,7 @@
     const xiView = renderMatchdaySquadXi(our);
     renderMatchdaySquadList(our, xiView);
     renderMatchdaySquadAddList(our);
+    renderMatchdaySquadOpponentPanel(); // R3-B Stage 2: the opponent zone rides the same refresh
   }
 
   function openMatchdaySquadModal() {
@@ -1129,6 +1137,178 @@
   btnMatchdaySquad.addEventListener('click', openMatchdaySquadModal);
   btnCloseMatchdaySquad.addEventListener('click', closeMatchdaySquadModal);
   btnAddAllMatchdaySquad.addEventListener('click', addAllRemainingSquadPlayersToMatchRoster);
+
+  // ---------- Matchday squads — opponent panel (R3-B Stage 2) ----------
+  //
+  // UI for the R3-A matchday roster, OPPONENT side — a second zone in the
+  // same Matchday-squads modal. Same disciplines as the our-team panel:
+  // every mutation flows EXCLUSIVELY through window.matchRosterApi with
+  // side 'opponent' (upsertPlayer / removePlayer), so every change marks
+  // the session dirty and rides the existing autosave/save persistence —
+  // no new channels, no schema change, no new script file.
+  //
+  // Opponent isolation (unchanged R3-A guarantees, now UI-backed):
+  //   - opponent entries NEVER touch the global squad: nothing here writes
+  //     squad.json, and opponents are never resolved through the squad;
+  //   - ids live in the match_opp_* namespace; new entries get a
+  //     collision-safe id generated against the FULL universe (roster both
+  //     sides + global squad + historical event refs), so an id freed by a
+  //     removal is never reused while any event still references it — a
+  //     historical reference can never silently re-point at an unrelated
+  //     player;
+  //   - this section never mutates the our side and never touches the
+  //     formation slots: opponents have no starting XI here.
+  //
+  // Approved Stage 2 decisions (audit Q1–Q5):
+  //   Q1 all four statuses (starter/bench/on/substituted) are exposed on
+  //      every opponent row; every edit is a read-merge-write, so live
+  //      'on'/'substituted' statuses are always preserved;
+  //   Q2 duplicate shirt numbers within the OPPONENT squad surface an
+  //      advisory in the counts zone (nothing blocks); duplicate names are
+  //      simply allowed;
+  //   Q4 Enter in either add-form field adds the player, and a successful
+  //      add clears the form and returns focus to the name field (rapid
+  //      sequential entry);
+  //   Q5 removal is allowed even when historical events reference the
+  //      player (matching the our-team panel); the removed id then
+  //      resolves to null — never to an unrelated player.
+
+  function opponentRosterEntries() {
+    return matchRosterApi.get().opponent;
+  }
+
+  function findOpponentRosterEntry(playerId) {
+    return opponentRosterEntries().find((p) => p.playerId === playerId) || null;
+  }
+
+  // Opponent rows have no global-squad fallback (isolation): the display
+  // name is the match-scoped entry's own name only.
+  function opponentRosterDisplayName(entry) {
+    return entry.displayName || '(unnamed opponent)';
+  }
+
+  function renderMatchdaySquadOpponentCounts(opp) {
+    const starters = opp.filter((p) => p.status === 'starter').length;
+    const bench = opp.filter((p) => p.status === 'bench').length;
+    const onPitch = opp.filter((p) => p.status === 'on').length;
+    const substituted = opp.filter((p) => p.status === 'substituted').length;
+    let html = `<span>Starters <b>${starters}</b></span>` +
+      `<span>Subs <b>${bench}</b></span>`;
+    if (onPitch) html += `<span>On pitch <b>${onPitch}</b></span>`;
+    if (substituted) html += `<span>Substituted <b>${substituted}</b></span>`;
+    html += `<span>Opponent squad <b>${opp.length}</b></span>`;
+    // Q2 (advisory): duplicate shirt numbers within the OPPONENT squad
+    // only — the same number on both sides is normal football.
+    const shirtCounts = {};
+    opp.forEach((p) => {
+      if (p.shirtNumber != null) shirtCounts[p.shirtNumber] = (shirtCounts[p.shirtNumber] || 0) + 1;
+    });
+    const dupes = Object.keys(shirtCounts)
+      .filter((n) => shirtCounts[n] > 1)
+      .sort((a, b) => Number(a) - Number(b));
+    if (dupes.length) {
+      html += `<span class="mds-count-warn">⚠ Duplicate shirt numbers: ${escapeHtml(dupes.join(', '))}</span>`;
+    }
+    matchdaySquadOppCountsEl.innerHTML = html;
+  }
+
+  function renderMatchdaySquadOpponentList(opp) {
+    if (!opp.length) {
+      matchdaySquadOppListEl.innerHTML = '<div class="detail-empty-note">No opponent players yet — add them below (this match only).</div>';
+      return;
+    }
+    matchdaySquadOppListEl.innerHTML = opp.map((entry) => `
+      <div class="matchday-opp-row" data-mdo-player-id="${escapeAttr(entry.playerId)}">
+        <input class="mds-shirt" type="text" inputmode="numeric" placeholder="#" value="${entry.shirtNumber != null ? escapeAttr(String(entry.shirtNumber)) : ''}" title="Shirt number (this match only)" />
+        <span class="mds-name" title="${escapeAttr(opponentRosterDisplayName(entry))}">${escapeHtml(opponentRosterDisplayName(entry))}</span>
+        <input class="mds-position" type="text" placeholder="Pos" value="${escapeAttr(entry.position || '')}" title="Position (this match only)" />
+        <input class="mds-role" type="text" placeholder="Role" value="${escapeAttr(entry.role || '')}" title="Role, e.g. Captain (this match only)" />
+        <select class="mds-status" title="Matchday status">
+          <option value="starter"${entry.status === 'starter' ? ' selected' : ''}>Starter</option>
+          <option value="bench"${entry.status === 'bench' ? ' selected' : ''}>Sub</option>
+          <option value="on"${entry.status === 'on' ? ' selected' : ''}>On pitch</option>
+          <option value="substituted"${entry.status === 'substituted' ? ' selected' : ''}>Substituted</option>
+        </select>
+        <button class="mds-remove" title="Remove from this match's opponent squad">✕</button>
+      </div>`).join('');
+
+    matchdaySquadOppListEl.querySelectorAll('.matchday-opp-row').forEach((row) => {
+      const playerId = row.dataset.mdoPlayerId;
+      const shirtInput = row.querySelector('.mds-shirt');
+      const positionInput = row.querySelector('.mds-position');
+      const roleInput = row.querySelector('.mds-role');
+      const statusSelect = row.querySelector('.mds-status');
+      const removeBtn = row.querySelector('.mds-remove');
+
+      // Read-merge-write (Q1): the entry's other fields — including a live
+      // 'on'/'substituted' status — are always preserved. Opponents have no
+      // formation slots, so a status change is a plain merge (no D1-style
+      // reconciliation, no side effects).
+      const updateEntryFields = (patch) => {
+        const entry = findOpponentRosterEntry(playerId);
+        if (!entry) return;
+        matchRosterApi.upsertPlayer('opponent', Object.assign({}, entry, patch));
+        renderMatchdaySquadPanel();
+      };
+
+      shirtInput.addEventListener('change', () => updateEntryFields({ shirtNumber: shirtInput.value.trim() }));
+      positionInput.addEventListener('change', () => updateEntryFields({ position: positionInput.value.trim() }));
+      roleInput.addEventListener('change', () => updateEntryFields({ role: roleInput.value.trim() }));
+      statusSelect.addEventListener('change', () => updateEntryFields({ status: statusSelect.value }));
+      removeBtn.addEventListener('click', () => {
+        // Q5: allowed even when historical events reference this player —
+        // the freed id resolves to null and is never reused while an event
+        // still holds it.
+        matchRosterApi.removePlayer('opponent', playerId);
+        renderMatchdaySquadPanel();
+      });
+    });
+  }
+
+  // Q4: the add form — Enter in either field (or the Add button) inserts a
+  // new opponent; a successful add clears the form and returns focus to
+  // the name field. An empty name is a no-op (the Add button is disabled
+  // then, and Enter without a name does nothing).
+  function addOpponentPlayerFromForm() {
+    const name = matchdaySquadOppNameEl.value.trim();
+    if (!name) return null;
+    const player = matchRosterApi.upsertPlayer('opponent', {
+      displayName: name,
+      shirtNumber: matchdaySquadOppNumberEl.value.trim(), // normalized by the model ('10' → 10, junk → null)
+      position: '',
+      role: '',
+      status: 'bench'
+    });
+    if (player) {
+      matchdaySquadOppNameEl.value = '';
+      matchdaySquadOppNumberEl.value = '';
+      matchdaySquadOppNameEl.focus();
+    }
+    renderMatchdaySquadPanel();
+    return player;
+  }
+
+  function syncMatchdayOpponentAddState() {
+    btnAddMatchdaySquadOpp.disabled = !matchdaySquadOppNameEl.value.trim();
+  }
+
+  function renderMatchdaySquadOpponentPanel() {
+    const opp = opponentRosterEntries();
+    renderMatchdaySquadOpponentCounts(opp);
+    renderMatchdaySquadOpponentList(opp);
+    syncMatchdayOpponentAddState();
+  }
+
+  [matchdaySquadOppNameEl, matchdaySquadOppNumberEl].forEach((input) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addOpponentPlayerFromForm();
+      }
+    });
+  });
+  matchdaySquadOppNameEl.addEventListener('input', syncMatchdayOpponentAddState);
+  btnAddMatchdaySquadOpp.addEventListener('click', addOpponentPlayerFromForm);
 
   // ---------- Time formatting ----------
 

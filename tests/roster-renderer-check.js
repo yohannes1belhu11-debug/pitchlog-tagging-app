@@ -213,18 +213,22 @@ delete LEGACY_V4_SESSION.matchRoster;
       /if \(!window\.Roster\.isEmptyMatchRoster\(matchRoster\)\) return true;/.test(rendererSrc));
     ok('R3-W4: BOTH restore paths normalize the loaded roster (load + recovery)',
       (rendererSrc.match(/matchRoster = window\.Roster\.normalizeMatchRoster\((?:data|autosave)\.matchRoster\);/g) || []).length === 2);
-    // R3-W5 (R3-B Stage 1 supersession): R3-A shipped no roster UI; R3-B
-    // Stage 1 added the FIRST one — the "Matchday squads" modal. The
-    // original protections are KEPT (clause 1: renderer looks up no
-    // roster-labeled DOM id; clause 2: index.html defines none) and
-    // EXTENDED with an approved-surface whitelist: every matchday-squad
-    // DOM id defined in index.html and every one looked up in renderer.js
-    // must be exactly one of the nine approved Stage 1 ids — the roster UI
-    // cannot silently grow beyond the approved modal.
+    // R3-W5 (R3-B Stage 1 supersession, Stage 2 extension): R3-A shipped
+    // no roster UI; R3-B Stage 1 added the FIRST one — the "Matchday
+    // squads" modal (our-team zone). R3-B Stage 2 added the opponent zone
+    // of the SAME modal. The original protections are KEPT (clause 1:
+    // renderer looks up no roster-labeled DOM id; clause 2: index.html
+    // defines none) and EXTENDED with the approved-surface whitelist:
+    // every matchday-squad DOM id defined in index.html and every one
+    // looked up in renderer.js must be exactly one of the fourteen
+    // approved ids (nine Stage 1 our-team ids + five Stage 2 opponent
+    // ids) — the roster UI cannot silently grow beyond the approved modal.
     const APPROVED_MATCHDAY_SQUAD_IDS = [
       'btnMatchdaySquad', 'matchdaySquadModal', 'matchdaySquadCounts', 'matchdaySquadXiHint',
       'matchdaySquadXi', 'matchdaySquadList', 'matchdaySquadAddList',
-      'btnAddAllMatchdaySquad', 'btnCloseMatchdaySquad'
+      'btnAddAllMatchdaySquad', 'btnCloseMatchdaySquad',
+      'matchdaySquadOppCounts', 'matchdaySquadOppList', 'matchdaySquadOppName',
+      'matchdaySquadOppNumber', 'btnAddMatchdaySquadOpp'
     ];
     const htmlMdIds = (html.match(/id="[^"]*atchday[^"]*quad[^"]*"/g) || []).map((s) => s.slice(4, -1));
     const rendererMdLookups = (rendererSrc.match(/getElementById\('[^']*atchday[^']*quad[^']*'\)/g) || []).map((s) => s.slice(s.indexOf("'") + 1, s.lastIndexOf("'")));

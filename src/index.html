@@ -432,7 +432,7 @@
   <div id="matchdaySquadModal" class="modal-overlay" style="display:none;">
     <div class="modal modal-wide modal-matchdaysquad">
       <h3>Matchday squads</h3>
-      <p class="modal-note">Pick this match's squad from your global squad. Shirt number, position, role and starter status apply to <strong>this match only</strong> — the global squad is never modified. (Opponent squad management arrives in a later stage.)</p>
+      <p class="modal-note">Pick this match's squad from your global squad, and add the opponent's players in the opponent section below. Shirt number, position, role and status apply to <strong>this match only</strong> — the global squad is never modified, and opponent players never enter it.</p>
       <div id="matchdaySquadCounts" class="matchday-squad-counts"></div>
       <div class="match-setup-section-label">Starting XI <span id="matchdaySquadXiHint" class="matchday-squad-xi-hint"></span></div>
       <div id="matchdaySquadXi" class="matchday-squad-xi"></div>
@@ -440,6 +440,14 @@
       <div id="matchdaySquadList" class="matchday-squad-list"></div>
       <div class="match-setup-section-label">Add from global squad</div>
       <div id="matchdaySquadAddList" class="matchday-squad-add"></div>
+      <div class="match-setup-section-label">Opponent squad</div>
+      <div id="matchdaySquadOppCounts" class="matchday-squad-counts"></div>
+      <div id="matchdaySquadOppList" class="matchday-opp-list"></div>
+      <div class="matchday-opp-add">
+        <input id="matchdaySquadOppName" class="mdo-name-input" type="text" placeholder="Opponent player name" autocomplete="off" />
+        <input id="matchdaySquadOppNumber" class="mdo-number-input" type="text" inputmode="numeric" placeholder="#" title="Shirt number (this match only)" autocomplete="off" />
+        <button id="btnAddMatchdaySquadOpp" class="btn btn-ghost" title="Add opponent player (Enter in either field also adds)">Add</button>
+      </div>
       <div class="modal-actions">
         <button id="btnAddAllMatchdaySquad" class="btn btn-ghost">Add all remaining</button>
         <button id="btnCloseMatchdaySquad" class="btn btn-accent">Done</button>

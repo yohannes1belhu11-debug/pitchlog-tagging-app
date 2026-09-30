@@ -1919,6 +1919,136 @@ body {
   text-decoration: underline;
 }
 
+/* ---------- Matchday squads modal — opponent panel (R3-B Stage 2) ---------- */
+
+/* Opponent rows reuse the Stage 1 row layout but carry their OWN class, so
+   our-team row queries/counts can never pick an opponent row up (and vice
+   versa). Same shape as .matchday-squad-row, minus the XI badge. */
+.matchday-opp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.matchday-opp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+}
+
+/* Same compact in-row editor overrides as the our-team rows. */
+.matchday-opp-row .mds-shirt,
+.matchday-opp-row .mds-position,
+.matchday-opp-row .mds-role {
+  flex: none;
+  margin-top: 0;
+  width: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+}
+
+.matchday-opp-row .mds-shirt {
+  width: 36px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.matchday-opp-row .mds-position {
+  width: 46px;
+}
+
+.matchday-opp-row .mds-role {
+  width: 96px;
+}
+
+.matchday-opp-row .mds-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.matchday-opp-row .mds-status {
+  flex: none;
+  width: 104px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+}
+
+.matchday-opp-row .mds-remove {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.matchday-opp-row .mds-remove:hover {
+  color: var(--accent-bright);
+}
+
+/* The manual add form: name (flexible) + shirt number + Add. The modal's
+   generic `input` rules (width: 100%, margin-top) are overridden the same
+   way as the in-row editors. */
+.matchday-opp-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+.matchday-opp-add input {
+  flex: none;
+  margin-top: 0;
+  width: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+}
+
+.matchday-opp-add .mdo-name-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.matchday-opp-add .mdo-number-input {
+  width: 36px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+
+.matchday-opp-add .btn {
+  flex: none;
+  padding: 5px 10px;
+  font-size: 11.5px;
+}
+
 .detail-empty-note {
   font-size: 11px;
   color: var(--text-dim);
