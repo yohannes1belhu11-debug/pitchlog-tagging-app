@@ -201,11 +201,15 @@ function fillModal(doc, opts) {
       decl(layoutRule, 'flex') === '1 1 auto' && decl(layoutRule, 'min-height') === '0' &&
       !/height\s*:\s*calc/.test(layoutRule),
       'flex=' + decl(layoutRule, 'flex') + ' min-height=' + decl(layoutRule, 'min-height'));
-    ok('SCROLL-1d: the fixed chrome never shrinks (topbar / matchday bar / clock bar / timeline / transport)',
+    ok('SCROLL-1d: the fixed chrome never shrinks (topbar / matchday bar / clock bar / splitter / transport)',
       decl(mergedRules('.topbar'), 'flex-shrink') === '0' &&
       decl(mergedRules('.matchday-bar'), 'flex-shrink') === '0' &&
       decl(mergedRules('.match-clock-bar'), 'flex-shrink') === '0' &&
-      decl(mergedRules('.timeline-strip-wrapper'), 'flex-shrink') === '0' &&
+      // Stage 3 F2 (intentional product change): the timeline strip was
+      // removed from the workspace; the Stage 3 F4 splitter replaces it in
+      // the fixed-chrome set. The timeline assertion was NOT weakened —
+      // its subject no longer exists in the product.
+      decl(mergedRules('.workspace-splitter'), 'flex-shrink') === '0' &&
       decl(mergedRules('.transport'), 'flex-shrink') === '0', 'all flex-shrink: 0');
     ok('SCROLL-1e: .tagpanel is a bounded flex column (shrinkable, min-height: 0 — the TAG EVENTS area consumes the remaining vertical space)',
       decl(tagpanelRule, 'display') === 'flex' && decl(tagpanelRule, 'flex-direction') === 'column' &&

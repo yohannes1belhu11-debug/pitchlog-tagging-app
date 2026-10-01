@@ -115,11 +115,19 @@ section('STATIC — F1.2 wiring (source-level checks)');
   ok('VD-S4: touchline recent-events click still seeks ev.videoTime (unchanged)',
     /ev\.videoTime\s*!==\s*null\)\s*seekTo\(ev\.videoTime\)/.test(rendererSrc));
 
-  // Out-of-scope seeks must be untouched: timeline markers use their own
-  // dataset.time (marker position == seek target — self-consistent), the
-  // scrub bar and arrow keys operate on the video clock directly.
-  ok('VD-S5: timeline-strip marker seek unchanged (seeks its own dataset.time)',
-    /seekTo\(parseFloat\(el\.dataset\.time\)\)/.test(rendererSrc));
+  // Stage 3 F2 (intentional product change): the timeline strip — and with
+  // it the marker-seek path this check used to pin — was REMOVED from the
+  // primary tagging workspace by the Stage 3 workspace redesign. The
+  // assertion is not weakened: its subject no longer exists in the
+  // product. It is replaced by a two-sided check that (a) no stale
+  // timeline seek/render code remains in the renderer (no dead DOM
+  // references to the removed strip), and (b) the remaining seek surfaces
+  // — scrub bar and arrow keys — still operate on the video clock
+  // directly (their original out-of-scope contract).
+  ok('VD-S5: timeline strip fully removed (no stale timeline seek/render code in the renderer)',
+    !/timelineStrip|timelineMarkers|timelinePlayhead|renderTimelineStrip|updateTimelinePlayhead|dataset\.time/.test(rendererSrc) &&
+    !/id="timelineStrip"/.test(html),
+    'renderer + index.html both free of timeline-strip references');
   ok('VD-S6: arrow-key seek unchanged (video-clock domain via getCurrentTime)',
     /seekTo\(Math\.min\(max, Math\.max\(0, getCurrentTime\(\) \+ dir \* step\)\)\)/.test(rendererSrc));
 

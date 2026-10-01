@@ -136,6 +136,27 @@ function boot(initial) {
     legacy.setAttribute('style', 'display:none;');
     win.document.body.appendChild(legacy);
   }
+  // Stage 3 F2 harness shim (same pattern, same reason): the current
+  // index.html REMOVED the timeline strip by design (Stage 3 workspace
+  // redesign). The OLD renderer source (git 0732b35) still looks up
+  // #timelineStrip/#timelineMarkers/#timelinePlayhead and binds a click
+  // listener, so booting it against the current DOM crashes before the
+  // F2-2 payload comparison can run. Inject the hidden inert legacy
+  // nodes ONLY when an OLD renderer is being eval'd — the NEW renderer
+  // never reads these ids. This is a HARNESS compatibility shim: it
+  // changes no production behavior and conceals no regression (the
+  // comparison targets interval event PAYLOADS, which the strip never
+  // touches).
+  if (initial.rendererSrc && !win.document.getElementById('timelineStrip')) {
+    const wrap = win.document.createElement('div');
+    wrap.className = 'timeline-strip-wrapper';
+    wrap.setAttribute('style', 'display:none;');
+    wrap.innerHTML = '<div id="timelineStrip" class="timeline-strip" style="display:none;">' +
+      '<div id="timelineMarkers" class="timeline-markers"></div>' +
+      '<div id="timelinePlayhead" class="timeline-playhead"></div>' +
+      '</div>';
+    win.document.body.appendChild(wrap);
+  }
   win.eval(initial.integritySrc || integritySrc);
   win.eval(rosterSrc);
   win.eval(initial.rendererSrc || rendererSrcNew);

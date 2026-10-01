@@ -311,13 +311,32 @@
   const timecodeEl = document.getElementById('timecode');
   const durationEl = document.getElementById('duration');
   const scrub = document.getElementById('scrub');
-  const timelineStrip = document.getElementById('timelineStrip');
-  const timelineMarkersEl = document.getElementById('timelineMarkers');
-  const timelinePlayheadEl = document.getElementById('timelinePlayhead');
+  // Stage 3 F2: the timeline-strip element refs are GONE with the strip
+  // itself. Event seeking still flows through the event-list rows, the
+  // scrub bar, the arrow keys and the detail panel — all of which read
+  // the event model directly.
   const speed = document.getElementById('speed');
   const volumeMuteBtn = document.getElementById('volumeMuteBtn');
   const volumeIcon = document.getElementById('volumeIcon');
   const videoVolumeSlider = document.getElementById('videoVolumeSlider');
+
+  // ---------- Stage 3 workspace elements (F1 top bar / F4 splitter / F5 pitch dock) ----------
+
+  const topbarEl = document.getElementById('topbar');
+  const btnHideTopbar = document.getElementById('btnHideTopbar');
+  const btnShowTopbar = document.getElementById('btnShowTopbar');
+
+  const videoPaneEl = document.querySelector('.video-pane');
+  const videoFrameEl = document.querySelector('.video-frame');
+  const transportEl = document.querySelector('.video-pane .transport');
+  const tagpanelEl = document.querySelector('.video-pane .tagpanel');
+  const splitterEl = document.getElementById('videoTagSplitter');
+
+  const pitchDockEl = document.getElementById('pitchDock');
+  const pitchDockSvgEl = document.getElementById('pitchDockSvg');
+  const pitchDockReadoutEl = document.getElementById('pitchDockReadout');
+  const pitchDockLabelEl = document.getElementById('pitchDockLabel');
+  const pitchDockGripEl = document.getElementById('pitchDockGrip');
 
   const tagButtonsEl = document.getElementById('tagButtons');
   const eventListEl = document.getElementById('eventList');
@@ -1132,6 +1151,10 @@
 
   function closeMatchdaySquadModal() {
     matchdaySquadModal.style.display = 'none';
+    // Stage 3 F3: the matchday roster may have just changed (either side).
+    // Refresh the team-aware desktop player list so it reflects the new
+    // roster without a team switch. Pure re-render — no data is touched.
+    renderPlayerSelector();
   }
 
   btnMatchdaySquad.addEventListener('click', openMatchdaySquadModal);
@@ -1378,56 +1401,19 @@
     }
   }
 
-  // ---------- Timeline strip (event markers + playhead) ----------
-
-  function renderTimelineStrip() {
-    const duration = getDuration();
-    if (!duration || !isFinite(duration) || duration <= 0) {
-      timelineMarkersEl.innerHTML = '';
-      return;
-    }
-
-    const marks = events.map((ev) => {
-      const color = eventDotColor(ev);
-      const label = `${ev.label} · ${formatTimecode(ev.time, true)}`;
-      if (ev.isInterval) {
-        const startPct = (ev.startTime / duration) * 100;
-        const endPct = (ev.endTime / duration) * 100;
-        const widthPct = Math.max(0.3, endPct - startPct);
-        return `<div class="timeline-mark timeline-mark-interval" style="left:${startPct}%; width:${widthPct}%; background:${color};" data-time="${ev.time}" title="${escapeHtml(label)}"></div>`;
-      }
-      const pct = (ev.time / duration) * 100;
-      return `<div class="timeline-mark" style="left:${pct}%; background:${color};" data-time="${ev.time}" title="${escapeHtml(label)}"></div>`;
-    }).join('');
-
-    timelineMarkersEl.innerHTML = marks;
-    timelineMarkersEl.querySelectorAll('.timeline-mark').forEach((el) => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        seekTo(parseFloat(el.dataset.time));
-      });
-    });
-  }
-
-  function updateTimelinePlayhead() {
-    const duration = getDuration();
-    const current = getCurrentTime();
-    if (!duration || !isFinite(duration) || duration <= 0) {
-      timelinePlayheadEl.style.left = '0%';
-      return;
-    }
-    const pct = Math.min(100, Math.max(0, (current / duration) * 100));
-    timelinePlayheadEl.style.left = pct + '%';
-  }
-
-  timelineStrip.addEventListener('click', (e) => {
-    if (!currentVideoPath) return;
-    const duration = getDuration();
-    if (!duration || !isFinite(duration)) return;
-    const rect = timelineStrip.getBoundingClientRect();
-    const fraction = (e.clientX - rect.left) / rect.width;
-    seekTo(Math.min(duration, Math.max(0, fraction * duration)));
-  });
+  // ---------- Stage 3 F2: timeline strip REMOVED ----------
+  //
+  // The visible timeline strip (markers + playhead + click-to-seek) was
+  // removed from the primary tagging workspace by the Stage 3 redesign.
+  // What deliberately REMAINS, because it reads the event model rather
+  // than the strip:
+  //   - event timestamps (buildEventTimestamps / buildEventBase)
+  //   - event seeking: event-list row clicks (videoTime-first), the
+  //     scrub bar, ArrowLeft/ArrowRight, and the detail panel's
+  //     "use current playhead" controls
+  //   - exports, sequences, autosave/recovery (all model-driven)
+  // The strip's own marker/playhead rendering and its click-to-seek
+  // listener are gone with the DOM node — no stale references remain.
 
   video.addEventListener('loadedmetadata', () => {
     // Every source that reaches metadata (fresh load, error relink,
@@ -1436,8 +1422,6 @@
     applyVolumeToVideo();
     scrub.max = Math.floor(video.duration * 10);
     durationEl.textContent = formatTimecode(video.duration, false);
-    renderTimelineStrip();
-    updateTimelinePlayhead();
   });
 
   video.addEventListener('timeupdate', () => {
@@ -1445,7 +1429,6 @@
       scrub.value = Math.floor(video.currentTime * 10);
     }
     timecodeEl.textContent = formatTimecode(video.currentTime, true);
-    updateTimelinePlayhead();
   });
 
   video.addEventListener('play', () => tally.classList.add('live'));
@@ -1549,7 +1532,6 @@
   }
 
   window.matchtag.onVideoState((state) => {
-    const durationJustLearned = !remoteState.duration && state.duration;
     remoteState = state;
     if (!isDetached) return;
     if (state.duration) {
@@ -1560,8 +1542,6 @@
     timecodeEl.textContent = formatTimecode(state.currentTime, true);
     btnPlayPause.textContent = state.paused ? '▶' : '⏸';
     tally.classList.toggle('live', !state.paused);
-    updateTimelinePlayhead();
-    if (durationJustLearned) renderTimelineStrip();
   });
 
   window.matchtag.onVideoClosed(() => {
@@ -2089,6 +2069,10 @@
   reserveShortcut('z', ['ctrl', 'shift'], 'app function: undo (Ctrl/Cmd+Shift+Z — the §13 guard has no shift exclusion)');
   reserveShortcut('z', ['ctrl', 'alt'], 'app function: undo (Ctrl/Cmd+Alt+Z — the §13 guard has no alt exclusion)');
   reserveShortcut('z', ['ctrl', 'alt', 'shift'], 'app function: undo (Ctrl/Cmd+Alt+Shift+Z — the §13 guard has no shift/alt exclusion)');
+  // Stage 3 F1: the top-bar toggle. Reserved in BOTH layers (assignment +
+  // dispatch) so a tag can never claim Ctrl+Shift+B and the toggle can
+  // never collide with a tag shortcut.
+  reserveShortcut('b', ['ctrl', 'shift'], 'app function: toggle top bar (Ctrl+Shift+B — Stage 3 F1)');
 
   function reservedShortcutWhy(key, mods) {
     return RESERVED_SHORTCUTS.get(identityKey(key, mods)) || null;
@@ -2587,6 +2571,46 @@
     return `${PITCH_THIRDS[tIdx]} · ${PITCH_CHANNELS[cIdx]}`;
   }
 
+  // Stage 3 F6 — THE authoritative pitch click→coordinate mapping, shared
+  // by every interactive pitch surface (detail-panel pitch and the pitch
+  // dock). Events store normalized locations in [0,1]; rendering multiplies
+  // them by the 700x450 viewBox (cx = x*700, cy = y*450), so a stored
+  // location stays at the SAME proportional spot at every pitch size.
+  //
+  // This helper accounts for the SVG geometry exactly: under
+  // preserveAspectRatio="xMidYMid meet" a viewBox of 0 0 700 450 letterboxes
+  // inside the element box whenever the two aspect ratios differ, so the
+  // click is mapped against the DRAWN CONTENT box (centred), not the raw
+  // element rect. Clicks in the letterbox clamp to the nearest edge via
+  // clamp01. There is exactly ONE such mapping in the app — no duplicate
+  // coordinate math that can drift apart.
+  //
+  // (The Touchline Mode pitch keeps its own pre-Stage-3 handler untouched,
+  // per the Stage 3 spec's Touchline-preservation requirement.)
+  function pitchPointFromClick(svgEl, clientX, clientY) {
+    const rect = svgEl.getBoundingClientRect();
+    let vbW = 700, vbH = 450;
+    const rawVb = svgEl.getAttribute ? svgEl.getAttribute('viewBox') : null;
+    if (rawVb) {
+      const parts = String(rawVb).trim().split(/[\s,]+/).map(Number);
+      if (parts.length === 4 && parts.every((n) => isFinite(n)) && parts[2] > 0 && parts[3] > 0) {
+        vbW = parts[2]; vbH = parts[3];
+      }
+    }
+    let contentW = rect.width, contentH = rect.height, offX = 0, offY = 0;
+    if (rect.width > 0 && rect.height > 0) {
+      const scale = Math.min(rect.width / vbW, rect.height / vbH);
+      contentW = vbW * scale;
+      contentH = vbH * scale;
+      offX = (rect.width - contentW) / 2;
+      offY = (rect.height - contentH) / 2;
+    }
+    return {
+      x: clamp01(contentW > 0 ? (clientX - rect.left - offX) / contentW : 0),
+      y: clamp01(contentH > 0 ? (clientY - rect.top - offY) / contentH : 0)
+    };
+  }
+
   function openDetailPanel(tag, event) {
     activeDetailTag = tag;
     activeDetailEvent = event;
@@ -2600,6 +2624,9 @@
     // applied here while touchlineMode is true, and closeDetailPanel() /
     // exitTouchlineMode() remove it.
     if (touchlineMode) detailPanel.classList.add('touchline-detail');
+    // Stage 3 F5: the dock's subject follows the detail panel — an open
+    // located event becomes the dock's highlighted marker.
+    renderPitchDock();
   }
 
   function closeDetailPanel() {
@@ -2609,6 +2636,8 @@
     detailPanel.classList.remove('touchline-detail');
     activeDetailTag = null;
     activeDetailEvent = null;
+    // Stage 3 F5: back to the latest-located-event subject.
+    renderPitchDock();
   }
 
   function pitchMarkingsSvg() {
@@ -3058,11 +3087,10 @@
     const pitchSvg = detailPanel.querySelector('#pitchSvg');
     if (pitchSvg) {
       pitchSvg.addEventListener('click', (e) => {
-        const rect = pitchSvg.getBoundingClientRect();
-        ev.location = {
-          x: clamp01((e.clientX - rect.left) / rect.width),
-          y: clamp01((e.clientY - rect.top) / rect.height)
-        };
+        // Stage 3 F6: the shared letterbox-aware mapping (identical values
+        // to the previous rect-fraction math whenever the element box has
+        // the 700:450 viewBox aspect, which is how .pitch-svg is sized).
+        ev.location = pitchPointFromClick(pitchSvg, e.clientX, e.clientY);
         renderDetailPanel();
         renderEventList();
         markAutosaveDirty();
@@ -3495,6 +3523,18 @@
       return;
     }
 
+    // Stage 3 F1: Ctrl+Shift+B toggles the top bar. The INPUT/SELECT/
+    // TEXTAREA guard above has already returned, so typing in any tagging
+    // input can never trigger it; the identity is also in the reserved
+    // table (see RESERVED_SHORTCUTS), so no tag shortcut can claim or
+    // dispatch on it.
+    if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey &&
+        (e.code === 'KeyB' || (typeof e.key === 'string' && e.key.toLowerCase() === 'b'))) {
+      e.preventDefault();
+      toggleTopbar();
+      return;
+    }
+
     if (e.code === 'Space') {
       e.preventDefault();
       if (!btnPlayPause.disabled) btnPlayPause.click();
@@ -3615,12 +3655,15 @@
 
   function renderEventList() {
     eventCountEl.textContent = String(events.length);
+    // Stage 3 F5: the pitch dock rides the same refresh — it stays
+    // synchronized with the event state (and the detail panel's subject)
+    // on every event mutation.
+    renderPitchDock();
 
     if (events.length === 0) {
       eventListEl.innerHTML = '<div class="event-empty">No events tagged yet. Load a video and tap a tag button to start.</div>';
       eventFilterCountEl.textContent = '';
       renderStatsPanel();
-      renderTimelineStrip();
       return;
     }
 
@@ -3633,7 +3676,6 @@
     if (filteredEvents.length === 0) {
       eventListEl.innerHTML = '<div class="event-empty">No events match your search or filter.</div>';
       renderStatsPanel();
-      renderTimelineStrip();
       return;
     }
 
@@ -3689,7 +3731,6 @@
     });
 
     renderStatsPanel();
-    renderTimelineStrip();
   }
 
   function escapeHtml(str) {
@@ -6960,6 +7001,217 @@
     flushAutosaveSync();
   });
 
+  // ---------- Stage 3 workspace: hideable top bar (F1), video/tag ----------
+  // ---------- splitter (F4), pitch dock (F5/F6)                          ----------
+  //
+  // All state in this section is WORKSPACE UI STATE ONLY: module-level
+  // variables that reset on reload and are NEVER written into matchClock,
+  // matchInfo, matchRoster, the session payload or the autosave payload
+  // (buildAutosaveData / saveSession are untouched by this section).
+
+  // ----- F1: hideable top bar -----
+
+  let topbarHidden = false;
+
+  function setTopbarHidden(hidden) {
+    topbarHidden = hidden;
+    document.body.classList.toggle('topbar-hidden', hidden);
+    if (btnHideTopbar) btnHideTopbar.setAttribute('aria-expanded', String(!hidden));
+    if (btnShowTopbar) btnShowTopbar.setAttribute('aria-expanded', String(!hidden));
+  }
+
+  function toggleTopbar() { setTopbarHidden(!topbarHidden); }
+
+  if (btnHideTopbar) btnHideTopbar.addEventListener('click', () => setTopbarHidden(true));
+  if (btnShowTopbar) btnShowTopbar.addEventListener('click', () => setTopbarHidden(false));
+
+  // ----- F4: video/tag splitter -----
+
+  const SPLIT_MIN_TAG_PX = 150;    // header + Add-tag button + one grid row
+  const SPLIT_MIN_VIDEO_PX = 200;  // usable video strip + transport bar
+
+  let splitterDragging = false;
+  let splitterStartY = 0;
+  let splitterStartTagHeight = 0;
+
+  function currentTagpanelHeight() {
+    if (tagpanelEl && tagpanelEl.style.height) {
+      const explicit = parseFloat(tagpanelEl.style.height);
+      if (isFinite(explicit) && explicit > 0) return explicit;
+    }
+    if (!tagpanelEl) return SPLIT_MIN_TAG_PX;
+    const rect = tagpanelEl.getBoundingClientRect();
+    if (rect && rect.height > 0) return rect.height;
+    return tagpanelEl.offsetHeight || SPLIT_MIN_TAG_PX;
+  }
+
+  function tagpanelClampedHeight(requested) {
+    if (!videoPaneEl || !tagpanelEl) return null;
+    const paneH = videoPaneEl.clientHeight;
+    if (!(paneH > 0)) return null; // no layout yet (e.g. jsdom) — refuse to size
+    const transportH = transportEl ? (transportEl.offsetHeight || 0) : 0;
+    const splitterH = splitterEl ? (splitterEl.offsetHeight || 0) : 0;
+    const maxTag = Math.max(SPLIT_MIN_TAG_PX, paneH - transportH - splitterH - SPLIT_MIN_VIDEO_PX);
+    return Math.round(Math.min(maxTag, Math.max(SPLIT_MIN_TAG_PX, requested)));
+  }
+
+  function updateSplitterAria() {
+    if (!splitterEl || !videoPaneEl) return;
+    const paneH = videoPaneEl.clientHeight;
+    const tagH = currentTagpanelHeight();
+    const pct = (paneH > 0 && tagH > 0) ? Math.round((tagH / paneH) * 100) : 0;
+    splitterEl.setAttribute('aria-valuenow', String(pct));
+  }
+
+  function applyTagpanelHeight(requested) {
+    const clamped = tagpanelClampedHeight(requested);
+    if (clamped == null || !tagpanelEl) return false;
+    tagpanelEl.style.height = clamped + 'px';
+    tagpanelEl.style.flex = '0 0 ' + clamped + 'px';
+    updateSplitterAria();
+    return true;
+  }
+
+  if (splitterEl) {
+    splitterEl.addEventListener('pointerdown', (e) => {
+      splitterDragging = true;
+      splitterStartY = e.clientY;
+      splitterStartTagHeight = currentTagpanelHeight();
+      e.preventDefault();
+      try { if (splitterEl.setPointerCapture) splitterEl.setPointerCapture(e.pointerId); } catch (err) { /* non-fatal */ }
+    });
+    splitterEl.addEventListener('keydown', (e) => {
+      // ArrowUp moves the divider UP (tag area grows); ArrowDown moves it
+      // DOWN (video grows). Shift = larger steps; Home/End = extremes.
+      const step = e.shiftKey ? 72 : 24;
+      let next = null;
+      if (e.key === 'ArrowUp') next = currentTagpanelHeight() + step;
+      else if (e.key === 'ArrowDown') next = currentTagpanelHeight() - step;
+      else if (e.key === 'Home') next = SPLIT_MIN_TAG_PX;
+      else if (e.key === 'End') next = Number.MAX_SAFE_INTEGER;
+      if (next !== null) {
+        e.preventDefault();
+        applyTagpanelHeight(next);
+      }
+    });
+  }
+
+  window.addEventListener('pointermove', (e) => {
+    if (!splitterDragging) return;
+    // Dragging up (clientY decreases) grows the tag area.
+    const delta = splitterStartY - e.clientY;
+    applyTagpanelHeight(splitterStartTagHeight + delta);
+  });
+  window.addEventListener('pointerup', () => { splitterDragging = false; });
+  window.addEventListener('pointercancel', () => { splitterDragging = false; });
+
+  // ----- F5/F6: pitch dock -----
+
+  const PITCH_DOCK_MIN_W = 180;
+  const PITCH_DOCK_MAX_W = 420;
+  let pitchDockWidth = 240; // refined at boot from the window size (init)
+  let pitchDockResizing = false;
+  let pitchDockResizeStartX = 0;
+  let pitchDockResizeStartW = 0;
+
+  function latestLocatedEvent() {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i] && events[i].location) return events[i];
+    }
+    return null;
+  }
+
+  function renderPitchDock() {
+    if (!pitchDockSvgEl) return;
+    // Synchronized with the event/detail-panel state: while the detail
+    // panel is open on a located event, THAT event is the dock's subject;
+    // otherwise the latest located event is (the touchline pitch's rule).
+    const subject = (activeDetailEvent && activeDetailEvent.location) ? activeDetailEvent : latestLocatedEvent();
+    let inner = pitchMarkingsSvg();
+    let readout = 'No location set';
+    if (subject && subject.location) {
+      inner += `<circle class="pitch-marker" cx="${(subject.location.x * 700).toFixed(1)}" cy="${(subject.location.y * 450).toFixed(1)}" r="8"/>`;
+      readout = locationZone(subject.location.x, subject.location.y);
+    }
+    pitchDockSvgEl.innerHTML = inner;
+    if (pitchDockReadoutEl) pitchDockReadoutEl.textContent = readout;
+    if (pitchDockLabelEl) {
+      pitchDockLabelEl.textContent = subject ? `Pitch — ${subject.label}` : 'Pitch — no location';
+    }
+  }
+
+  function clampPitchDockWidth(w) {
+    let max = PITCH_DOCK_MAX_W;
+    if (videoFrameEl) {
+      const avail = (videoFrameEl.clientWidth || 0) - 24; // dock margins
+      if (avail >= PITCH_DOCK_MIN_W) max = Math.min(max, avail);
+    }
+    return Math.round(Math.min(max, Math.max(PITCH_DOCK_MIN_W, w)));
+  }
+
+  function applyPitchDockWidth(w) {
+    pitchDockWidth = clampPitchDockWidth(w);
+    if (pitchDockEl) pitchDockEl.style.width = pitchDockWidth + 'px';
+    if (pitchDockGripEl) pitchDockGripEl.setAttribute('aria-valuenow', String(pitchDockWidth));
+  }
+
+  if (pitchDockGripEl) {
+    pitchDockGripEl.addEventListener('pointerdown', (e) => {
+      pitchDockResizing = true;
+      pitchDockResizeStartX = e.clientX;
+      pitchDockResizeStartW = pitchDockWidth;
+      e.preventDefault();
+      try { if (pitchDockGripEl.setPointerCapture) pitchDockGripEl.setPointerCapture(e.pointerId); } catch (err) { /* non-fatal */ }
+    });
+    pitchDockGripEl.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 60 : 20;
+      let next = null;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = pitchDockWidth + step;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = pitchDockWidth - step;
+      else if (e.key === 'Home') next = PITCH_DOCK_MIN_W;
+      else if (e.key === 'End') next = PITCH_DOCK_MAX_W;
+      if (next !== null) {
+        e.preventDefault();
+        applyPitchDockWidth(next);
+      }
+    });
+  }
+
+  window.addEventListener('pointermove', (e) => {
+    if (!pitchDockResizing) return;
+    // Dragging right widens the dock; aspect ratio is preserved by the
+    // SVG viewBox regardless of width.
+    applyPitchDockWidth(pitchDockResizeStartW + (e.clientX - pitchDockResizeStartX));
+  });
+  window.addEventListener('pointerup', () => { pitchDockResizing = false; });
+  window.addEventListener('pointercancel', () => { pitchDockResizing = false; });
+
+  if (pitchDockSvgEl) {
+    pitchDockSvgEl.addEventListener('click', (e) => {
+      // Same rule as the Touchline pitch: the click locates the most
+      // recently logged event (whose detail panel is typically open).
+      const target = events.find((x) => x.id === lastLoggedEventId);
+      if (!target) {
+        if (pitchDockReadoutEl) pitchDockReadoutEl.textContent = 'Tag an event first';
+        return;
+      }
+      target.location = pitchPointFromClick(pitchDockSvgEl, e.clientX, e.clientY);
+      markAutosaveDirty();
+      if (activeDetailEvent === target) renderDetailPanel();
+      renderEventList();
+    });
+  }
+
+  // Responsive re-clamping (F7): window resizes re-clamp both the splitter
+  // position and the dock width so neither can create unusable regions or
+  // overflow once the window shrinks. Purely presentational — no data.
+  window.addEventListener('resize', () => {
+    if (tagpanelEl && tagpanelEl.style.height) {
+      applyTagpanelHeight(parseFloat(tagpanelEl.style.height));
+    }
+    applyPitchDockWidth(pitchDockWidth);
+  });
+
   // ---------- Wire up match clock buttons ----------
 
   const btnClockStart = document.getElementById('btnClockStart');
@@ -6973,6 +7225,35 @@
 
   // ---------- Team selector, player selector, sequence, video sync, touchline, CSV ----------
 
+  // ---------- Stage 3 F3: single-team analyst focus ----------
+  //
+  // ONE team selector drives everything (matchClock.selectedTeam — the
+  // desktop buttons and the Touchline buttons share it, exactly as
+  // before). What Stage 3 adds is team-aware player context in the
+  // NORMAL workspace:
+  //   - the desktop player list follows the selected team (our side:
+  //     matchday-roster overlay + global squad; opponent side: the
+  //     match_opp_* roster — the Stage 2 model, never the global squad);
+  //   - switching team clears a player selection that does not belong to
+  //     the newly selected team, so a stale cross-team selection can
+  //     never attach a wrong-team player to a new event.
+  // The Touchline Mode wiring is byte-identical to pre-Stage 3: its
+  // buttons call the same shared selectTeam, and its own player list
+  // (the global squad) is untouched — see renderTouchlineAll.
+
+  function playerIdBelongsToTeam(playerId, team) {
+    if (!playerId) return false;
+    if (team === 'opponent') {
+      return matchRoster.opponent.some((entry) => entry.playerId === playerId);
+    }
+    // 'our': the matchday-roster overlay first, then the global squad —
+    // the same two sources the Stage 2 resolver (resolveMatchPlayer)
+    // consults, so "belongs to our side" can never disagree with the
+    // resolver.
+    if (matchRoster.our.some((entry) => entry.playerId === playerId)) return true;
+    return squad.some((p) => p.id === playerId);
+  }
+
   function renderTeamSelector() {
     const btnOur = document.getElementById('btnTeamOur');
     const btnOpp = document.getElementById('btnTeamOpponent');
@@ -6984,9 +7265,36 @@
     const sel = document.getElementById('selectedPlayerSelect');
     if (!sel) return;
     const current = matchClock.selectedPlayerId || '';
-    sel.innerHTML = ['<option value="">— None —</option>'].concat(
-      squad.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.number ? `${p.number} ${p.name}` : p.name)}</option>`)
-    ).join('');
+    const options = ['<option value="">— None —</option>'];
+    if (matchClock.selectedTeam === 'opponent') {
+      // Opponent context: ONLY the Stage 2 match_opp_* roster. Opponent
+      // players never resolve through the global squad, so the list never
+      // offers our players under the opponent team.
+      const opp = matchRoster.opponent;
+      if (opp.length === 0) {
+        options.push('<option value="" disabled>No opponent squad yet — add players in Matchday squads</option>');
+      } else {
+        opp.forEach((entry) => {
+          const label = entry.shirtNumber ? `${entry.shirtNumber} ${entry.displayName}` : entry.displayName;
+          options.push(`<option value="${escapeHtml(entry.playerId)}">${escapeHtml(label)}</option>`);
+        });
+      }
+    } else {
+      // Our context: the matchday roster overlay first (match-scoped
+      // names/numbers win), then global-squad players not already on the
+      // match roster. Ids stay the player_* namespace either way.
+      const onRoster = new Set();
+      matchRoster.our.forEach((entry) => {
+        onRoster.add(entry.playerId);
+        const label = entry.shirtNumber ? `${entry.shirtNumber} ${entry.displayName}` : entry.displayName;
+        options.push(`<option value="${escapeHtml(entry.playerId)}">${escapeHtml(label)}</option>`);
+      });
+      squad.forEach((p) => {
+        if (onRoster.has(p.id)) return;
+        options.push(`<option value="${escapeHtml(p.id)}">${escapeHtml(p.number ? `${p.number} ${p.name}` : p.name)}</option>`);
+      });
+    }
+    sel.innerHTML = options.join('');
     sel.value = current;
   }
 
@@ -6999,7 +7307,29 @@
     if (display) display.textContent = matchClock.activeSequenceId || '';
   }
 
-  function selectTeam(team) { matchClock.selectedTeam = team; renderTeamSelector(); markAutosaveDirty(); }
+  // selectTeam(team, opts): the ONE shared team-selection core. The
+  // Touchline Mode buttons call it exactly as before — plain
+  // selectTeam(team) — which preserves the pinned pre-Stage-3 Touchline
+  // semantics (a team flip RETAINS the player selection; see the S6
+  // touchline ledger in tests/matchday-sim.js). The NORMAL workspace
+  // buttons pass { reconcilePlayer: true }, the Stage 3 F3 semantics: a
+  // player that does not belong to the newly selected team is cleared so
+  // stale cross-team state can never attach a wrong-team player to a new
+  // event. The differing retention semantics are therefore ISOLATED at
+  // the two call sites, not forked into two selectors or hidden inside
+  // the shared one.
+  function selectTeam(team, opts) {
+    const reconcilePlayer = !!(opts && opts.reconcilePlayer);
+    if (matchClock.selectedTeam !== team) {
+      matchClock.selectedTeam = team;
+      if (reconcilePlayer && matchClock.selectedPlayerId && !playerIdBelongsToTeam(matchClock.selectedPlayerId, team)) {
+        matchClock.selectedPlayerId = null;
+      }
+      renderPlayerSelector();
+    }
+    renderTeamSelector();
+    markAutosaveDirty();
+  }
   function selectPlayer(playerId) { matchClock.selectedPlayerId = playerId || null; markAutosaveDirty(); }
   function startSequence() {
     if (matchClock.activeSequenceId) return;
@@ -7012,14 +7342,15 @@
     renderSequenceControls(); markAutosaveDirty();
   }
 
-  // Wire up desktop controls
+  // Wire up desktop controls — Stage 3 F3: the desktop (normal workspace)
+  // buttons pass reconcilePlayer so player context follows the team.
   const btnTeamOur = document.getElementById('btnTeamOur');
   const btnTeamOpponent = document.getElementById('btnTeamOpponent');
   const selectedPlayerSelect = document.getElementById('selectedPlayerSelect');
   const btnStartSequence = document.getElementById('btnStartSequence');
   const btnEndSequence = document.getElementById('btnEndSequence');
-  if (btnTeamOur) btnTeamOur.addEventListener('click', () => selectTeam('our'));
-  if (btnTeamOpponent) btnTeamOpponent.addEventListener('click', () => selectTeam('opponent'));
+  if (btnTeamOur) btnTeamOur.addEventListener('click', () => selectTeam('our', { reconcilePlayer: true }));
+  if (btnTeamOpponent) btnTeamOpponent.addEventListener('click', () => selectTeam('opponent', { reconcilePlayer: true }));
   if (selectedPlayerSelect) selectedPlayerSelect.addEventListener('change', () => selectPlayer(selectedPlayerSelect.value));
   if (btnStartSequence) btnStartSequence.addEventListener('click', startSequence);
   if (btnEndSequence) btnEndSequence.addEventListener('click', endSequence);
@@ -7445,6 +7776,14 @@
   // ---------- Init ----------
 
   video.style.display = 'none';
+  // Stage 3 F5/F6/F7: give the pitch dock its responsive default width
+  // for the current window (smaller windows get a smaller dock), then
+  // render it (renderEventList below also keeps it synchronized).
+  applyPitchDockWidth(
+    window.innerWidth >= 1500 && window.innerHeight >= 800 ? 240 :
+    window.innerWidth >= 1200 ? 200 : PITCH_DOCK_MIN_W
+  );
+  renderPitchDock();
   renderTagButtons();
   populateEventTypeFilter();
   renderEventList();
