@@ -7018,6 +7018,7 @@
     document.body.classList.toggle('topbar-hidden', hidden);
     if (btnHideTopbar) btnHideTopbar.setAttribute('aria-expanded', String(!hidden));
     if (btnShowTopbar) btnShowTopbar.setAttribute('aria-expanded', String(!hidden));
+    applyPitchDockHeightCap(); // D1: hiding/restoring the topbar resizes the video frame
   }
 
   function toggleTopbar() { setTopbarHidden(!topbarHidden); }
@@ -7069,6 +7070,7 @@
     tagpanelEl.style.height = clamped + 'px';
     tagpanelEl.style.flex = '0 0 ' + clamped + 'px';
     updateSplitterAria();
+    applyPitchDockHeightCap(); // D1: the video frame resized under the splitter
     return true;
   }
 
@@ -7153,6 +7155,44 @@
     pitchDockWidth = clampPitchDockWidth(w);
     if (pitchDockEl) pitchDockEl.style.width = pitchDockWidth + 'px';
     if (pitchDockGripEl) pitchDockGripEl.setAttribute('aria-valuenow', String(pitchDockWidth));
+    applyPitchDockHeightCap(); // D1: re-derive the height cap at every size change
+  }
+
+  // ----- D1 fix: frame-relative height cap for the pitch dock -----
+  // The dock is anchored to the BOTTOM of .video-frame (bottom: 12px) and
+  // grows upward, so its total height (header + svg + readout) must never
+  // exceed the frame's own height. In extreme layouts (splitter at the
+  // tag-area maximum shrinks the frame to its 200px floor while the dock
+  // is widened to 420px) the natural dock height reached ~333px and its
+  // top spilled over the frame, covering the matchday bar above the
+  // video region (defect D1). The cap is published to CSS as the
+  // --pitch-dock-max-h custom property, which styles.css min()'s with the
+  // viewport-relative caps; under the cap the viewBox letterboxes and the
+  // shared letterbox-aware pitchPointFromClick keeps coordinates exact.
+  const PITCH_DOCK_BOTTOM_OFFSET_PX = 12; // mirrors .pitch-dock { bottom: 12px }
+  const PITCH_DOCK_MIN_SVG_PX = 60; // last-resort floor: keeps the cap valid CSS in degenerate frames
+
+  function applyPitchDockHeightCap() {
+    if (!pitchDockSvgEl) return;
+    const frameH = videoFrameEl ? (videoFrameEl.clientHeight || 0) : 0;
+    const dockH = pitchDockEl ? (pitchDockEl.offsetHeight || 0) : 0;
+    // NOTE: the svg is an SVGElement — offsetHeight is an HTMLElement API
+    // and reads as undefined for it in Chromium (caught by Electron QA;
+    // jsdom stubs hid it). clientHeight is the Element-level equivalent
+    // that works for both HTML and SVG elements.
+    const svgH = pitchDockSvgEl.clientHeight || 0;
+    if (!(frameH > 0) || !(dockH > 0) || !(svgH > 0)) {
+      // No real layout yet (e.g. jsdom) or the dock is not rendered: keep
+      // the pure viewport-relative CSS caps.
+      pitchDockSvgEl.style.removeProperty('--pitch-dock-max-h');
+      return;
+    }
+    // Dock chrome = the dock's box minus the svg's box (padding, border,
+    // header, readout, flex gaps), measured live so it tracks CSS tweaks;
+    // +2px covers offsetHeight rounding so the top edge never bleeds.
+    const reserve = (dockH - svgH) + PITCH_DOCK_BOTTOM_OFFSET_PX + 2;
+    const cap = Math.max(PITCH_DOCK_MIN_SVG_PX, frameH - reserve);
+    pitchDockSvgEl.style.setProperty('--pitch-dock-max-h', Math.round(cap) + 'px');
   }
 
   if (pitchDockGripEl) {

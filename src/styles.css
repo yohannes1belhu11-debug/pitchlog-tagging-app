@@ -423,13 +423,22 @@ body.topbar-hidden .topbar-restore { display: flex; }
 
 /* width comes from the renderer (clamped px); the 700x450 viewBox keeps
    the DRAWN pitch at its aspect ratio at every size. height:auto makes the
-   element match that aspect too; max-height only bites in very short
-   video regions, where the content letterboxes and the shared
-   letterbox-aware click mapping stays exact. */
+   element match that aspect too; the max-height caps (viewport-relative,
+   min'd with the renderer's frame-derived --pitch-dock-max-h) only bite in
+   short viewports or short video regions, where the content letterboxes
+   and the shared letterbox-aware click mapping stays exact. */
 .pitch-dock-svg {
   width: 100%;
   height: auto;
   max-height: 40vh;
+  /* D1 fix: --pitch-dock-max-h is maintained by the renderer from the
+     video frame's live height, so the whole dock (header + pitch +
+     readout) can never be taller than its .video-frame and can never
+     spill over the top of a splitter-shrunken video region. min() keeps
+     the stricter of the viewport cap and the frame cap; the plain 40vh
+     above remains the fallback for engines without custom-property
+     support inside min(). */
+  max-height: min(40vh, var(--pitch-dock-max-h, 40vh));
   cursor: crosshair;
 }
 
@@ -459,7 +468,10 @@ body.topbar-hidden .topbar-restore { display: flex; }
 }
 
 @media (max-height: 740px) {
-  .pitch-dock-svg { max-height: 30vh; }
+  /* D1 fix: the frame-derived cap applies in short windows too (see the
+     .pitch-dock-svg base rule); the plain 30vh first declaration is the
+     fallback. */
+  .pitch-dock-svg { max-height: 30vh; max-height: min(30vh, var(--pitch-dock-max-h, 30vh)); }
   .topbar { padding-top: 4px; padding-bottom: 4px; }
   .matchday-bar { padding-top: 4px; padding-bottom: 4px; }
 }

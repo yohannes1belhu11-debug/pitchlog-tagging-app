@@ -21,7 +21,9 @@
 //         window-resize re-clamp, aria-valuenow
 //   WS-P  F5/F6 pitch dock: sync with detail/latest located event,
 //         click-to-locate, resize clamp, coordinate invariance across
-//         sizes, letterbox-aware mapping
+//         sizes, letterbox-aware mapping, frame-relative height cap
+//         (D1 regression: the dock never overflows a splitter-shrunken
+//         video frame, on every path that resizes the frame)
 //   WS-R  F7 responsive: media queries + shell rules that keep the
 //         workspace structurally sound at 1920x1080 / 1600x900 / 1366x768
 //   WS-D  persistence boundary: workspace UI state NEVER enters the
@@ -526,6 +528,85 @@ const ROSTER = {
     const d = math(400, 400, 200, 10);
     ok('WS-P11: a click inside the letterbox clamps to the pitch edge (never inverts / NaNs)',
       !!d && d.y === 0 && isFinite(d.x), 'd=' + JSON.stringify(d));
+
+    // ---- D1 regression: frame-relative pitch-dock height cap ----
+    // Defect D1: with the splitter at the tag-area maximum the video
+    // frame shrinks to its 200px floor; a 420px-wide dock was ~333px tall
+    // there and its top spilled over the frame, covering the matchday
+    // bar. The renderer now publishes --pitch-dock-max-h = frameHeight -
+    // (dock chrome + bottom offset + rounding), which styles.css min()'s
+    // with the viewport caps. Chrome stub: dock 322 - svg 270 = 52
+    // (+12 bottom +2 rounding = 66 reserve; the real app measures ~48 -
+    // the live measurement tracks CSS, the stub only needs to be
+    // self-consistent). The svg stub uses clientHeight because the svg
+    // is an SVGElement: offsetHeight is an HTMLElement-only API and
+    // reads as undefined in real browsers.
+    const pane = B.doc.querySelector('.video-pane');
+    const transport = B.doc.querySelector('.video-pane .transport');
+    const splitter = id('videoTagSplitter');
+    const capValue = () => dockSvg.style.getPropertyValue('--pitch-dock-max-h');
+    const stubCapGeometry = (frameH, dockH, svgH) => {
+      definePx(frame, 'clientHeight', frameH);
+      definePx(dock, 'offsetHeight', dockH);
+      definePx(dockSvg, 'clientHeight', svgH);
+    };
+
+    // Pre-layout safety: with no measurable geometry the cap stays unset
+    // and the pure viewport CSS caps keep governing.
+    definePx(frame, 'clientHeight', 0);
+    keydown(grip, { key: 'End' });
+    ok('WS-P12: without layout the frame cap stays unset (viewport CSS caps govern)',
+      capValue() === '' && dock.style.width === '420px',
+      'cap=' + JSON.stringify(capValue()) + ' width=' + dock.style.width);
+
+    // Width path: 420px dock inside the 200px-floor frame (the D1 state).
+    stubCapGeometry(200, 322, 270);
+    keydown(grip, { key: 'End' });
+    ok('WS-P13: 420px dock in the 200px-floor frame caps the svg at frame-66px (D1)',
+      capValue() === '134px',
+      'cap=' + JSON.stringify(capValue()));
+
+    // Splitter path: maximizing the tag area re-derives the cap through
+    // applyTagpanelHeight (frame shrank to the floor again).
+    definePx(pane, 'clientHeight', 700);
+    definePx(transport, 'offsetHeight', 50);
+    definePx(splitter, 'offsetHeight', 10);
+    stubCapGeometry(180, 322, 270);
+    keydown(splitter, { key: 'End' });
+    ok('WS-P14: splitter End re-derives the cap from the resized frame',
+      capValue() === '114px',
+      'cap=' + JSON.stringify(capValue()));
+
+    // Topbar toggle path: hide grows the frame (cap relaxes), restore
+    // shrinks it (cap tightens) — both directions recompute.
+    stubCapGeometry(600, 322, 270);
+    click(id('btnHideTopbar'));
+    ok('WS-P15: hiding the topbar re-derives the relaxed cap',
+      capValue() === '534px', 'cap=' + JSON.stringify(capValue()));
+    stubCapGeometry(240, 322, 270);
+    click(id('btnShowTopbar'));
+    ok('WS-P16: restoring the topbar re-clamps to the smaller frame',
+      capValue() === '174px', 'cap=' + JSON.stringify(capValue()));
+
+    // Window-resize path (re-clamps via both the splitter and the dock).
+    stubCapGeometry(200, 322, 270);
+    B.win.dispatchEvent(new B.win.Event('resize'));
+    ok('WS-P17: window resize re-derives the cap',
+      capValue() === '134px', 'cap=' + JSON.stringify(capValue()));
+
+    // Coordinate exactness under the cap: a capped element box letterboxes
+    // exactly as WS-P10 proves for the general case. At 420x134 the drawn
+    // pitch is 208.4px wide and centered; its center maps to (0.5, 0.5).
+    const capped = math(420, 134, 210, 67);
+    ok('WS-P18: click mapping stays exact inside a height-capped dock (letterboxed)',
+      !!capped && Math.abs(capped.x - 0.5) < 0.01 && Math.abs(capped.y - 0.5) < 0.01,
+      'capped=' + JSON.stringify(capped));
+
+    // The CSS must actually consume the cap in BOTH rules (base + 740px).
+    ok('WS-P19: styles.css min()s the frame cap with the viewport caps (base + 740px query)',
+      /max-height:\s*min\(40vh,\s*var\(--pitch-dock-max-h,\s*40vh\)\)/.test(css) &&
+      /max-height:\s*min\(30vh,\s*var\(--pitch-dock-max-h,\s*30vh\)\)/.test(css));
+
     B.dom.window.close();
   }
 
