@@ -195,9 +195,11 @@ body {
 }
 
 /* R2-E Phase 3A: the video transport/scrub bars are fixed app chrome —
-   they never shrink or scroll; the tag grid owns the vertical scroll. */
-.timeline-strip-wrapper,
-.transport {
+   they never shrink or scroll; the tag grid owns the vertical scroll.
+   Stage 3 F2: the timeline strip is gone; Stage 3 F4 adds the splitter
+   as the same kind of fixed chrome. */
+.transport,
+.workspace-splitter {
   flex-shrink: 0;
 }
 
@@ -275,62 +277,203 @@ body {
   display: none;
 }
 
-/* ---------- Timeline strip ---------- */
+/* ---------- Stage 3 F2: timeline strip REMOVED ---------- */
+/* The visible timeline strip's styles were removed together with its DOM
+   (Stage 3 workspace redesign). Event seeking lives on in the event rows,
+   the scrub bar, the arrow keys and the detail panel. */
 
-.timeline-strip-wrapper {
-  padding: 0 16px;
+/* ---------- Stage 3 F1: hideable top bar + restore strip ---------- */
+
+.btn-topbar-hide {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+/* The restore strip sits between the (hidden) header and the matchday
+   bar. display:none while the bar is visible; body.topbar-hidden (set by
+   the renderer) turns it into a slim, always-reachable restore control —
+   so a hidden top bar can never become inaccessible. */
+.topbar-restore {
+  display: none;
+  width: 100%;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px;
   background: var(--panel);
-  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
-.timeline-strip {
-  position: relative;
-  height: 20px;
+body.topbar-hidden #topbar { display: none; }
+body.topbar-hidden .topbar-restore { display: flex; }
+
+.topbar-restore:hover,
+.topbar-restore:focus-visible {
+  color: var(--text);
   background: var(--panel-alt);
-  border-radius: 4px;
-  margin: 7px 0;
-  cursor: pointer;
 }
 
-.timeline-markers {
-  position: absolute;
-  inset: 0;
+/* ---------- Stage 3 F4: video/tag splitter ---------- */
+
+.workspace-splitter {
+  height: 10px;
+  background: var(--panel-alt);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: row-resize;
+  position: relative;
 }
 
-.timeline-mark {
+.workspace-splitter::after {
+  content: '';
   position: absolute;
-  top: 3px;
-  bottom: 3px;
-  width: 2px;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 2px;
   border-radius: 1px;
-  cursor: pointer;
-  transform: translateX(-1px);
-  opacity: 0.9;
+  background: var(--text-dim);
+  opacity: 0.5;
 }
 
-.timeline-mark:hover {
+.workspace-splitter:hover,
+.workspace-splitter:focus-visible {
+  background: var(--panel);
+}
+
+.workspace-splitter:focus-visible::after {
   opacity: 1;
-  transform: translateX(-1px) scaleY(1.15);
+  background: var(--accent-bright);
 }
 
-.timeline-mark-interval {
-  border-radius: 2px;
-  transform: none;
-}
+/* ---------- Stage 3 F5/F6: persistent pitch dock ---------- */
 
-.timeline-mark-interval:hover {
-  transform: scaleY(1.15);
-}
-
-.timeline-playhead {
+/* Anchored inside .video-frame (lower-right): it can never cover the
+   transport bar or the tag controls — those are outside the video frame.
+   z-index 10 keeps it under the detail panel (z-index 20). */
+.pitch-dock {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  background: #fff;
-  box-shadow: 0 0 4px rgba(255, 255, 255, 0.6);
-  pointer-events: none;
-  left: 0%;
+  right: 12px;
+  bottom: 12px;
+  width: 240px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  z-index: 10;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pitch-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pitch-dock-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pitch-dock-grip {
+  width: 14px;
+  height: 14px;
+  cursor: ew-resize;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pitch-dock-grip::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--text-dim);
+  border-bottom: 2px solid var(--text-dim);
+  border-bottom-right-radius: 2px;
+}
+
+.pitch-dock-grip:hover,
+.pitch-dock-grip:focus-visible {
+  background: var(--accent-soft);
+}
+
+/* width comes from the renderer (clamped px); the 700x450 viewBox keeps
+   the DRAWN pitch at its aspect ratio at every size. height:auto makes the
+   element match that aspect too; the max-height caps (viewport-relative,
+   min'd with the renderer's frame-derived --pitch-dock-max-h) only bite in
+   short viewports or short video regions, where the content letterboxes
+   and the shared letterbox-aware click mapping stays exact. */
+.pitch-dock-svg {
+  width: 100%;
+  height: auto;
+  max-height: 40vh;
+  /* D1 fix: --pitch-dock-max-h is maintained by the renderer from the
+     video frame's live height, so the whole dock (header + pitch +
+     readout) can never be taller than its .video-frame and can never
+     spill over the top of a splitter-shrunken video region. min() keeps
+     the stricter of the viewport cap and the frame cap; the plain 40vh
+     above remains the fallback for engines without custom-property
+     support inside min(). */
+  max-height: min(40vh, var(--pitch-dock-max-h, 40vh));
+  cursor: crosshair;
+}
+
+.pitch-dock-readout {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Stage 3 F7: responsive behavior ---------- */
+/* The shell is already flex-based (wrapping top bar, bounded tag grid,
+   events pane). These steps tighten the side pane and the transport hint
+   at the three target resolutions (1920x1080 / 1600x900 / 1366x768) and
+   below; the renderer clamps the splitter and pitch dock dynamically on
+   window resize. */
+
+@media (max-width: 1500px) {
+  .events-pane { max-width: 330px; }
+}
+
+@media (max-width: 1200px) {
+  .events-pane { max-width: 300px; }
+  .transport { gap: 8px; }
+  .transport-hint { display: none; }
+}
+
+@media (max-height: 740px) {
+  /* D1 fix: the frame-derived cap applies in short windows too (see the
+     .pitch-dock-svg base rule); the plain 30vh first declaration is the
+     fallback. */
+  .pitch-dock-svg { max-height: 30vh; max-height: min(30vh, var(--pitch-dock-max-h, 30vh)); }
+  .topbar { padding-top: 4px; padding-bottom: 4px; }
+  .matchday-bar { padding-top: 4px; padding-bottom: 4px; }
 }
 
 /* ---------- Transport ---------- */

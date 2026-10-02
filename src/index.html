@@ -38,7 +38,11 @@
 </head>
 <body>
 
-  <header class="topbar">
+  <!-- Stage 3 F1: the top bar is hideable — the renderer toggles
+       body.topbar-hidden (workspace UI state ONLY, never persisted into
+       match/session data). When hidden, the restore strip below becomes
+       the always-accessible restore control; Ctrl+Shift+B also toggles. -->
+  <header class="topbar" id="topbar">
     <div class="brand">
       <span id="tally" class="tally"></span>
       <span class="brand-name">MATCHTAG</span>
@@ -60,8 +64,15 @@
       <button id="btnTouchlineToggle" class="btn">Touchline Mode</button>
       <button id="btnExportCsv" class="btn">Export CSV</button>
       <button id="btnExportClips" class="btn btn-accent">Export clip playlist</button>
+      <button id="btnHideTopbar" class="btn btn-ghost btn-topbar-hide" title="Hide the top bar (Ctrl+Shift+B)" aria-expanded="true">▾ Hide bar</button>
     </div>
   </header>
+
+  <!-- Stage 3 F1 — restore strip: display:none while the top bar is
+       visible; body.topbar-hidden turns it into the slim always-reachable
+       restore control. It lives OUTSIDE the hidden <header> so it can
+       never be hidden with it. -->
+  <button id="btnShowTopbar" class="topbar-restore" title="Show the top bar (Ctrl+Shift+B)" aria-label="Show top bar" aria-expanded="false">▴ Show bar</button>
 
   <!-- Matchday control bar: scoreboard, team selector, player selector, sequence, video sync -->
   <div class="matchday-bar">
@@ -183,14 +194,31 @@
           <p>Video is playing in a separate window.</p>
           <button id="btnReattachVideo" class="btn btn-accent">Reattach</button>
         </div>
-      </div>
 
-      <div class="timeline-strip-wrapper">
-        <div id="timelineStrip" class="timeline-strip">
-          <div id="timelineMarkers" class="timeline-markers"></div>
-          <div id="timelinePlayhead" class="timeline-playhead"></div>
+        <!-- Stage 3 F5/F6 — persistent pitch dock in the lower-right of
+             the VIDEO region: subordinate to the workflow, never covering
+             the transport bar or tag controls (it is anchored inside the
+             video frame). Shows the active (detail-panel) or latest
+             located event; click to set the latest event's location; drag
+             the corner grip (or ArrowLeft/ArrowRight) to resize. The
+             700x450 viewBox preserves the pitch aspect ratio at every
+             size, and clicks map through the same shared letterbox-aware
+             normalized-coordinate helper as the detail-panel pitch. -->
+        <div id="pitchDock" class="pitch-dock">
+          <div class="pitch-dock-header">
+            <span id="pitchDockLabel" class="pitch-dock-label">Pitch — no location</span>
+            <div id="pitchDockGrip" class="pitch-dock-grip" role="separator" aria-orientation="vertical" aria-label="Resize pitch (drag, or ArrowLeft / ArrowRight)" aria-valuemin="180" aria-valuemax="420" aria-valuenow="240" tabindex="0" title="Drag to resize the pitch"></div>
+          </div>
+          <svg id="pitchDockSvg" class="pitch-svg pitch-dock-svg" viewBox="0 0 700 450" preserveAspectRatio="xMidYMid meet"></svg>
+          <div id="pitchDockReadout" class="pitch-dock-readout">No location set</div>
         </div>
       </div>
+
+      <!-- Stage 3 F2: the visible timeline strip was REMOVED from the
+           primary tagging workspace by design. Event timestamps, event
+           seeking (event-row click), detail-panel seeking, exports,
+           sequences and autosave/recovery all read the underlying event
+           model and are preserved — only the presentation strip is gone. -->
 
       <div class="transport">
         <button id="btnPlayPause" class="btn btn-icon" disabled>▶</button>
@@ -216,6 +244,13 @@
         </div>
         <span class="transport-hint">← → seek 5s · Shift + ← → seek 1s</span>
       </div>
+
+      <!-- Stage 3 F4 — splitter between the video region (video frame +
+           transport) above and the tag/event area below. Pointer-drag or
+           ArrowUp/ArrowDown (Shift = larger steps, Home/End = extremes);
+           sizes are clamped so neither region can become unusable. Pure
+           workspace UI state — never written into match/session data. -->
+      <div id="videoTagSplitter" class="workspace-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize video and tag areas (drag, or ArrowUp / ArrowDown; Shift for larger steps)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"></div>
 
       <div class="tagpanel">
         <div class="tagpanel-header">
