@@ -1,10 +1,13 @@
 # PitchLog — Stage 4A Match Analysis Dashboard Specification (V1)
 
-**Status:** AUTHORITATIVE. This document is the single build recipe for Stage 4A
-(Match Analysis Dashboard) of the tagging app. It consolidates the surviving
-architecture audit (worklog `STAGE4A-ARCHAUDIT-1`), the engine and renderer
-contracts verified at this HEAD, and the corrective round that defined the lost
-implementation's final state.
+**Status:** AUTHORITATIVE — V1.1. This document is the single build recipe for
+Stage 4A (Match Analysis Dashboard) of the tagging app. It consolidates the
+surviving architecture audit (worklog `STAGE4A-ARCHAUDIT-1`), the engine and
+renderer contracts verified at this HEAD, and the corrective round that defined
+the lost implementation's final state.
+
+V1.1 amendment (review round): §13 dashboard section inventory added;
+§1/§5/§6/§10 clarified.
 
 **Authority rule:** where any historical worklog note, review remark, or earlier
 plan conflicts with this document, **this document wins**. Two known
@@ -44,7 +47,9 @@ event-taxonomy changes, no migration, no storage changes of any kind.
   filters; per-section filter controls are a later stage.
 - **Stage 4C coach export** — nothing in Stage 4A exports, prints, or formats
   for delivery.
-- **Tactical sequences** — no sequence diagrams, no sequence narratives.
+- Tactical sequence DIAGRAMS and NARRATIVES (Stage 5) — out of scope.
+  Rendering the engine's existing sequences data (A.sequences) as the
+  dashboard's sequences section IS in scope (§13.8).
 - **Season-wide analytics** — one session at a time; no multi-match aggregation
   (this inherits spatial spec SP-H10).
 - **AI** — no models, no predictions, no generated text.
@@ -195,9 +200,11 @@ sanctioned pathway (the app's own event domain, not an engine derivative).
 It renders one row per qualifying key event, in match order.
 
 **Qualifying labels.** `KEY_EVENT_LABELS` — the module's qualifying-label
-constant — includes the labels of the ten card classes, and in particular
-**`'Sub'`** and **`'Positive Transition'`** (the corrective round's addition;
-both are real engine labels — analytics.js:452, 476, and taxonomy :61–63).
+constant — is exactly the nine engine labels 'Goal', 'Shot', 'Chance', 'Cross',
+'Corner', 'Foul', 'Card', 'Sub', 'Positive Transition' (analytics.js:61–63,
+436–476). 'Card' is one list label feeding BOTH card classes 7 and 8 (the
+yellow/red split happens in the engine envelopes), so nine labels map to ten
+cards.
 
 **Display labels.** A display map expands the terse tag labels for humans:
 
@@ -254,8 +261,9 @@ full dashboard render never triggers a second engine pass.
 
 **No module-level caching.** There is **no cache that survives a modal open,
 a modal close, or a session switch**. Every open recomputes from the current
-snapshot. (Caching across opens was a review finding against the lost
-implementation; this contract is the fix, stated as law.)
+snapshot. (The lost implementation recomputed the engine twice per render;
+this contract eliminates that and additionally forbids any cross-open caching
+— both stated as law.)
 
 ---
 
@@ -404,6 +412,15 @@ current self-report at this HEAD; unchanged count after the §9 edits).
   row with `videoTime: 240`; one row with `videoTime: null` exercising the
   `?? time` fallback to 1350; one row seeking to 140).
 
+Model suite additionally gains section MA-M12 "Section inventory & sourcing"
+— for EACH of §13.1, 13.4, 13.5, 13.7, 13.8, 13.9: the section renders for
+the fixture session, and spot-checked displayed values equal the named engine
+source (not recomputed locally). UI suite gains section-presence assertions
+for every §13 section at the standard fixture boot. The 101/90 totals were
+the lost implementation's; with MA-M12 and the UI presence checks the totals
+grow — exact final totals are recorded in this §10 at completion of
+Milestones 2 and 3 respectively. The battery path stays 37 → 38 → 39.
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
@@ -456,6 +473,57 @@ These are known, accepted behaviors of Stage 4A. They are **not** defects and
 3. **`.ma-card-our` / `.ma-trace-label` are used-but-unstyled.** The markup
    carries these class hooks and the stylesheet defines no rules for them.
    They exist for future stages; leaving them unstyled is deliberate.
+
+---
+
+## 13. Dashboard section inventory (V1.1)
+
+The Stage 4A constitution requires the dashboard to cover seven areas: match
+header, team summary, team performance, period analysis, spatial analysis,
+player analysis, key events. V1 specified spatial (§3) and key events (§4–§5).
+This section inventories the remaining sections. All are engine-sourced
+projections under the same laws as the rest of this document (§2 purity, §6
+single-execution, no invented metrics, null ≠ zero per metric spec P5).
+
+Section order below is now authoritative (the lost implementation's exact
+order is unrecoverable):
+
+13.1 Match header — source: session metadata + A.matchSummary. Content:
+competition/opponent/date context, teams, final score, match state. Nothing
+computed locally.
+
+13.2 Key-event summary cards — §4.
+
+13.3 Chronological key events — §5.
+
+13.4 Team summary & performance — source: A.level1.team.{our,opponent} AND the
+A.level2 team structures (the same envelopes the app's Analytics tab reads).
+Content: the engine's team-level aggregates exactly as exposed (possession
+tagging, outcomes, score-state, transitions). Count cells are numeric with
+plain 0 allowed; ratio cells follow metric spec P5 — a null ratio renders as
+not-applicable per the metric spec's rendering rule, never as 0.
+
+13.5 Period analysis — source: A.level3.byPeriod and A.level3.byMinuteBin.
+Content: per-period and per-minute-bin breakdowns exactly as the engine
+exposes them (periods include 1H, HT, 2H, FT, ET1, ET_HT, ET2 where present).
+No re-binning, no re-aggregation.
+
+13.6 Spatial analysis — §3.
+
+13.7 Player analysis — source: A.players.list, keyed by playerId (§7).
+Content: per-player counts and ratios as the engine exposes them. Framing is
+counts + ratios — no per-90, no physical or derived metrics. Shirt-number
+display limitation per §12.2.
+
+13.8 Sequences — source: A.sequences, rendered as the engine's sequence list.
+This is the existing engine data surface, NOT Stage 5: no diagrams, no
+narratives, no sequence editing (§1).
+
+13.9 Protocol notes — source: A.protocol.notes, rendered read-only.
+
+13.10 Section-sourcing law: every value in §13.1–13.9 comes from the named
+engine structure or session metadata. If a desired display value has no engine
+source, that is a metric-spec change request — never a local formula (§2).
 
 ---
 
