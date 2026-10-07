@@ -1201,7 +1201,7 @@
   // §13.7: player analysis.
   function buildPlayersHtml(model) {
     var p = model.players;
-    var html = sectionOpen('players') + sectionTitle('Player analysis — counts &amp; ratios (no per-90)');
+    var html = sectionOpen('players') + sectionTitle('Player analysis — counts & ratios (no per-90)');
     if (!p.rows.length) {
       html += '<div class="ma-note">No player-attributed events.</div>';
       html += '</section>';
