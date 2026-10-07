@@ -2925,3 +2925,502 @@ body.topbar-hidden .topbar-restore { display: flex; }
   cursor: pointer;
   margin: 6px 0;
 }
+
+/* ---------- Match Analysis Dashboard (Stage 4A) ---------------------------
+   ma-* rules ONLY — pure append per spec §9; no existing rule above is
+   edited or removed. The dashboard is a read-only projection of the
+   Analytics Engine (src/match-analysis.js); its host-injected pitch markup
+   reuses the app's existing .pitch-outline / .pitch-line / .pitch-spot /
+   .an-zoneline rules (single source — never restyled here).
+   Responsive breakpoints: 1500 / 1180 / 820 px (targets 1920 / 1600 / 1366
+   desktop widths; graceful reflow below). Real layout verification is the
+   Electron QA step — jsdom checks only pin these rules' existence. */
+
+/* Modal chrome: wider than the pitch map — a full-view analytical surface. */
+.ma-modal {
+  width: 1280px;
+  max-width: 94vw;
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+}
+
+/* Long list handling: the dashboard scrolls inside its own content pane. */
+.ma-modal-content {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ma-modal-content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ma-modal-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+.ma-modal-content::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Root + sections. */
+.ma-root {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ma-section {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ma-section-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 10px;
+  letter-spacing: 0.02em;
+}
+
+/* 13.1 Match header. */
+.ma-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+}
+
+.ma-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.ma-meta {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+
+.ma-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.ma-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ma-score-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.ma-score-note {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* 13.2 Key-event summary cards (exactly ten). */
+.ma-cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ma-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  min-width: 0;
+}
+
+.ma-card-label {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ma-card-value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+.ma-card-our {
+  color: var(--text);
+}
+
+.ma-card-opp {
+  color: var(--text-dim);
+}
+
+/* 13.3 Chronological key events. */
+.ma-keylist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.ma-keylist::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ma-keylist::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.ma-key-row {
+  display: grid;
+  grid-template-columns: 64px 130px 1fr 130px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.ma-key-row:hover {
+  border-color: var(--accent-bright);
+}
+
+.ma-key-time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ma-key-label {
+  font-weight: 600;
+  font-size: 11.5px;
+}
+
+.ma-key-player {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ma-key-team {
+  font-size: 11px;
+  text-align: right;
+}
+
+.ma-our {
+  color: var(--accent-bright);
+}
+
+.ma-opp {
+  color: var(--text-dim);
+}
+
+.ma-key-empty {
+  padding: 10px 12px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+/* Tables (13.4 team, 13.5 periods, 13.7 players, 13.6 spatial tables). */
+.ma-table-scroll {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+.ma-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+
+.ma-table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ma-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.ma-table td:first-child {
+  font-family: var(--font-ui);
+  color: var(--text);
+}
+
+.ma-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* 13.6 Spatial grids. */
+.ma-grid-wrap {
+  margin-top: 10px;
+}
+
+.ma-grid-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+}
+
+.ma-grid-max {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.ma-grid-svg {
+  width: 100%;
+  max-width: 340px;
+  height: auto;
+  display: block;
+  background: #14301b;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ma-zcell {
+  fill: transparent;
+  cursor: pointer;
+}
+
+.ma-zcell:focus {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -2px;
+}
+
+.ma-zcount {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  fill: var(--text);
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.ma-dot {
+  r: 3;
+}
+
+.ma-dot-goal {
+  r: 4.5;
+}
+
+.ma-dot-our {
+  fill: var(--accent-bright);
+}
+
+.ma-dot-opponent {
+  fill: #3f7fd4;
+}
+
+.ma-dot-unattr {
+  fill: var(--text-dim);
+}
+
+.ma-grid-insufficient {
+  font-size: 10.5px;
+  fill: var(--text-dim);
+  text-anchor: middle;
+}
+
+.ma-unloc-strip {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+/* Zone-cell activation trace. */
+.ma-trace {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ma-trace-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.ma-trace-row {
+  display: grid;
+  grid-template-columns: 90px 130px 1fr 110px 90px;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.ma-trace-row:last-child {
+  border-bottom: none;
+}
+
+.ma-trace-bin,
+.ma-trace-id {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.ma-trace-hint {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+/* 13.8 Sequences / 13.9 protocol notes. */
+.ma-sub-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+
+.ma-engine {
+  color: var(--text-dim);
+}
+
+.ma-excl {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.ma-protocol-notes {
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+/* Notes / limitations (the ma-note ma-limit pair carries the NC/limit
+   disclosures; used-but-unstyled hooks .ma-card-our-card and
+   .ma-trace-label are DELIBERATELY left unstyled per spec §12.3). */
+.ma-note {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.ma-limit {
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+}
+
+/* Wide desktop (>= 1500px viewport, e.g. 1920): roomier cards + larger
+   spatial grids side by side. */
+@media (min-width: 1500px) {
+  .ma-modal {
+    width: 1440px;
+  }
+
+  .ma-cards {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .ma-key-row {
+    grid-template-columns: 70px 140px 1fr 140px;
+  }
+
+  .ma-grid-svg {
+    max-width: 420px;
+  }
+
+  .ma-root {
+    font-size: 12.5px;
+  }
+}
+
+/* Mid desktop (<= 1180px breakpoint, e.g. 1600→1366 laptop range): five
+   cards per row, two-column spatial grids. */
+@media (max-width: 1180px) {
+  .ma-modal {
+    width: 1080px;
+  }
+
+  .ma-grid-svg {
+    max-width: 300px;
+  }
+
+  .ma-trace-row {
+    grid-template-columns: 80px 120px 1fr 100px 80px;
+  }
+}
+
+/* Small laptop / large tablet (<= 820px, e.g. 1366 and below): cards wrap
+   to three per row, key rows compress, trace rows reflow. */
+@media (max-width: 820px) {
+  .ma-modal {
+    width: 96vw;
+    max-height: 94vh;
+  }
+
+  .ma-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ma-key-row {
+    grid-template-columns: 56px 110px 1fr;
+  }
+
+  .ma-key-team {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .ma-trace-row {
+    grid-template-columns: 70px 1fr 90px;
+    font-size: 10.5px;
+  }
+
+  .ma-grid-svg {
+    max-width: 260px;
+  }
+
+  .ma-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}

@@ -61,6 +61,9 @@
       <button id="btnSaveSession" class="btn">Save session</button>
       <button id="btnPitchMap" class="btn">Pitch map</button>
       <button id="btnSeasonView" class="btn">Season view</button>
+      <!-- Stage 4A Match Analysis Dashboard: opens the read-only analytical
+           projection of the currently tagged match (spec §9). -->
+      <button id="btnMatchAnalysis" class="btn">Match analysis</button>
       <button id="btnTouchlineToggle" class="btn">Touchline Mode</button>
       <button id="btnExportCsv" class="btn">Export CSV</button>
       <button id="btnExportClips" class="btn btn-accent">Export clip playlist</button>
@@ -554,6 +557,23 @@
     </div>
   </div>
 
+  <!-- Stage 4A Match Analysis Dashboard modal (spec §9): same overlay /
+       header / Done conventions as the season view modal above. The content
+       container is filled by src/match-analysis.js through the renderer's
+       host API on every open (recomputed from the current session snapshot —
+       no cross-open caching). Closes on Done and on Escape (both Escape
+       branches, like every other modal). -->
+  <div id="matchAnalysisModal" class="modal-overlay" style="display:none;">
+    <div class="modal modal-pitchmap ma-modal">
+      <div class="pitchmap-header">
+        <h3>Match analysis</h3>
+        <button id="btnCloseMatchAnalysis" class="btn btn-ghost detail-panel-close">Done</button>
+      </div>
+
+      <div id="matchAnalysisContent" class="ma-modal-content"></div>
+    </div>
+  </div>
+
   <!-- Recovery modal: shown on startup if userData/autosave.json exists.
        The analyst must explicitly choose Recover or Discard; the modal is
        not dismissible by Escape so the autosave is never accidentally lost. -->
@@ -657,6 +677,14 @@
        the recomputed PS read-only; no engine is modified. Loaded AFTER
        player-season.js/recent-form.js and BEFORE renderer.js. -->
   <script src="season-csv.js"></script>
+  <!-- Stage 4A Match Analysis Dashboard (docs/match-analysis-dashboard-
+       specification.md): UMD projection module — a pure, read-only render of
+       computeMatchAnalytics output into the match-analysis modal. It defines
+       no metrics of its own and receives everything environmental (session
+       snapshot, seek pathway, resolver chain, pitch constants) from the
+       renderer through the host API at open time. Loaded AFTER the engine
+       family (analytics.js) and BEFORE renderer.js. -->
+  <script src="match-analysis.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -315,15 +315,15 @@ SESSION_OPP_EVENT_REF.events = [
   section('MS-W — source-level wiring');
   {
     const srcScripts = (html.match(/<script src="([^"]+)"/g) || []).map((s) => s.slice(13, -1));
-    ok('MS-W1: script chain unchanged (integrity → roster → analytics → player-season → recent-form → season-csv → renderer)',
-      JSON.stringify(srcScripts) === JSON.stringify(['integrity.js', 'roster.js', 'analytics.js', 'player-season.js', 'recent-form.js', 'season-csv.js', 'renderer.js']),
+    ok('MS-W1: script chain unchanged (integrity → roster → analytics → player-season → recent-form → season-csv → match-analysis → renderer)',
+      JSON.stringify(srcScripts) === JSON.stringify(['integrity.js', 'roster.js', 'analytics.js', 'player-season.js', 'recent-form.js', 'season-csv.js', 'match-analysis.js', 'renderer.js']),
       srcScripts.join(','));
     ok('MS-W2: renderer never assigns roster status directly (statuses only via matchRosterApi mutators; === comparisons allowed)',
       !/\.status\s*=(?!=)/.test(rendererSrc));
     ok('MS-W3: R3-W4 shape preserved — exactly 2 direct normalizeMatchRoster assignments (load + recovery)',
       (rendererSrc.match(/matchRoster = window\.Roster\.normalizeMatchRoster\(/g) || []).length === 2);
     ok('MS-W4: BOTH Escape branches (focus-in-form and focus-elsewhere) close the matchday squad modal',
-      (rendererSrc.match(/closeSeasonModal\(\);\s*closeMatchdaySquadModal\(\);\s*settleTagConfirm\(false\)/g) || []).length === 2);
+      (rendererSrc.match(/closeSeasonModal\(\);\s*closeMatchdaySquadModal\(\);\s*closeMatchAnalysisModal\(\);\s*settleTagConfirm\(false\)/g) || []).length === 2);
     const APPROVED = [
       // Stage 1 our-team surface (9 ids)
       'btnMatchdaySquad', 'matchdaySquadModal', 'matchdaySquadCounts', 'matchdaySquadXiHint',

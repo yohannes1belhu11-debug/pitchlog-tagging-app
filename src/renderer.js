@@ -3493,7 +3493,7 @@
   // Keyboard shortcuts: number keys tag, spacebar toggles play/pause, Escape closes overlays.
   window.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) {
-      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); closeMatchdaySquadModal(); settleTagConfirm(false); }
+      if (e.key === 'Escape') { closeAddTagModal(); closeClipExportModal(); closeSquadModal(); closePitchMapModal(); closeMatchSetupModal(); closeSeasonModal(); closeMatchdaySquadModal(); closeMatchAnalysisModal(); settleTagConfirm(false); }
       return;
     }
 
@@ -3506,6 +3506,7 @@
       closeMatchSetupModal();
       closeSeasonModal();
       closeMatchdaySquadModal();
+      closeMatchAnalysisModal();
       settleTagConfirm(false);
       return;
     }
@@ -5628,6 +5629,76 @@
   }
 
   btnCloseSeasonModal.addEventListener('click', closeSeasonModal);
+
+  // ---------- Match Analysis Dashboard (Stage 4A — wiring only) ----------
+  //
+  // The dashboard module (src/match-analysis.js →
+  // window.MatchAnalysisDashboard) is a pure projection of the Analytics
+  // Engine; the renderer owns the chrome (spec §9). This block is the ONLY
+  // renderer change for Stage 4A: element refs, snapshot, host API,
+  // open/close, and the two listeners. Nothing here recomputes a metric —
+  // every value on the dashboard comes from computeMatchAnalytics through
+  // the module.
+
+  const btnMatchAnalysis = document.getElementById('btnMatchAnalysis');
+  const matchAnalysisModal = document.getElementById('matchAnalysisModal');
+  const btnCloseMatchAnalysis = document.getElementById('btnCloseMatchAnalysis');
+  const matchAnalysisContent = document.getElementById('matchAnalysisContent');
+
+  // §8 purity: the session handed to the module is a deep COPY of the live
+  // tagging state (the same JSON round-trip the save path uses — session
+  // data is JSON-safe). Module render/sort/zone activation can never touch
+  // the live session, its events array, or its metadata.
+  function matchAnalysisSnapshot() {
+    return JSON.parse(JSON.stringify({
+      videoPath: currentVideoPath,
+      matchInfo: matchInfo,
+      matchClock: matchClock,
+      squad: squad,
+      events: events
+    }));
+  }
+
+  // §2 host API: everything environmental comes from the renderer, with
+  // zero duplication — the existing seek pathway, the single matchday
+  // resolver chain (R3-A), and the REAL pitch constants (markings, zone
+  // lines, density ramp). The module consumes; it never redefines.
+  function matchAnalysisHost() {
+    return {
+      seekTo: seekTo,
+      resolvePlayer: resolveMatchdayPlayer,
+      pitchMarkingsSvg: pitchMarkingsSvg,
+      zoneLinesSvg: function () { return ZONE_LINES_SVG; },
+      densityFills: function () { return DENSITY_FILLS; },
+      densityStep: densityStep
+    };
+  }
+
+  // Every open recomputes from the CURRENT snapshot (spec §6 — no
+  // cross-open caching). A missing module degrades to an explicit notice,
+  // same convention as the season view.
+  function openMatchAnalysisModal() {
+    if (!window.MatchAnalysisDashboard ||
+        typeof window.MatchAnalysisDashboard.renderAnalysis !== 'function') {
+      matchAnalysisContent.innerHTML =
+        '<div class="event-empty">Match analysis module not loaded (src/match-analysis.js).</div>';
+      matchAnalysisModal.style.display = 'flex';
+      return;
+    }
+    window.MatchAnalysisDashboard.renderAnalysis(
+      matchAnalysisContent,
+      matchAnalysisSnapshot(),
+      matchAnalysisHost()
+    );
+    matchAnalysisModal.style.display = 'flex';
+  }
+
+  function closeMatchAnalysisModal() {
+    matchAnalysisModal.style.display = 'none';
+  }
+
+  btnMatchAnalysis.addEventListener('click', openMatchAnalysisModal);
+  btnCloseMatchAnalysis.addEventListener('click', closeMatchAnalysisModal);
 
   btnAddSeasonMatches.addEventListener('click', async () => {
     const loaded = await window.matchtag.loadMultipleSessions();
