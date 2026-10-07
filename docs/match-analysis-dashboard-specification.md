@@ -438,6 +438,32 @@ MA-M12, the rider pins among them → byte-exact restore, sha-verified →
 green); regression battery **38/38 suites** (37 → 38 as planned). Milestone
 3 (UI suite) totals pending; the battery path to 39 is unchanged.
 
+**M3 COMPLETION RECORD (UI suite, rebuilt Milestone 3):**
+`tests/match-analysis-ui-check.js` = **77 assertions** — sections `MA-U1..U13`
+with 6 / 5 / 6 / 4 / 5 / 8 / 5 / 9 / 3 / 4 / 3 / 8 / 11 assertions
+respectively. The suite boots the real index.html + script chain
+(match-analysis.js evaluated between the engine family and renderer.js) with
+a stubbed `window.matchtag`, loads the §10 fixtures through the app's own
+load pathway, and verifies the commit-A wiring end-to-end: the modal
+mechanism with all three close paths (Done, Escape-elsewhere,
+Escape-in-form); the 9-section §13 inventory in exact order; the §4 card
+strip (keys, labels, envelope values); the 17-row chronological list with
+the id tiebreak and `data-videotime`/`data-time`; end-to-end seeks through
+the REAL host (video.currentTime = 240 / null→1350 fallback / 140 / 40);
+REAL host provenance (pitch-outline markings, 4 an-zoneline lines, the
+crimson DENSITY_FILLS ramp); the minimum-sample gate on both sides; shared
+zone activation on the pointer and Enter paths; §12.1 Space propagation
+asserted, not fixed (reaches window, preventDefault, the global play/pause
+acts, and the zone toggles — both effects from one keydown); snapshot purity
+by double-save byte comparison with zero autosave writes; the Analytics tab
+preserved; per-open recompute across an oracle→base session switch;
+empty-session rendering; and the §9 static wiring/CSS law (breakpoints
+1500/1180/820, the ma-* vocabulary, base sentinels intact). Verified at
+completion: 77/77 green; sensitivity demo (sha-sealed renderer.js → ONE
+targeted wiring defect: host.seekTo as a no-op → exactly the four
+end-to-end seek checks FAIL, 73/77 → byte-exact restore, sha-verified →
+green); regression battery **39/39 suites** (38 → 39 as planned).
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
