@@ -421,6 +421,23 @@ the lost implementation's; with MA-M12 and the UI presence checks the totals
 grow — exact final totals are recorded in this §10 at completion of
 Milestones 2 and 3 respectively. The battery path stays 37 → 38 → 39.
 
+**M2 COMPLETION RECORD (model suite, rebuilt M2 round 2):**
+`tests/match-analysis-model-check.js` = **108 assertions** — sections
+`MA-M1..M12` with 12 / 7 / 6 / 6 / 7 / 8 / 10 / 5 / 6 / 8 / **18** / 14
+assertions respectively, plus one suite-structural law check asserting that
+MA-M11 emits exactly 18. MA-M12 (14 assertions) proves every
+`L1_COUNT_ROWS` / `L2_DERIVED_ROWS` / `PLAYER_COLS` field real against the
+engine envelopes (one wrong name FAILs) and carries the review-rider
+exact-string RATIO pins: with a 3-pass fixture (2 successful, 1
+unsuccessful) the team and player "Pass success" cells render exactly
+`66.7%` — the engine's percentage envelope `{value: 66.7, num: 2, den: 3}`,
+never the raw fraction — and the zero-denominator cell renders `n/a`
+(metric spec P5). Verified at completion: 108/108 green; sensitivity demo
+(sha-sealed module → ONE targeted ratio defect → 6 FAILs across MA-M6 and
+MA-M12, the rider pins among them → byte-exact restore, sha-verified →
+green); regression battery **38/38 suites** (37 → 38 as planned). Milestone
+3 (UI suite) totals pending; the battery path to 39 is unchanged.
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
