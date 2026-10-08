@@ -507,6 +507,41 @@ completion; nothing weakened. FIXTURE LAW: any fixture exercising the state
 filter must carry complete scoreForAfter/scoreAgainstAfter goal chains (the
 X1 suppression otherwise silently disables the filter).
 
+**Stage 4B COMPLETION RECORD (M3).** Implemented per §14; verified at
+completion. Model suite **139/139** (108 4A + 31 new: MA-M13 9 — engine-direct
+pins, incl. sub-role-only player (§12.5) and the X1 suppression active-vs-
+forced pair; MA-M14 12; MA-M15 10); UI suite **91/91** (77 4A + 14 new:
+MA-U14 7 — including the §9-style filter-bar CSS law; MA-U15 3 — ENGINE PATH
+WITH A VALID CHAIN, chosen over a doctored envelope: the oracle's intact 1–1
+goal chain against a doctored manual score 2–1, a genuine engine X1 MISMATCH
+(FIXTURE LAW satisfied by construction); MA-U16 4 — including the RED-FIRST
+retention source pin: the renderAnalysis return retained as
+`matchAnalysisModel`, assigned in `openMatchAnalysisModal`, nulled in
+`closeMatchAnalysisModal`; both close paths — Done and both Escape branches —
+funnel there). Matchday 86/86; battery **39/39** at every commit.
+
+The pinned exact strings (tests pin them verbatim):
+
+- Banner: `Spatial filters active — all other sections remain whole-match.`
+- Suppression explanation: `Score state filtering unavailable (X1 reconciliation gate): the manual matchInfo score disagrees with the attributed goal chain. The effective score-state filter is All.`
+- Unattributed note: `Unattributed events (no Us/Opponent attribution) are excluded from all spatial grids; there is no option to view them spatially.`
+- Filtered-view suffix: ` (filtered view)` — appended to the insufficient-events message and the `max = N` line.
+- Active-filter summary format: `Active filters: ` + the non-default values in bar order joined ` · ` (e.g. `Active filters: Team Us · Period 1H`).
+- Period vocabulary ORDER LAW (pinned): distinct RAW `rec.period` values from `A.spatial` (located + unlocated), ordered by `Object.keys(A.level3.byPeriod)` (the engine's own canonical order) excluding `Non-play` (a bucket name — FORBIDDEN as a filter value) and `Unknown`; then every remaining value (including `Unknown` when present, and raw non-play periods such as `PRE_MATCH`/`HT`/`ET_HT`/`FT`) sorted alphabetically after it.
+
+4A assertions updated (nothing weakened; pinned intent preserved): **M10.8**
+— the key-events section children count `=== 2` → `=== 3` (title + the §14
+filter bar, whose wrapper carries the status line, + the list; still NO
+counter/metric element — the §5 never-a-metric law). No other 4A assertion
+changed.
+
+Sensitivity demos (both live, no git for perturbation/restore): A —
+`listRowPeriod` comparing byPeriod bucket names (`Non-play`) for non-play
+periods instead of RAW values → exactly MA-M14.5 red (138/139), byte-exact
+restore, sha pair verified; B — the renderer discarding the renderAnalysis
+return immediately (statement call, never retained) → exactly MA-U16c+U16d
+red (89/91), byte-exact restore, sha pair verified.
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
@@ -598,7 +633,7 @@ computed locally.
 13.2 Key-event summary cards — §4.
 
 13.3 Chronological key events — §5. List filtering (class/team/period) per
-§14.8.
+§14.7.
 
 13.4 Team summary & performance — source: A.level1.team.{our,opponent} AND the
 A.level2 team structures (the same envelopes the app's Analytics tab reads).
