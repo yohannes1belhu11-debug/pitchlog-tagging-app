@@ -1,6 +1,6 @@
-# PitchLog — Stage 4A Match Analysis Dashboard Specification (V1)
+# PitchLog — Match Analysis Dashboard Specification (V2)
 
-**Status:** AUTHORITATIVE — V1.1. This document is the single build recipe for
+**Status:** AUTHORITATIVE — V2.0. This document is the single build recipe for
 Stage 4A (Match Analysis Dashboard) of the tagging app. It consolidates the
 surviving architecture audit (worklog `STAGE4A-ARCHAUDIT-1`), the engine and
 renderer contracts verified at this HEAD, and the corrective round that defined
@@ -8,6 +8,10 @@ the lost implementation's final state.
 
 V1.1 amendment (review round): §13 dashboard section inventory added;
 §1/§5/§6/§10 clarified.
+
+V2.0 amendment: Stage 4B interactive filtering specified (§14); stage
+boundary, §5, §6, §12, §13.3, §13.6, §10 updated. Covers Stage 4A
+(implemented, closed) and Stage 4B (specified, pending implementation).
 
 **Authority rule:** where any historical worklog note, review remark, or earlier
 plan conflicts with this document, **this document wins**. Two known
@@ -43,8 +47,9 @@ event-taxonomy changes, no migration, no storage changes of any kind.
 
 **Explicitly out of scope:**
 
-- **Stage 4B interactive filtering** — the dashboard renders with fixed default
-  filters; per-section filter controls are a later stage.
+- **Interactive filtering (Stage 4B) — IN SCOPE as of V2.0: view filtering
+  only, per §14. Recomputation of aggregate metrics over filtered slices is
+  NOT in scope (candidate for a later stage; requires engine work).**
 - **Stage 4C coach export** — nothing in Stage 4A exports, prints, or formats
   for delivery.
 - Tactical sequence DIAGRAMS and NARRATIVES (Stage 5) — out of scope.
@@ -233,6 +238,17 @@ zone cells in §3 views still never seek.)
 **Never a metric.** The list's length is **never displayed as a metric**
 anywhere on the dashboard (no "17 key events" counter card or caption).
 
+**Filtered-list exception (V2.0).** While at least one list filter is active,
+the list's filter bar renders exactly one status line, phrased exactly
+'Showing N of M', where M is the unfiltered qualifying-row count and N the
+filtered count. It is a view-state indicator, never a metric: it is rendered
+only while a list filter is active, styled as filter-bar UI text, never as a
+card or standalone number, and never summarized elsewhere. With no list filter
+active the line is absent. The empty state distinguishes two cases: (1) no
+filters active and no qualifying events — the existing enumeration message;
+(2) filters active and zero matches — exactly 'No key events match the current
+filters.' plus the filter bar's reset affordance.
+
 **Empty state.** When no qualifying events exist, the empty state
 **enumerates the classes** — it names the qualifying event labels (the
 `KEY_EVENT_LABELS` set, in display form) so the analyst sees what would have
@@ -242,9 +258,15 @@ been listed, rather than a bare "no data".
 
 ## 6. Single-execution contract
 
-**Per render pass, the engine runs exactly once each:** one
-`computeMatchAnalytics(session)` call and one `computeSpatialView(A, filters)`
-call (analytics.js:1577, 1429).
+**Per open (engine budget):** `computeMatchAnalytics(session)` runs exactly
+once per dashboard open. `computeSpatialView(A, filters)` runs once for the
+initial render, plus once per spatial-filter change during that same open.
+Key-list filtering performs ZERO engine calls — it is a pure DOM projection
+of the already-built model. The renderer retains the model, host, and
+container for the LIFETIME OF ONE OPEN only (per-open working state, not a
+cache); on close (Done or Escape) the retained state is discarded; every
+open recomputes from the current snapshot. No module-level state survives a
+modal open, a modal close, or a session switch — unchanged.
 
 Both are computed in `renderAnalysis` — the single orchestration point — and
 the results are **shared into** every consumer: `buildModel` receives them via
@@ -258,12 +280,6 @@ buildModel(session, host, precomputed?)
 when `precomputed` is absent) exist **only as fallbacks for direct/test
 callers**. In the wired production path the parameter is always supplied, so a
 full dashboard render never triggers a second engine pass.
-
-**No module-level caching.** There is **no cache that survives a modal open,
-a modal close, or a session switch**. Every open recomputes from the current
-snapshot. (The lost implementation recomputed the engine twice per render;
-this contract eliminates that and additionally forbids any cross-open caching
-— both stated as law.)
 
 ---
 
@@ -464,6 +480,33 @@ targeted wiring defect: host.seekTo as a no-op → exactly the four
 end-to-end seek checks FAIL, 73/77 → byte-exact restore, sha-verified →
 green); regression battery **39/39 suites** (38 → 39 as planned).
 
+**Stage 4B (V2.0):** the EXISTING suites grow new sections — model suite
+gains MA-M13 'engine filter preconditions' (pinning, via the engine directly,
+the behaviors the module relies on: zero-result on a NON-EMPTY session → 1–2
+zero grids + playerGrids [] + locatedShare null; player-filter overrides team
+partition; player filter excludes Sub events and unattributed events; invalid
+team value normalizes to '__all__'; grid id format
+'grid:scope=…:partition=…'; filtered grid.events contain only matching
+records), MA-M14 'key-list filtering' (predicate correctness per §14.8,
+Showing N of M, both empty-state strings, D2-extension: filtering the list
+leaves the cards byte-identical), MA-M15 'spatial re-filter re-render'
+(single computeSpatialView per change, no computeMatchAnalytics re-run,
+traces/dots respect filters, below-gate null state under filters,
+byte-identical double re-render at unchanged filters). UI suite gains MA-U14
+'filter controls + interactions' (both filter bars render; per-change
+re-render of ONLY the affected section; reset affordances; controls at
+'__all__' on every fresh open), MA-U15 'suppression + context stating' (state
+control disabled + explanation when view.stateFilterSuppressed is truthy;
+'filtered view' markers; active-filter summary; unattributed note), MA-U16
+'purity under filtering' (session save payload byte-identical across filter
+changes; zero autosave writes). Totals are recorded in this §10 at
+completion. Battery remains 39 suites (no new files). Where the filter bars
+add DOM inside existing sections, a minimal number of 4A assertions may be
+UPDATED to preserve their pinned intent — every such change listed at
+completion; nothing weakened. FIXTURE LAW: any fixture exercising the state
+filter must carry complete scoreForAfter/scoreAgainstAfter goal chains (the
+X1 suppression otherwise silently disables the filter).
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
@@ -517,6 +560,23 @@ These are known, accepted behaviors of Stage 4A. They are **not** defects and
    carries these class hooks and the stylesheet defines no rules for them.
    They exist for future stages; leaving them unstyled is deliberate.
 
+12.4 Unattributed events are excluded from all spatial team grids (engine
+semantics: team ∈ {our, opponent}); they appear in no grid and no option
+exists to view them spatially — stated in one static note in the spatial
+section, never 'fixed' with a pseudo-partition (that would be an engine
+change).
+
+12.5 A player filter excludes Sub events (SP records carry playerId null for
+Subs) and unattributed events; players involved only via sub roles appear in
+the dropdown yet yield a valid empty/below-gate grid.
+
+12.6 The state filter is force-disabled by the engine under X1 MISMATCH; the
+UI must surface this (disabled control + explanation), never filter silently.
+
+12.7 Filtering never recomputes aggregate metrics — cards, team tables,
+period tables, players, sequences remain whole-match under any filter; a
+filtered spatial view must never be readable as recomputed statistics.
+
 ---
 
 ## 13. Dashboard section inventory (V1.1)
@@ -537,7 +597,8 @@ computed locally.
 
 13.2 Key-event summary cards — §4.
 
-13.3 Chronological key events — §5.
+13.3 Chronological key events — §5. List filtering (class/team/period) per
+§14.8.
 
 13.4 Team summary & performance — source: A.level1.team.{our,opponent} AND the
 A.level2 team structures (the same envelopes the app's Analytics tab reads).
@@ -551,7 +612,8 @@ Content: per-period and per-minute-bin breakdowns exactly as the engine
 exposes them (periods include 1H, HT, 2H, FT, ET1, ET_HT, ET2 where present).
 No re-binning, no re-aggregation.
 
-13.6 Spatial analysis — §3.
+13.6 Spatial analysis — §3. Interactive filtering per §14; filter bar per
+§14.2.
 
 13.7 Player analysis — source: A.players.list, keyed by playerId (§7).
 Content: per-player counts and ratios as the engine exposes them. Framing is
@@ -567,6 +629,84 @@ narratives, no sequence editing (§1).
 13.10 Section-sourcing law: every value in §13.1–13.9 comes from the named
 engine structure or session metadata. If a desired display value has no engine
 source, that is a metric-spec change request — never a local formula (§2).
+
+---
+
+## 14. Stage 4B — Interactive filtering (V2.0)
+
+14.1 SURFACES. Spatial section: a filter bar (top of section) with six
+dropdowns — Scope, Team, Period, Score state, Sequence, Player — plus a Reset
+button. Key-events section: a filter bar with three dropdowns — Class, Team,
+Period — plus Reset. No other section gains controls. While any spatial filter
+is non-default, the spatial section shows an active-filter summary line (the
+chosen values, human-readable) and an active-filter banner is the ONLY
+indication that other sections remain whole-match (text pinned at
+implementation, recorded in §10).
+
+14.2 FILTER STATE. Defaults '__all__' (list: no filter). State is per-open
+only: every fresh open starts at defaults (consistent with §6); Reset in a
+bar restores that bar's defaults and re-renders only that section. Filter
+changes apply immediately (no Apply button).
+
+14.3 VOCABULARIES (single sources of truth). scope: event labels present in
+the session, canonical order first then sorted customs; team: fixed
+'our'/'opponent' (display 'Us'/'Opponent'); period: distinct RAW rec.period
+values from A.spatial records (located + unlocated), ordered by the engine's
+canonical period order with unknown/extra values after ('Unknown' included
+when present) — byPeriod bucket names (incl. 'Non-play') are FORBIDDEN as
+filter values; state: fixed WINNING/DRAW/LOSING; sequence:
+view.sequenceOptions; player: A.players.list ids (display via the existing
+resolver chain). List Class dropdown: the nine qualifying labels in display
+form, filtering on the raw label; list Team: All/Us/Opponent (team-null rows
+visible only under All); list Period: the SAME vocabulary source as spatial
+period, with row.event.period undefined mapped to 'Unknown'.
+
+14.4 SEMANTICS (engine-truth, pinned by MA-M13). Filters are conjunctions.
+Grid structure: player filter → one grid 'player:<pid>'; team filter → one
+grid; otherwise the Us+Opponent pair; player overrides team. Every grid's
+.events contains ONLY filtered located records — dots and zone-cell traces
+are filter-correct automatically and MUST be tested as such. Zero-result →
+normal structure with zero counts, locatedShare null → 'n/a' (P5), never 0.
+
+14.5 STATE SUPPRESSION UI. Read view.stateFilterSuppressed on every render.
+When truthy: the Score state control renders DISABLED with a visible
+explanation naming the X1 reconciliation gate, and the effective filter is
+'__all__'. Never silent. Never re-enable while suppressed.
+
+14.6 CONTEXT STATING (SP-H7). Grid heads already state scope+partition —
+unchanged. When spatial filters are non-default: the insufficient-events
+message and the 'max = N' line each gain a ' (filtered view)' suffix, and the
+section carries the one static unattributed note (12.4). The minimum-sample
+gate evaluates per filtered grid exactly as in Stage 4A (below-gate → null
+state, numeric table still renders).
+
+14.7 LIST FILTERING (§14.8 merged here). List filters are module-side
+predicates on row fields: label equality; team equality; period via
+row.event.period (undefined → 'Unknown'). Filtering re-renders ONLY the
+key-events section innerHTML from the retained model; row order (time asc,
+id asc), row markup, and seek behavior of visible rows are IDENTICAL to
+Stage 4A; zero engine calls; the D2 law extends — filtering the list never
+changes the cards or any other section.
+
+14.8 MODULE API. The module gains ONE new exported re-render entry point
+(name at implementation, e.g. updateFilters) with the contract: given the
+root element, the per-open model, the host, and new filter sets, it (a) runs
+computeSpatialView(model.analytics, spatialFilters) — the ONLY engine call,
+(b) updates the model's spatial view in place, (c) re-renders ONLY the
+spatial and key-events section DOM, (d) preserves the §8 delegation
+(listeners live on the root element and MUST NOT be re-attached), (e)
+performs no other engine work, no mutation of A, and returns nothing the
+renderer needs to retain beyond the model it already holds. renderAnalysis
+signature and behavior are UNCHANGED (its returned model is now RETAINED by
+the renderer for the open's lifetime and discarded on close — a small
+renderer wiring change: retain on open, null on Done/Escape; the wiring
+block remains confined to the Stage 4A block's territory).
+
+14.9 INHERITED CONSTRAINTS. All §2/§3/§5/§8 laws bind unchanged: purity (no
+mutation of session or A — filter changes included in purity tests), no
+.click(), delegation-only keyboard access, no seek from spatial views, no
+new dependencies, no engine changes, protected files untouched.
+Determinism: with unchanged filters and data, a re-render is byte-identical.
 
 ---
 
