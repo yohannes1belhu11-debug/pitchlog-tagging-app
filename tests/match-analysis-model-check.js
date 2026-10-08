@@ -43,6 +43,13 @@
 //          every value equals its named engine source; every L1_COUNT_ROWS /
 //          L2_DERIVED_ROWS / PLAYER_COLS field proven REAL against the
 //          engine envelopes; RIDER: exact-string "66.7%" Pass-success pin)
+//   MA-M13 engine filter preconditions (§14.4 — engine-direct pins, green by
+//          design; they guard the module's assumptions)
+//   MA-M14 key-list filtering (§14.7/§14.2/§14.3 — predicates, bars, status
+//          line, empty states, D2-extension, zero engine calls)
+//   MA-M15 spatial re-filter re-render (§14.8/§14.5/§14.6 — updateFilters,
+//          one engine call per change, suppression UI, context stating,
+//          determinism, delegation preservation)
 //
 // The stub host mirrors the renderer's real markup/constants (renderer.js
 // ZONE_LINES_SVG an-zoneline lines, pitchMarkingsSvg, DENSITY_FILLS crimson
@@ -1133,7 +1140,10 @@ ok('M10.8 structural laws: 9 sections in §13 order; players framing "no per-90"
     const playersTitle = r.root.querySelector('section[data-ma-section="players"] .ma-section-title');
     return arrEq(sections, ['header', 'cards', 'key-events', 'team', 'periods',
       'spatial', 'players', 'sequences', 'protocol']) &&
-      keySec.querySelectorAll(':scope > *').length === 2 &&
+      // V2.0 (§14): the key-events section children are the title, the §14
+      // filter bar (bar + status line live inside its wrapper) and the list —
+      // still NO counter/metric element (the §5 "never a metric" law).
+      keySec.querySelectorAll(':scope > *').length === 3 &&
       playersTitle && playersTitle.textContent.indexOf('no per-90') !== -1;
   })(), '');
 
@@ -1551,6 +1561,623 @@ ok('M12.14 §13.8 + §13.9 sourcing: sequences rows and protocol notes equal the
       engineLine.textContent === 'PitchLog-METRIC-SPEC-v1.0 · engine v1.2.0 · deterministic';
     return seqOk && protoOk;
   })(), '');
+
+// ===========================================================================
+// Stage 4B (V2.0) sections — spec §14. Red-first discipline: M14/M15 were run
+// against the pre-implementation module BEFORE src/match-analysis.js gained
+// §14 (their failures captured then); they must be GREEN now. M13 is
+// engine-direct (green by design — it guards the module's assumptions).
+// ===========================================================================
+
+// --- 4B fixtures and helpers -------------------------------------------
+// filterSession (§14.3/§14.7): raw periods 1H/HT/2H/FT plus one event with
+// period undefined (the engine normalizes it to raw 'Unknown' in the spatial
+// records — probed); drives the period-vocabulary order pin (canonical head
+// + alphabetical tail incl. 'Unknown'), the undefined→'Unknown' list mapping,
+// and the HT/FT list predicates (the sensitivity-demo target class).
+function filterSession() {
+  const squad = [
+    { id: 'player_1', name: 'Abebe Bekele', number: '9' },
+    { id: 'player_2', name: 'Kebede Tadesse', number: '10' }
+  ];
+  const events = [
+    E(1, { time: 40, period: '1H', matchSeconds: 40, label: 'Goal', team: 'our', playerId: 'player_1', location: { x: 0.9, y: 0.5 }, videoTime: 40 }),
+    E(2, { time: 1700, period: 'HT', matchSeconds: 1700, label: 'Foul', team: 'opponent', location: { x: 0.3, y: 0.8 }, videoTime: 1700 }),
+    E(3, { time: 2760, period: 'FT', matchSeconds: 2760, label: 'Card', team: 'our', subtype: 'Yellow' }),
+    E(4, { time: 3000, period: '2H', matchSeconds: 3000, label: 'Shot', team: null, location: { x: 0.6, y: 0.55 }, videoTime: 3000 }),
+    E(5, { time: 3100, period: undefined, matchSeconds: 3100, label: 'Corner', team: 'our', location: { x: 0.2, y: 0.5 }, videoTime: 3100 }),
+    E(6, { time: 3300, period: '2H', matchSeconds: 3300, label: 'Sub', team: 'our', playerOffId: 'player_1', playerOnId: 'player_2', location: { x: 0.25, y: 0.5 }, videoTime: 3300 })
+  ];
+  return {
+    __schemaVersion: 3, __savedAt: '2026-10-06T18:00:00.000Z',
+    videoPath: null, videoUrl: null,
+    matchInfo: { competition: 'Filter Fixture League', homeAway: 'home', opponent: 'Probe FC', date: '2026-10-06', formation: '4-4-2' },
+    matchClock: null,
+    squad: squad,
+    events: events
+  };
+}
+
+// doctoredOracle: the oracle's complete, valid 1–1 goal chain kept intact;
+// ONLY the manual matchInfo score is made to disagree (2–1) — a genuine
+// engine X1 MISMATCH (probed), the chosen path for §14.5 suppression.
+function doctoredOracleSession() {
+  const s = oracleSession();
+  s.matchInfo = Object.assign({}, s.matchInfo, { ourScore: 2 });
+  return s;
+}
+
+const HAS_UF = typeof MAD.updateFilters === 'function';
+const RED_REASON = HAS_UF ? '' : 'updateFilters not exported (pre-implementation)';
+
+// Programmatic pathway (§14.8). Returns false (clean FAIL, never a throw)
+// when the module predates §14.
+function UF(r, host, sets) {
+  if (!HAS_UF) return false;
+  MAD.updateFilters(r.root, r.model, host, sets);
+  return true;
+}
+
+// User pathway (§14.2 immediate apply): set a bar select and dispatch a
+// change event through the module's own delegation.
+function setSelect(r, barAttr, filterKey, value) {
+  const sel = r.root.querySelector('.ma-filter-select[data-bar="' + barAttr + '"][data-filter="' + filterKey + '"]');
+  if (!sel) return null;
+  sel.value = value;
+  sel.dispatchEvent(new r.win.Event('change', { bubbles: true }));
+  return sel;
+}
+function clickReset(r, barAttr) {
+  const btn = r.root.querySelector('.ma-filter-reset[data-bar="' + barAttr + '"]');
+  if (!btn) return false;
+  btn.dispatchEvent(new r.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+  return true;
+}
+function sectionSnap(r) {
+  const out = {};
+  Array.from(r.root.querySelectorAll('section[data-ma-section]')).forEach((s) => {
+    out[s.getAttribute('data-ma-section')] = s.outerHTML;
+  });
+  return out;
+}
+function barSelect(r, barAttr, filterKey) {
+  return r.root.querySelector('.ma-filter-select[data-bar="' + barAttr + '"][data-filter="' + filterKey + '"]');
+}
+function selectValues(sel) {
+  return Array.from(sel.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+}
+function selectTexts(sel) {
+  return Array.from(sel.querySelectorAll('option')).map((o) => o.textContent);
+}
+
+// ===========================================================================
+// MA-M13 — Engine filter preconditions (§14.4; engine-direct, green by design)
+// ===========================================================================
+section('MA-M13');
+
+const M13_A = AE.computeMatchAnalytics(oracleSession());
+const M13_DF = { scope: '__all__', team: '__all__', period: '__all__', state: '__all__', sequence: '__all__', player: '__all__' };
+function m13view(f) { return AE.computeSpatialView(M13_A, Object.assign({}, M13_DF, f)); }
+
+ok('M13.1 zero-result on a NON-EMPTY session, default branch (period ET1): 2 zero grids + playerGrids [] + locatedShare null',
+  (() => {
+    const v = m13view({ period: 'ET1' });
+    return v.grids.length === 2 &&
+      v.grids[0].id === 'grid:scope=all:partition=our' && v.grids[1].id === 'grid:scope=all:partition=opponent' &&
+      v.grids.every((g) => g.located === 0 && g.population === 0 && g.events.length === 0 &&
+        g.locatedShare.value === null) &&
+      v.playerGrids.length === 0 &&
+      v.completeness.locatedShare.value === null &&
+      v.tableGrid.population === 0 && v.tableGrid.id === 'grid:scope=all:partition=all';
+  })(), '');
+
+ok('M13.2 zero-result under a team filter: exactly 1 zero grid (the 1–2 range)',
+  (() => {
+    const v = m13view({ team: 'our', period: 'ET1' });
+    return v.grids.length === 1 && v.grids[0].id === 'grid:scope=all:partition=our' &&
+      v.grids[0].located === 0 && v.playerGrids.length === 0;
+  })(), '');
+
+ok('M13.3 player filter overrides the team partition (both set: ONE player grid, not a team grid)',
+  (() => {
+    const v = m13view({ player: 'player_1', team: 'opponent' });
+    return v.grids.length === 1 &&
+      v.grids[0].id === 'grid:scope=all:partition=player:player_1' &&
+      v.grids[0].partitionLabel === 'Player: 9 Abebe Bekele' &&
+      v.grids[0].partition !== 'opponent';
+  })(), '');
+
+ok('M13.4 player filter excludes Sub events (SP playerId null) and unattributed events',
+  (() => {
+    const v = m13view({ player: 'player_1' });
+    const evs = v.grids[0].events;
+    return v.grids.length === 1 && evs.length === 3 &&
+      arrEq(evs.map((e) => e.eventId), [1, 3, 17]) &&
+      evs.every((e) => e.playerId === 'player_1') &&
+      !evs.some((e) => e.label === 'Sub') &&
+      !evs.some((e) => e.eventId === 5);   // the team-null Corner (unattributed)
+  })(), '');
+
+ok('M13.5 sub-role-only player yields a valid empty grid (§12.5; player_4 appears only via Sub roles)',
+  (() => {
+    const v = m13view({ player: 'player_4' });
+    return v.grids.length === 1 &&
+      v.grids[0].id === 'grid:scope=all:partition=player:player_4' &&
+      v.grids[0].located === 0 && v.grids[0].population === 0;
+  })(), '');
+
+ok('M13.6 invalid team value normalizes to __all__ (view.filters + default-branch structure)',
+  (() => {
+    const v = m13view({ team: 'bogus' });
+    const d = m13view({});
+    return v.filters.team === '__all__' &&
+      v.grids.length === 2 &&
+      v.grids[0].id === d.grids[0].id && v.grids[1].id === d.grids[1].id &&
+      v.grids[0].located === d.grids[0].located && v.grids[1].located === d.grids[1].located;
+  })(), '');
+
+ok('M13.7 grid id format grid:scope=…:partition=… across default / scoped / team / player views',
+  (() => {
+    const re = /^grid:scope=.+:partition=.+$/;
+    const views = [m13view({}), m13view({ scope: 'Corner' }), m13view({ team: 'our' }), m13view({ player: 'player_2' })];
+    return views.every((v) => v.grids.every((g) => re.test(g.id)) && re.test(v.tableGrid.id)) &&
+      m13view({ scope: 'Corner' }).grids[0].id === 'grid:scope=Corner:partition=our' &&
+      m13view({ scope: 'Corner' }).tableGrid.id === 'grid:scope=Corner:partition=all';
+  })(), '');
+
+ok('M13.8 filtered grid.events contain ONLY matching records (period 1H: every event record period 1H + located)',
+  (() => {
+    const v = m13view({ period: '1H' });
+    return v.grids.every((g) => g.events.every((rec) => rec.period === '1H' && !!rec.zoneKey)) &&
+      v.grids[0].located === 5 && v.grids[0].population === 5 &&
+      v.grids[1].located === 1 && v.grids[1].population === 2;
+  })(), '');
+
+ok('M13.9 state-filter suppression (§14.5 engine side): doctored X1 MISMATCH → suppressed + state forced __all__; oracle MATCH → active',
+  (() => {
+    // FIXTURE LAW satisfied: the doctored oracle keeps the complete
+    // scoreForAfter/scoreAgainstAfter chains; only the manual score disagrees
+    // (a genuine engine MISMATCH — probed), so the suppression is REAL.
+    const sess = doctoredOracleSession();
+    const AD = AE.computeMatchAnalytics(sess);
+    const vd = AE.computeSpatialView(AD, Object.assign({}, M13_DF, { state: 'WINNING' }));
+    const vo = m13view({ state: 'WINNING' });
+    return AD.gates.X1_scoreReconciliation.status === 'MISMATCH' &&
+      vd.stateFilterSuppressed === true && vd.filters.state === '__all__' &&
+      M13_A.gates.X1_scoreReconciliation.status === 'MATCH' &&
+      vo.stateFilterSuppressed === null && vo.filters.state === 'WINNING' &&
+      vo.grids[1].population === 1;   // the one WINNING record (e19, unlocated)
+  })(), '');
+
+// ===========================================================================
+// MA-M14 — Key-list filtering (§14.7/§14.2/§14.3)
+// ===========================================================================
+section('MA-M14');
+
+ok('M14.1 updateFilters is exported (§14.8) and a fresh model carries default filter state',
+  (() => {
+    if (!HAS_UF) return false;
+    const r = renderSession(oracleSession(), stubHost(oracleSession().squad));
+    const f = r.model.spatialFilters, l = r.model.listFilters;
+    return !!f && !!l &&
+      ['scope', 'team', 'period', 'state', 'sequence', 'player'].every((k) => f[k] === '__all__') &&
+      ['label', 'team', 'period'].every((k) => l[k] === '__all__');
+  })(), RED_REASON);
+
+ok('M14.2 both bars render: spatial 6 selects + Reset, key-events 3 selects + Reset; Class options display-form filtering raw; Team All/Us/Opponent',
+  (() => {
+    const r = renderSession(oracleSession(), stubHost(oracleSession().squad));
+    const sBar = r.root.querySelector('.ma-filter-bar[data-bar="spatial"]');
+    const lBar = r.root.querySelector('.ma-filter-bar[data-bar="key-events"]');
+    if (!sBar || !lBar) return false;
+    const sSel = Array.from(sBar.querySelectorAll('.ma-filter-select'));
+    const lSel = Array.from(lBar.querySelectorAll('.ma-filter-select'));
+    const cls = barSelect(r, 'key-events', 'label');
+    const tm = barSelect(r, 'key-events', 'team');
+    return sSel.length === 6 && lSel.length === 3 &&
+      arrEq(sSel.map((s) => s.getAttribute('data-filter')), ['scope', 'team', 'period', 'state', 'sequence', 'player']) &&
+      arrEq(lSel.map((s) => s.getAttribute('data-filter')), ['label', 'team', 'period']) &&
+      !!sBar.querySelector('.ma-filter-reset') && !!lBar.querySelector('.ma-filter-reset') &&
+      arrEq(selectValues(cls), ['__all__', 'Goal', 'Shot', 'Chance', 'Cross', 'Corner', 'Foul', 'Card', 'Sub', 'Positive Transition']) &&
+      arrEq(selectTexts(cls), ['All', 'Goal', 'Shot', 'Chance', 'Cross', 'Corner', 'Foul', 'Card', 'Substitution', 'Positive Transition']) &&
+      arrEq(selectValues(tm), ['__all__', 'our', 'opponent']) &&
+      arrEq(selectTexts(tm), ['All', 'Us', 'Opponent']);
+  })(), RED_REASON);
+
+ok('M14.3 predicates (oracle): label Sub → 3; team our → 11; team opponent → 5; period 1H → 8; team-null row visible only under All',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    const status = () => {
+      const el = r.root.querySelector('.ma-filter-status');
+      return el ? el.textContent : null;
+    };
+    const ids = () => Array.from(r.root.querySelectorAll('.ma-key-row')).map((el) => el.getAttribute('data-event-id'));
+    setSelect(r, 'key-events', 'label', 'Sub');
+    if (status() !== 'Showing 3 of 17' || !arrEq(ids(), ['9', '10', '11'])) return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'team', 'our');
+    if (status() !== 'Showing 11 of 17' ||
+      !arrEq(ids(), ['1', '2', '3', '4', '6', '9', '10', '12', '13', '14', '16'])) return false;
+    if (r.root.querySelector('.ma-key-row[data-event-id="5"]')) return false;  // team-null hidden under a team filter
+    clickReset(r, 'key-events');
+    if (!r.root.querySelector('.ma-key-row[data-event-id="5"]')) return false; // …visible under All
+    setSelect(r, 'key-events', 'team', 'opponent');
+    if (status() !== 'Showing 5 of 17') return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'period', '1H');
+    return status() === 'Showing 8 of 17' &&
+      arrEq(ids(), ['1', '2', '3', '4', '5', '6', '7', '8']);
+  })(), RED_REASON);
+
+ok('M14.4 combinations + the filtered empty state (exact strings, §5 V2.0)',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    setSelect(r, 'key-events', 'label', 'Sub');
+    setSelect(r, 'key-events', 'team', 'our');
+    const st1 = r.root.querySelector('.ma-filter-status');
+    if (!st1 || st1.textContent !== 'Showing 2 of 17') return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'label', 'Card');
+    setSelect(r, 'key-events', 'period', '2H');
+    if (!r.root.querySelector('.ma-key-row[data-event-id="16"]')) return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'label', 'Goal');
+    setSelect(r, 'key-events', 'team', 'our');
+    setSelect(r, 'key-events', 'period', '2H');
+    const empty = r.root.querySelector('.ma-keylist .ma-key-empty');
+    const st2 = r.root.querySelector('.ma-filter-status');
+    return !!empty && empty.textContent === 'No key events match the current filters.' &&
+      !!st2 && st2.textContent === 'Showing 0 of 17';
+  })(), RED_REASON);
+
+ok('M14.5 filterSession predicates: HT 1, FT 1, 2H 2, Unknown 1 (undefined→Unknown), our 4; zero-match empty state',
+  (() => {
+    if (!HAS_UF) return false;
+    const fs = filterSession();
+    const host = stubHost(fs.squad);
+    const r = renderSession(fs, host);
+    const status = () => {
+      const el = r.root.querySelector('.ma-filter-status');
+      return el ? el.textContent : null;
+    };
+    const ids = () => Array.from(r.root.querySelectorAll('.ma-key-row')).map((el) => el.getAttribute('data-event-id'));
+    setSelect(r, 'key-events', 'period', 'HT');
+    if (status() !== 'Showing 1 of 6' || !arrEq(ids(), ['2'])) return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'period', 'FT');
+    if (status() !== 'Showing 1 of 6' || !arrEq(ids(), ['3'])) return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'period', '2H');
+    if (status() !== 'Showing 2 of 6' || !arrEq(ids(), ['4', '6'])) return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'period', 'Unknown');
+    if (status() !== 'Showing 1 of 6' || !arrEq(ids(), ['5'])) return false;
+    clickReset(r, 'key-events');
+    setSelect(r, 'key-events', 'team', 'our');
+    if (status() !== 'Showing 4 of 6' || !arrEq(ids(), ['1', '3', '5', '6'])) return false;
+    setSelect(r, 'key-events', 'label', 'Foul');   // Foul is opponent-only → zero under team our
+    const empty = r.root.querySelector('.ma-keylist .ma-key-empty');
+    return !!empty && empty.textContent === 'No key events match the current filters.' &&
+      status() === 'Showing 0 of 6';
+  })(), RED_REASON);
+
+ok('M14.6 period vocabulary order: canonical head + alphabetical tail incl. Unknown; byPeriod bucket names FORBIDDEN (§14.3)',
+  (() => {
+    const fs = filterSession();
+    const host = stubHost(fs.squad);
+    const r = renderSession(fs, host);
+    const lp = barSelect(r, 'key-events', 'period');
+    const sp = barSelect(r, 'spatial', 'period');
+    if (!lp || !sp) return false;
+    return arrEq(selectValues(lp), ['__all__', '1H', '2H', 'FT', 'HT', 'Unknown']) &&
+      arrEq(selectValues(sp), ['__all__', '1H', '2H', 'FT', 'HT', 'Unknown']) &&
+      selectValues(lp).indexOf('Non-play') === -1 &&
+      selectValues(sp).indexOf('Non-play') === -1;
+  })(), RED_REASON);
+
+ok('M14.7 status line lifecycle: absent at defaults, present while active, gone after Reset',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    if (r.root.querySelector('.ma-filter-status')) return false;
+    setSelect(r, 'key-events', 'label', 'Sub');
+    if (!r.root.querySelector('.ma-filter-status')) return false;
+    clickReset(r, 'key-events');
+    return !r.root.querySelector('.ma-filter-status') &&
+      r.root.querySelectorAll('.ma-key-row').length === 17;
+  })(), RED_REASON);
+
+ok('M14.8 D2-extension: list filtering never changes the cards or any other section (byte-identical outerHTML)',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    const before = sectionSnap(r);
+    setSelect(r, 'key-events', 'label', 'Sub');
+    setSelect(r, 'key-events', 'team', 'our');
+    const after = sectionSnap(r);
+    const keys = Object.keys(before);
+    const changed = keys.filter((k) => before[k] !== after[k]);
+    return arrEq(changed, ['key-events']) &&
+      before.cards === after.cards && before.team === after.team &&
+      before.spatial === after.spatial;
+  })(), RED_REASON);
+
+ok('M14.9 list filtering performs ZERO engine calls (spy; §6/§14.7)',
+  (() => {
+    if (!HAS_UF) return false;
+    const sess = oracleSession();
+    const A = AE.computeMatchAnalytics(sess);
+    const view = AE.computeSpatialView(A, MAD.DEFAULT_SPATIAL_FILTERS);
+    const host = stubHost(sess.squad);
+    let m = 0; let s = 0;
+    const om = AE.computeMatchAnalytics; const os = AE.computeSpatialView;
+    AE.computeMatchAnalytics = function (x) { m++; return om(x); };
+    AE.computeSpatialView = function (a, f) { s++; return os(a, f); };
+    try {
+      const r = renderSession(sess, host, { analytics: A, spatialView: view });
+      setSelect(r, 'key-events', 'label', 'Sub');
+      setSelect(r, 'key-events', 'team', 'our');
+      clickReset(r, 'key-events');
+      return m === 0 && s === 0;
+    } finally {
+      AE.computeMatchAnalytics = om; AE.computeSpatialView = os;
+    }
+  })(), RED_REASON);
+
+ok('M14.10 visible-row seek still works under a filter (§14.7 — behavior identical to Stage 4A)',
+  (() => {
+    if (!HAS_UF) return false;
+    const fs = filterSession();
+    const host = stubHost(fs.squad);
+    const r = renderSession(fs, host);
+    setSelect(r, 'key-events', 'period', '2H');
+    const row6 = r.root.querySelector('.ma-key-row[data-event-id="6"]');
+    const row4 = r.root.querySelector('.ma-key-row[data-event-id="4"]');
+    if (!row6 || !row4) return false;
+    row6.dispatchEvent(new r.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+    row4.dispatchEvent(new r.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+    return arrEq(host.seekLog, [3300, 3000]);
+  })(), RED_REASON);
+
+ok('M14.11 bar state persists across re-render (a bar that resets itself on re-render is a defect)',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    setSelect(r, 'key-events', 'label', 'Sub');
+    setSelect(r, 'key-events', 'team', 'our');   // second change re-renders the section again
+    const lbl = barSelect(r, 'key-events', 'label');
+    const tm = barSelect(r, 'key-events', 'team');
+    const st = r.root.querySelector('.ma-filter-status');
+    return !!lbl && lbl.value === 'Sub' && !!tm && tm.value === 'our' &&
+      !!st && st.textContent === 'Showing 2 of 17' &&
+      lbl.querySelector('option[value="Sub"]').hasAttribute('selected');
+  })(), RED_REASON);
+
+ok('M14.12 programmatic updateFilters list path equals the user path',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r1 = renderSession(oracleSession(), host);
+    const r2 = renderSession(oracleSession(), host);
+    setSelect(r1, 'key-events', 'label', 'Sub');
+    setSelect(r1, 'key-events', 'period', '2H');
+    UF(r2, host, { list: { label: 'Sub', period: '2H' } });
+    const sec1 = r1.root.querySelector('section[data-ma-section="key-events"]');
+    const sec2 = r2.root.querySelector('section[data-ma-section="key-events"]');
+    return sec1.outerHTML === sec2.outerHTML &&
+      r2.model.listFilters.label === 'Sub' && r2.model.listFilters.period === '2H';
+  })(), RED_REASON);
+
+// ===========================================================================
+// MA-M15 — Spatial re-filter re-render (§14.8/§14.5/§14.6)
+// ===========================================================================
+section('MA-M15');
+
+ok('M15.1 the spatial bar renders with the state control ENABLED on a reconciled session (oracle)',
+  (() => {
+    const r = renderSession(oracleSession(), stubHost(oracleSession().squad));
+    const state = barSelect(r, 'spatial', 'state');
+    if (!state) return false;
+    return state.disabled === false &&
+      !r.root.querySelector('.ma-filter-suppressed') &&
+      !r.root.querySelector('.ma-filter-summary');
+  })(), RED_REASON);
+
+ok('M15.2 spatial vocabularies (§14.3): scope canonical+customs, period, sequence from view.sequenceOptions, players from A.players.list via the resolver',
+  (() => {
+    const sess = oracleSession();
+    const A = AE.computeMatchAnalytics(sess);
+    const host = stubHost(sess.squad);
+    const r = renderSession(sess, host);
+    const sc = barSelect(r, 'spatial', 'scope');
+    const pd = barSelect(r, 'spatial', 'period');
+    const sq = barSelect(r, 'spatial', 'sequence');
+    const pl = barSelect(r, 'spatial', 'player');
+    const st = barSelect(r, 'spatial', 'state');
+    if (!sc || !pd || !sq || !pl || !st) return false;
+    return arrEq(selectValues(sc), ['__all__', 'Goal', 'Shot', 'Chance', 'Cross', 'Corner', 'Foul', 'Card', 'Sub', 'Positive Transition', 'Pass', 'Press']) &&
+      arrEq(selectTexts(sc), ['All', 'Goal', 'Shot', 'Chance', 'Cross', 'Corner', 'Foul', 'Card', 'Substitution', 'Positive Transition', 'Pass', 'Press']) &&
+      arrEq(selectValues(pd), ['__all__', '1H', '2H']) &&
+      arrEq(selectValues(sq), ['__all__', 'SEQ-001', 'SEQ-002']) &&
+      arrEq(selectValues(st), ['__all__', 'WINNING', 'DRAW', 'LOSING']) &&
+      arrEq(selectValues(pl), ['__all__'].concat(A.players.list.map((p) => p.playerId))) &&
+      selectTexts(pl)[1] === '10 Kebede Tadesse' &&   // All at [0]; A.players.list[0] = player_2
+      selectTexts(pl)[3] === 'Unknown player';         // A.players.list[2] = match_opp_10 (unresolvable)
+  })(), RED_REASON);
+
+ok('M15.3 engine spies: exactly ONE computeSpatialView per change, ZERO computeMatchAnalytics (§14.8)',
+  (() => {
+    if (!HAS_UF) return false;
+    const sess = oracleSession();
+    const A = AE.computeMatchAnalytics(sess);
+    const view = AE.computeSpatialView(A, MAD.DEFAULT_SPATIAL_FILTERS);
+    const host = stubHost(sess.squad);
+    let m = 0; let s = 0;
+    const om = AE.computeMatchAnalytics; const os = AE.computeSpatialView;
+    AE.computeMatchAnalytics = function (x) { m++; return om(x); };
+    AE.computeSpatialView = function (a, f) { s++; return os(a, f); };
+    try {
+      const r = renderSession(sess, host, { analytics: A, spatialView: view });
+      const baseS = s;
+      UF(r, host, { spatial: { team: 'our' } });
+      UF(r, host, { spatial: { team: 'our', period: '1H' } });
+      UF(r, host, { spatial: {} });   // reset through the same pathway
+      return m === 0 && s === baseS + 3;
+    } finally {
+      AE.computeMatchAnalytics = om; AE.computeSpatialView = os;
+    }
+  })(), RED_REASON);
+
+ok('M15.4 traces/dots respect filters: team our → 1 grid, 8 dots, zone trace lists only filtered events; model updated in place',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    setSelect(r, 'spatial', 'team', 'our');
+    const wraps = Array.from(r.root.querySelectorAll('.ma-grid-wrap'));
+    if (wraps.length !== 1 || wraps[0].getAttribute('data-grid-wrap') !== 'grid:scope=all:partition=our') return false;
+    const dots = qsaClass(wraps[0], 'ma-dot');
+    if (dots.length !== 8) return false;
+    const cell = qsaClass(wraps[0], 'ma-zcell').find((c) =>
+      c.getAttribute('data-zone') === 'Attacking third · Left channel');
+    cell.dispatchEvent(new r.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+    const trace = wraps[0].querySelector('.ma-trace');
+    const rows = qsaClass(trace, 'ma-trace-row');
+    const titleOk = trace.querySelector('.ma-trace-title').textContent === 'Attacking third · Left channel — 2 located events';
+    return titleOk && rows.length === 2 &&
+      r.model.spatial.grids.length === 1 &&
+      r.model.spatial.grids[0].id === 'grid:scope=all:partition=our' &&
+      r.model.spatialView.filters.team === 'our';
+  })(), RED_REASON);
+
+ok('M15.5 below-gate null state under filters with the (filtered view) suffix + the max-line suffix (exact strings, §14.6)',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    setSelect(r, 'spatial', 'period', '1H');
+    const wraps = Array.from(r.root.querySelectorAll('.ma-grid-wrap'));
+    if (wraps.length !== 2) return false;
+    const our = wraps[0].querySelector('.ma-grid-insufficient');
+    const opp = wraps[1].querySelector('.ma-grid-insufficient');
+    const ourOk = our && our.textContent === 'Insufficient located events for spatial visualization. (5 located events in this view — see the table below) (filtered view)';
+    const oppOk = opp && opp.textContent === 'Insufficient located events for spatial visualization. (1 located event in this view — see the table below) (filtered view)';
+    const headOk = wraps[0].querySelector('.ma-grid-head').textContent === 'All events — Us · 5/5 located events (100%)' &&
+      wraps[1].querySelector('.ma-grid-head').textContent === 'All events — Opponent · 1/2 located events (50%)';
+    if (!ourOk || !oppOk || !headOk) return false;
+    setSelect(r, 'spatial', 'period', '__all__');
+    setSelect(r, 'spatial', 'team', 'our');
+    const wraps2 = Array.from(r.root.querySelectorAll('.ma-grid-wrap'));
+    const max = wraps2[0].querySelector('.ma-grid-max');
+    return wraps2.length === 1 && !!max &&
+      max.textContent === 'max = 2 (busiest cell) — colour scale is relative to this grid (filtered view)' &&
+      !wraps2[0].querySelector('.ma-grid-insufficient');
+  })(), RED_REASON);
+
+ok('M15.6 determinism: byte-identical double re-render at unchanged filters (§14.9)',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    UF(r, host, { spatial: { team: 'our', period: '1H' } });
+    const sec = r.root.querySelector('section[data-ma-section="spatial"]');
+    const first = sec.outerHTML;
+    UF(r, host, { spatial: { team: 'our', period: '1H' } });
+    const sec2 = r.root.querySelector('section[data-ma-section="spatial"]');
+    return sec2.outerHTML === first;
+  })(), RED_REASON);
+
+ok('M15.7 listeners NOT re-attached: zero new addEventListener across 3 changes; one click = exactly one trace toggle',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    let adds = 0;
+    const origAdd = r.root.addEventListener;
+    r.root.addEventListener = function (t, f, o) { adds++; return origAdd.call(r.root, t, f, o); };
+    try {
+      UF(r, host, { spatial: { team: 'our' } });
+      UF(r, host, { spatial: { team: 'our', period: '1H' } });
+      UF(r, host, { spatial: {} });
+      if (adds !== 0) return false;
+      const wrap = r.root.querySelector('.ma-grid-wrap[data-grid-wrap="grid:scope=all:partition=our"]');
+      const cell = qsaClass(wrap, 'ma-zcell').find((c) =>
+        c.getAttribute('data-zone') === 'Attacking third · Left channel');
+      cell.dispatchEvent(new r.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+      const trace = wrap.querySelector('.ma-trace');
+      return trace.getAttribute('data-open-zone') === 'Attacking third · Left channel';
+    } finally {
+      delete r.root.addEventListener;
+    }
+  })(), RED_REASON);
+
+ok('M15.8 suppression UI (§14.5, engine path with a valid chain — doctored X1 MISMATCH): disabled control + explanation; effective __all__',
+  (() => {
+    if (!HAS_UF) return false;
+    const sess = doctoredOracleSession();
+    const host = stubHost(sess.squad);
+    const r = renderSession(sess, host);
+    let state = barSelect(r, 'spatial', 'state');
+    if (!state || state.disabled !== true) return false;
+    let note = r.root.querySelector('.ma-filter-suppressed');
+    if (!note || note.textContent !== 'Score state filtering unavailable (X1 reconciliation gate): the manual matchInfo score disagrees with the attributed goal chain. The effective score-state filter is All.') return false;
+    UF(r, host, { spatial: { state: 'WINNING' } });   // programmatic attempt under suppression
+    state = barSelect(r, 'spatial', 'state');
+    note = r.root.querySelector('.ma-filter-suppressed');
+    return state.disabled === true && state.value === '__all__' &&
+      r.model.spatialFilters.state === '__all__' &&
+      !!note && !r.root.querySelector('.ma-filter-summary');
+  })(), RED_REASON);
+
+ok('M15.9 updateFilters blast radius (§14.8c): spatial-only, list-only, and both — never any other section',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    const snap1 = sectionSnap(r);
+    UF(r, host, { spatial: { team: 'our' } });
+    const snap2 = sectionSnap(r);
+    if (!arrEq(Object.keys(snap1).filter((k) => snap1[k] !== snap2[k]), ['spatial'])) return false;
+    UF(r, host, { list: { label: 'Sub' } });
+    const snap3 = sectionSnap(r);
+    if (!arrEq(Object.keys(snap2).filter((k) => snap2[k] !== snap3[k]), ['key-events'])) return false;
+    UF(r, host, { spatial: { team: 'our', period: '1H' }, list: { label: 'Sub', team: 'our' } });
+    const snap4 = sectionSnap(r);
+    const step3 = Object.keys(snap3).filter((k) => snap3[k] !== snap4[k]);
+    return step3.length === 2 && step3.indexOf('spatial') !== -1 && step3.indexOf('key-events') !== -1 &&
+      arrEq(step3.slice().sort(), ['key-events', 'spatial']) &&   // DOM order, compared order-free
+      snap4.cards === snap1.cards;
+  })(), RED_REASON);
+
+ok('M15.10 context stating (§14.6): summary, banner, unattributed note, suffixes — present under filters, absent at defaults',
+  (() => {
+    if (!HAS_UF) return false;
+    const host = stubHost(oracleSession().squad);
+    const r = renderSession(oracleSession(), host);
+    if (r.root.querySelector('.ma-filter-banner') || r.root.querySelector('.ma-filter-note')) return false;
+    setSelect(r, 'spatial', 'team', 'our');
+    const sum = r.root.querySelector('.ma-filter-summary');
+    const ban = r.root.querySelector('.ma-filter-banner');
+    const note = r.root.querySelector('.ma-filter-note');
+    if (!sum || sum.textContent !== 'Active filters: Team Us') return false;
+    if (!ban || ban.textContent !== 'Spatial filters active — all other sections remain whole-match.') return false;
+    if (!note || note.textContent !== 'Unattributed events (no Us/Opponent attribution) are excluded from all spatial grids; there is no option to view them spatially.') return false;
+    setSelect(r, 'spatial', 'period', '1H');
+    const sum2 = r.root.querySelector('.ma-filter-summary');
+    if (!sum2 || sum2.textContent !== 'Active filters: Team Us · Period 1H') return false;
+    setSelect(r, 'spatial', 'period', '__all__');
+    setSelect(r, 'spatial', 'team', '__all__');
+    return !r.root.querySelector('.ma-filter-summary') &&
+      !r.root.querySelector('.ma-filter-banner') &&
+      !r.root.querySelector('.ma-filter-note');
+  })(), RED_REASON);
 
 // ---------------------------------------------------------------------------
 // Epilogue — suite structural law (spec §10)

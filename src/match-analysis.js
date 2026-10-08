@@ -1,7 +1,7 @@
-// PitchLog / MatchTag — MATCH ANALYSIS DASHBOARD (Stage 4A) V1
+// PitchLog / MatchTag — MATCH ANALYSIS DASHBOARD (Stage 4A + Stage 4B filtering)
 // =====================================================================
 // File: src/match-analysis.js
-// Spec: docs/match-analysis-dashboard-specification.md (V1.1 — AUTHORITATIVE).
+// Spec: docs/match-analysis-dashboard-specification.md (V2.0 — AUTHORITATIVE).
 //
 // A dedicated, full-view, READ-ONLY analytical projection of the tagged
 // match data of one session. The dashboard is a PURE CONSUMER of the
@@ -55,6 +55,19 @@
 //       comes from the named engine structure or session metadata (§13.10
 //       sourcing law); a null ratio renders not-applicable ("n/a") per
 //       metric spec P5, never as 0.
+//   §14 (V2.0) Interactive filtering. Two bars only (spatial: six selects +
+//       Reset; key-events: three selects + Reset), per-open state at
+//       '__all__' defaults, applied immediately. List filtering is a pure
+//       DOM projection of the retained model (ZERO engine calls); a spatial
+//       change runs computeSpatialView exactly once (the only engine call)
+//       and re-renders only the spatial section, preserving the §8
+//       delegation (listeners live on the root; never re-attached). Bars
+//       always reflect the ACTIVE filters; suppression (stateFilterSuppressed
+//       → X1 MISMATCH) disables the state control with a visible explanation
+//       and the effective '__all__'. Context stating: ' (filtered view)'
+//       suffix on the insufficient/max lines, active-filter summary, banner,
+//       one static unattributed note. updateFilters is the exported pathway
+//       (same one the module's own change delegation drives).
 //
 // UMD: window.MatchAnalysisDashboard in the renderer (loaded AFTER the
 // engine family, BEFORE renderer.js), module.exports in Node (tests).
@@ -104,14 +117,26 @@
   // 'Positive Transition' renders verbatim (no expansion, no abbreviation).
   var DISPLAY_LABELS = { 'Sub': 'Substitution' };
 
-  // §6 + §13.6: the dashboard renders with fixed default filters (§1 —
-  // interactive filtering is Stage 4B). These are the engine's own
-  // documented filter defaults (computeSpatialView normalizes every
-  // missing filter to '__all__', analytics.js:1432-1441).
+  // §6 + §13.6 + §14.2: the engine's own documented filter defaults —
+  // every fresh render/open starts here (per-open only; §14.2).
+  // computeSpatialView normalizes every missing filter to '__all__'
+  // (analytics.js:1432-1441).
   var DEFAULT_SPATIAL_FILTERS = {
     scope: '__all__', team: '__all__', period: '__all__',
     state: '__all__', sequence: '__all__', player: '__all__'
   };
+
+  // §14.2: list filter defaults — no filter.
+  var DEFAULT_LIST_FILTERS = { label: '__all__', team: '__all__', period: '__all__' };
+
+  // §14.3/§14.5/§14.6: the fixed bar vocabularies and the four pinned
+  // context strings (recorded in spec §10 at completion).
+  var TEAM_BAR_OPTIONS = [{ v: 'our', t: 'Us' }, { v: 'opponent', t: 'Opponent' }];
+  var STATE_BAR_OPTIONS = [{ v: 'WINNING', t: 'WINNING' }, { v: 'DRAW', t: 'DRAW' }, { v: 'LOSING', t: 'LOSING' }];
+  var FILTER_BANNER_TEXT = 'Spatial filters active — all other sections remain whole-match.';
+  var FILTER_SUPPRESSED_TEXT = 'Score state filtering unavailable (X1 reconciliation gate): the manual matchInfo score disagrees with the attributed goal chain. The effective score-state filter is All.';
+  var UNATTRIBUTED_NOTE_TEXT = 'Unattributed events (no Us/Opponent attribution) are excluded from all spatial grids; there is no option to view them spatially.';
+  var FILTERED_VIEW_SUFFIX = ' (filtered view)';
 
   // §3: the app-wide shared pitch geometry (every pitch view in the app
   // uses the 700×450 viewBox with normalized x*700 / y*450 mapping). The
@@ -319,6 +344,120 @@
 
   function secText(v) {
     return typeof v === 'number' && isFinite(v) ? String(v) + 's' : RATIO_NA;
+  }
+
+  // ---- §14 filter helpers (V2.0) ------------------------------------------
+
+  // §14.3 scope vocabulary: event labels present in the session — canonical
+  // order first (the nine qualifying labels), then sorted customs.
+  function buildScopeOptions(session) {
+    var src = Array.isArray(session && session.events) ? session.events : [];
+    var present = {};
+    for (var i = 0; i < src.length; i++) {
+      var ev = src[i];
+      if (isPlainObject(ev) && typeof ev.label === 'string' && ev.label) {
+        present[ev.label] = true;
+      }
+    }
+    var out = [];
+    for (var j = 0; j < KEY_EVENT_LABELS.length; j++) {
+      if (present[KEY_EVENT_LABELS[j]]) out.push(KEY_EVENT_LABELS[j]);
+    }
+    var customs = Object.keys(present).sort();
+    for (var k = 0; k < customs.length; k++) {
+      if (KEY_EVENT_LABELS.indexOf(customs[k]) === -1) out.push(customs[k]);
+    }
+    return out;
+  }
+
+  // §14.3 period vocabulary: distinct RAW rec.period values from the
+  // A.spatial records (located + unlocated), ordered by the engine's own
+  // canonical period order (the byPeriod key order — the engine's output is
+  // the source, never a second copy), with unknown/extra values after
+  // (alphabetical, 'Unknown' included when present). byPeriod bucket names
+  // ('Non-play') are FORBIDDEN as filter values — never offered, even if a
+  // record literally carries one.
+  function buildPeriodOptions(A) {
+    var SP = A && A.spatial;
+    if (!SP) return [];
+    var recs = (Array.isArray(SP.locatedEvents) ? SP.locatedEvents : [])
+      .concat(Array.isArray(SP.unlocatedEvents) ? SP.unlocatedEvents : []);
+    var present = {};
+    for (var i = 0; i < recs.length; i++) {
+      var r = recs[i];
+      if (r && typeof r.period === 'string' && r.period && r.period !== 'Non-play') {
+        present[r.period] = true;
+      }
+    }
+    var byPeriod = (A && A.level3 && isPlainObject(A.level3.byPeriod)) ? A.level3.byPeriod : {};
+    var order = Object.keys(byPeriod);
+    var head = [];
+    var inHead = {};
+    for (var j = 0; j < order.length; j++) {
+      var p = order[j];
+      if (p === 'Non-play' || p === 'Unknown') continue;   // bucket name / tail group
+      if (present[p]) { head.push(p); inHead[p] = true; }
+    }
+    var tail = Object.keys(present).sort();
+    var out = head.slice();
+    for (var k = 0; k < tail.length; k++) {
+      if (!inHead[tail[k]]) out.push(tail[k]);
+    }
+    return out;
+  }
+
+  // §14.7: list filters are module-side predicates on row fields. Period
+  // compares the RAW row.event.period (undefined → 'Unknown') — never
+  // byPeriod bucket names.
+  function listRowPeriod(row) {
+    var p = row && row.event ? row.event.period : undefined;
+    return (p === undefined || p === null) ? 'Unknown' : String(p);
+  }
+
+  function listRowMatches(row, f) {
+    if (f.label !== '__all__' && row.label !== f.label) return false;
+    if (f.team !== '__all__' && row.team !== f.team) return false;  // team-null rows visible only under All
+    if (f.period !== '__all__' && listRowPeriod(row) !== f.period) return false;
+    return true;
+  }
+
+  function listFiltersActive(f) {
+    return f.label !== '__all__' || f.team !== '__all__' || f.period !== '__all__';
+  }
+
+  function spatialFiltersNonDefault(f) {
+    return f.scope !== '__all__' || f.team !== '__all__' || f.period !== '__all__' ||
+      f.state !== '__all__' || f.sequence !== '__all__' || f.player !== '__all__';
+  }
+
+  function copySpatialFilters(f) {
+    return {
+      scope: f.scope, team: f.team, period: f.period,
+      state: f.state, sequence: f.sequence, player: f.player
+    };
+  }
+
+  function copyListFilters(f) {
+    return { label: f.label, team: f.team, period: f.period };
+  }
+
+  function normalizeSpatialFilters(f) {
+    f = isPlainObject(f) ? f : {};
+    var s = function (v) { return typeof v === 'string' && v ? v : '__all__'; };
+    var out = {
+      scope: s(f.scope), team: s(f.team), period: s(f.period),
+      state: s(f.state), sequence: s(f.sequence), player: s(f.player)
+    };
+    if (out.team !== 'our' && out.team !== 'opponent') out.team = '__all__';
+    return out;
+  }
+
+  function normalizeListFilters(f) {
+    f = isPlainObject(f) ? f : {};
+    var s = function (v) { return typeof v === 'string' && v ? v : '__all__'; };
+    var out = { label: s(f.label), team: s(f.team), period: s(f.period) };
+    if (out.team !== 'our' && out.team !== 'opponent') out.team = '__all__';
+    return out;
   }
 
   // ---- Model builders (pure projections; §2, §13.10) ----------------------
@@ -756,6 +895,11 @@
       analytics: A,
       spatialView: view,
       minSampleForDensity: minSample,
+      // §14.2: per-open filter state — fresh defaults on every model (never
+      // shared mutable state across opens), plus the scope vocabulary.
+      spatialFilters: copySpatialFilters(DEFAULT_SPATIAL_FILTERS),
+      listFilters: copyListFilters(DEFAULT_LIST_FILTERS),
+      scopeOptions: buildScopeOptions(session),
       header: buildHeaderModel(session, A),
       cards: buildCardsModel(A),
       keyEvents: buildKeyEventsModel(session, host),
@@ -828,38 +972,84 @@
     return html;
   }
 
-  // §5 + §13.3: the chronological list. One row per qualifying key event,
-  // in match order. The list's length is never displayed as a metric.
-  function buildKeyListHtml(model) {
-    var html = sectionOpen('key-events')
-      + sectionTitle('Key events — chronological')
-      + '<div class="ma-keylist">';
-    if (model.keyEvents.empty) {
+  // §5 + §13.3 + §14: the chronological list. One row per qualifying key
+  // event, in match order, optionally filtered by the §14.7 predicates (a
+  // pure DOM projection — zero engine calls). The list's length is never
+  // displayed as a metric; the ONLY count surface is the §5 V2.0 filter
+  // status line ('Showing N of M'), which exists only while a list filter is
+  // active and is never a card or standalone number.
+  function keyRowMarkup(r) {
+    return '<button type="button" class="ma-key-row"'
+      + ' data-event-id="' + countText(r.eventId) + '"'
+      + ' data-label="' + escapeHtml(r.label) + '"'
+      + ' data-videotime="' + (isFinNum(r.videoTime) ? escapeHtml(String(r.videoTime)) : '') + '"'
+      + ' data-time="' + (isFinNum(r.time) ? escapeHtml(String(roundHalfUp1(r.time))) : '') + '">'
+      + '<span class="ma-key-time">' + escapeHtml(String(roundHalfUp1(r.time)) + 's') + '</span>'
+      + '<span class="ma-key-label">' + escapeHtml(r.displayLabel) + '</span>'
+      + '<span class="ma-key-team">' + escapeHtml(teamLabelOf(r.team)) + '</span>'
+      + '<span class="ma-key-player">' + escapeHtml(r.playerText || '—') + '</span>'
+      + '</button>';
+  }
+
+  // §14.1/§14.3: the key-events filter bar — Class (display form, raw value),
+  // Team (All/Us/Opponent), Period (the same source as spatial period) +
+  // Reset. While a list filter is active the bar renders exactly one status
+  // line 'Showing N of M' (§5 V2.0).
+  function buildListFilterBar(model) {
+    var f = model.listFilters;
+    var periodOpts = buildPeriodOptions(model.analytics);
+    var periodBar = [];
+    for (var i = 0; i < periodOpts.length; i++) periodBar.push({ v: periodOpts[i], t: periodOpts[i] });
+    var classBar = [];
+    for (var c = 0; c < KEY_EVENT_LABELS.length; c++) {
+      classBar.push({ v: KEY_EVENT_LABELS[c], t: displayLabelOf(KEY_EVENT_LABELS[c]) });
+    }
+    var html = '<div class="ma-filter-bar" data-bar="key-events">'
+      + '<label class="ma-filter-field">Class ' + filterSelectMarkup('key-events', 'label', f.label, classBar, false) + '</label>'
+      + '<label class="ma-filter-field">Team ' + filterSelectMarkup('key-events', 'team', f.team, TEAM_BAR_OPTIONS, false) + '</label>'
+      + '<label class="ma-filter-field">Period ' + filterSelectMarkup('key-events', 'period', f.period, periodBar, false) + '</label>'
+      + '<button type="button" class="ma-filter-reset" data-bar="key-events">Reset</button>';
+    if (listFiltersActive(f)) {
+      var shown = model.keyEvents.rows.filter(function (row) { return listRowMatches(row, f); }).length;
+      html += '<div class="ma-filter-status">Showing ' + shown + ' of ' + model.keyEvents.rows.length + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function buildKeyListInner(model) {
+    var html = buildListFilterBar(model);
+    html += '<div class="ma-keylist">';
+    var f = model.listFilters;
+    if (listFiltersActive(f)) {
+      // §5 V2.0 case (2): filters active and zero matches.
+      var rows = model.keyEvents.rows.filter(function (row) { return listRowMatches(row, f); });
+      if (!rows.length) {
+        html += '<div class="ma-key-empty">No key events match the current filters.</div>';
+      } else {
+        for (var i = 0; i < rows.length; i++) html += keyRowMarkup(rows[i]);
+      }
+    } else if (model.keyEvents.empty) {
       // Empty state enumerates the classes in display form (§5).
       var names = [];
-      for (var i = 0; i < KEY_EVENT_LABELS.length; i++) {
-        names.push(displayLabelOf(KEY_EVENT_LABELS[i]));
+      for (var n = 0; n < KEY_EVENT_LABELS.length; n++) {
+        names.push(displayLabelOf(KEY_EVENT_LABELS[n]));
       }
       html += '<div class="ma-key-empty">No qualifying key events. The list shows: '
         + escapeHtml(names.join(', ')) + '.</div>';
     } else {
-      var rows = model.keyEvents.rows;
-      for (var j = 0; j < rows.length; j++) {
-        var r = rows[j];
-        html += '<button type="button" class="ma-key-row"'
-          + ' data-event-id="' + countText(r.eventId) + '"'
-          + ' data-label="' + escapeHtml(r.label) + '"'
-          + ' data-videotime="' + (isFinNum(r.videoTime) ? escapeHtml(String(r.videoTime)) : '') + '"'
-          + ' data-time="' + (isFinNum(r.time) ? escapeHtml(String(roundHalfUp1(r.time))) : '') + '">'
-          + '<span class="ma-key-time">' + escapeHtml(String(roundHalfUp1(r.time)) + 's') + '</span>'
-          + '<span class="ma-key-label">' + escapeHtml(r.displayLabel) + '</span>'
-          + '<span class="ma-key-team">' + escapeHtml(teamLabelOf(r.team)) + '</span>'
-          + '<span class="ma-key-player">' + escapeHtml(r.playerText || '—') + '</span>'
-          + '</button>';
-      }
+      var all = model.keyEvents.rows;
+      for (var j = 0; j < all.length; j++) html += keyRowMarkup(all[j]);
     }
-    html += '</div></section>';
+    html += '</div>';
     return html;
+  }
+
+  function buildKeyListHtml(model) {
+    return sectionOpen('key-events')
+      + sectionTitle('Key events — chronological')
+      + buildKeyListInner(model)
+      + '</section>';
   }
 
   // §13.4: team summary & performance.
@@ -1149,15 +1339,98 @@
     return html;
   }
 
-  function buildSpatialHtml(model, host) {
-    var html = sectionOpen('spatial')
-      + sectionTitle('Spatial analysis — tagged event density (3×3)');
+  // §14.1: a native <select> for a filter bar. Reflects the ACTIVE value on
+  // every render (the §14.2 re-render rule: a rebuilt section keeps its
+  // chosen values — the 'selected' option is the current filter state).
+  function filterSelectMarkup(bar, key, value, options, disabled) {
+    var html = '<select class="ma-filter-select" data-bar="' + bar + '" data-filter="' + key + '"'
+      + (disabled ? ' disabled' : '') + '>';
+    html += '<option value="__all__"' + (value === '__all__' ? ' selected' : '') + '>All</option>';
+    for (var i = 0; i < options.length; i++) {
+      html += '<option value="' + escapeHtml(options[i].v) + '"'
+        + (value === options[i].v ? ' selected' : '') + '>'
+        + escapeHtml(options[i].t) + '</option>';
+    }
+    html += '</select>';
+    return html;
+  }
+
+  // §14.6: the human-readable active-filter summary (bar order; only the
+  // non-default values).
+  function spatialSummaryText(model) {
+    var f = model.spatialFilters;
+    var parts = [];
+    if (f.scope !== '__all__') parts.push('Scope ' + displayLabelOf(f.scope));
+    if (f.team !== '__all__') parts.push('Team ' + (f.team === 'our' ? 'Us' : 'Opponent'));
+    if (f.period !== '__all__') parts.push('Period ' + f.period);
+    if (f.state !== '__all__') parts.push('Score state ' + f.state);
+    if (f.sequence !== '__all__') parts.push('Sequence ' + f.sequence);
+    if (f.player !== '__all__') {
+      var label = 'Unknown player';
+      var rows = model.players.rows;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].playerId === f.player) { label = rows[i].label; break; }
+      }
+      parts.push('Player ' + label);
+    }
+    return 'Active filters: ' + parts.join(' · ');
+  }
+
+  // §14.1/§14.3: the spatial filter bar — six selects + Reset, always
+  // reflecting the ACTIVE filters (§14.2). Under suppression (§14.5) the
+  // Score state control renders DISABLED with the effective '__all__'.
+  function buildSpatialFilterBar(model) {
+    var f = model.spatialFilters;
+    var view = model.spatialView;
+    var suppressed = !!(view && view.stateFilterSuppressed);
+    var scopeBar = [];
+    for (var i = 0; i < model.scopeOptions.length; i++) {
+      scopeBar.push({ v: model.scopeOptions[i], t: displayLabelOf(model.scopeOptions[i]) });
+    }
+    var periodOpts = buildPeriodOptions(model.analytics);
+    var periodBar = [];
+    for (var p = 0; p < periodOpts.length; p++) periodBar.push({ v: periodOpts[p], t: periodOpts[p] });
+    var seqSource = (view && Array.isArray(view.sequenceOptions)) ? view.sequenceOptions : [];
+    var seqBar = [];
+    for (var q = 0; q < seqSource.length; q++) seqBar.push({ v: seqSource[q], t: seqSource[q] });
+    var playerBar = [];
+    var prows = model.players.rows;
+    for (var r = 0; r < prows.length; r++) playerBar.push({ v: prows[r].playerId, t: prows[r].label });
+    return '<div class="ma-filter-bar" data-bar="spatial">'
+      + '<label class="ma-filter-field">Scope ' + filterSelectMarkup('spatial', 'scope', f.scope, scopeBar, false) + '</label>'
+      + '<label class="ma-filter-field">Team ' + filterSelectMarkup('spatial', 'team', f.team, TEAM_BAR_OPTIONS, false) + '</label>'
+      + '<label class="ma-filter-field">Period ' + filterSelectMarkup('spatial', 'period', f.period, periodBar, false) + '</label>'
+      + '<label class="ma-filter-field">Score state ' + filterSelectMarkup('spatial', 'state', suppressed ? '__all__' : f.state, STATE_BAR_OPTIONS, suppressed) + '</label>'
+      + '<label class="ma-filter-field">Sequence ' + filterSelectMarkup('spatial', 'sequence', f.sequence, seqBar, false) + '</label>'
+      + '<label class="ma-filter-field">Player ' + filterSelectMarkup('spatial', 'player', f.player, playerBar, false) + '</label>'
+      + '<button type="button" class="ma-filter-reset" data-bar="spatial">Reset</button>'
+      + '</div>';
+  }
+
+  function buildSpatialInner(model, host) {
+    var f = model.spatialFilters;
+    var view = model.spatialView;
+    var suppressed = !!(view && view.stateFilterSuppressed);
+    var nonDefault = spatialFiltersNonDefault(f);
+    var html = buildSpatialFilterBar(model);
+    if (suppressed) {
+      // §14.5: never silent — disabled control + visible explanation naming
+      // the X1 reconciliation gate.
+      html += '<div class="ma-filter-suppressed">' + escapeHtml(FILTER_SUPPRESSED_TEXT) + '</div>';
+    }
+    if (nonDefault) {
+      // §14.6 context stating: summary, the whole-match banner, and the one
+      // static unattributed note (§12.4).
+      html += '<div class="ma-filter-summary">' + escapeHtml(spatialSummaryText(model)) + '</div>';
+      html += '<div class="ma-filter-banner">' + escapeHtml(FILTER_BANNER_TEXT) + '</div>';
+      html += '<div class="ma-filter-note">' + escapeHtml(UNATTRIBUTED_NOTE_TEXT) + '</div>';
+    }
     var grids = model.spatial.grids;
     if (!grids.length) {
       html += '<div class="ma-note">Spatial data unavailable.</div>';
-      html += '</section>';
       return html;
     }
+    var suffix = nonDefault ? FILTERED_VIEW_SUFFIX : '';
     var cellKeys = model.periods.cellKeys;
     for (var i = 0; i < grids.length; i++) {
       var g = grids[i] || {};
@@ -1179,10 +1452,10 @@
         // printed counts — the numeric table below still renders.
         html += '<div class="ma-grid-insufficient">Insufficient located events for spatial'
           + ' visualization. (' + located + ' located event' + (located === 1 ? '' : 's')
-          + ' in this view — see the table below)</div>';
+          + ' in this view — see the table below)' + suffix + '</div>';
       } else {
         html += '<div class="ma-grid-max">max = ' + built.maxCount
-          + ' (busiest cell) — colour scale is relative to this grid</div>';
+          + ' (busiest cell) — colour scale is relative to this grid' + suffix + '</div>';
       }
       if (unlocated > 0) {
         html += '<div class="ma-unloc-strip">Unlocated: ' + unlocated
@@ -1194,8 +1467,14 @@
       html += buildGridNumericTable(g, cellKeys);
       html += '</div>';
     }
-    html += '</section>';
     return html;
+  }
+
+  function buildSpatialHtml(model, host) {
+    return sectionOpen('spatial')
+      + sectionTitle('Spatial analysis — tagged event density (3×3)')
+      + buildSpatialInner(model, host)
+      + '</section>';
   }
 
   // §13.7: player analysis.
@@ -1358,6 +1637,52 @@
     }
   }
 
+  // ---- §14 filter application (V2.0) ----------------------------------------
+
+  // Re-render ONE section's contents. The section element itself persists;
+  // the §8 delegation lives on the root element and is NEVER re-attached
+  // (§14.8d).
+  function reRenderSection(rootEl, key, buildInner) {
+    var sec = rootEl ? rootEl.querySelector('section[data-ma-section="' + key + '"]') : null;
+    if (!sec) return;
+    sec.innerHTML = buildInner();
+  }
+
+  // A spatial change: computeSpatialView is the ONLY engine call (§14.8a);
+  // the model's spatial view + grids are updated in place (§14.8b); ONLY the
+  // spatial section re-renders (§14.8c). Under suppression the effective
+  // state is '__all__' (§14.5) — the stored state is kept honest, never
+  // silently non-default.
+  function applySpatialFilters(rootEl, model, host, next) {
+    model.spatialFilters = normalizeSpatialFilters(next);
+    var view = AnalyticsEngine.computeSpatialView(model.analytics, model.spatialFilters);
+    if (view && view.stateFilterSuppressed && model.spatialFilters.state !== '__all__') {
+      model.spatialFilters.state = '__all__';
+    }
+    model.spatialView = view;
+    model.spatial.grids = (view && Array.isArray(view.grids)) ? view.grids : [];
+    reRenderSection(rootEl, 'spatial', function () { return buildSpatialInner(model, host); });
+  }
+
+  // A list change: ZERO engine calls — a pure DOM projection of the retained
+  // model (§14.7); ONLY the key-events section re-renders.
+  function applyListFilters(rootEl, model, next) {
+    model.listFilters = normalizeListFilters(next);
+    reRenderSection(rootEl, 'key-events', function () { return buildKeyListInner(model); });
+  }
+
+  // §14.8 MODULE API: the exported re-render entry point — the same pathway
+  // the module's own change/reset delegation drives. Given the root element,
+  // the per-open model, the host, and new filter sets, it applies whichever
+  // is present (spatial and/or list), never any other section, never any
+  // other engine work, and never mutates A or the session.
+  function updateFilters(rootEl, model, host, sets) {
+    if (!rootEl || !model) return;
+    sets = isPlainObject(sets) ? sets : {};
+    if (sets.spatial !== undefined) applySpatialFilters(rootEl, model, host, sets.spatial);
+    if (sets.list !== undefined) applyListFilters(rootEl, model, sets.list);
+  }
+
   // ---- Entry point (§2, §6) ------------------------------------------------
 
   // renderAnalysis(container, session, host, precomputed?) — attaches the
@@ -1389,13 +1714,24 @@
     while (container.firstChild) container.removeChild(container.firstChild);
     container.appendChild(rootEl);
 
-    // §8 interaction wiring — delegation only, one shared activation
-    // function for zone cells, preventDefault on Enter/Space and NO
-    // stopPropagation (Space propagation to the global play/pause handler
-    // is accepted, spec §12.1).
+    // §8 interaction wiring + §14 filter wiring — delegation only, one shared
+    // activation function for zone cells, preventDefault on Enter/Space and
+    // NO stopPropagation (Space propagation to the global play/pause handler
+    // is accepted, spec §12.1). Filter changes ride the SAME root listeners
+    // (change/reset alongside click/keydown) — they are attached ONCE per
+    // render and never re-attached by re-renders (§14.8d).
     rootEl.addEventListener('click', function (e) {
       var t = e.target;
       if (!t || typeof t.closest !== 'function') return;
+      var resetBtn = t.closest('.ma-filter-reset');
+      if (resetBtn) {
+        // §14.2: Reset restores that bar's defaults and re-renders only that
+        // bar's section.
+        var bar = resetBtn.getAttribute('data-bar');
+        if (bar === 'spatial') applySpatialFilters(rootEl, model, host, DEFAULT_SPATIAL_FILTERS);
+        else if (bar === 'key-events') applyListFilters(rootEl, model, DEFAULT_LIST_FILTERS);
+        return;
+      }
       var zoneCell = t.closest('.ma-zcell');
       if (zoneCell) {
         zoneCellActivate(zoneCell, rootEl, model, host);
@@ -1415,6 +1751,30 @@
       zoneCellActivate(zoneCell, rootEl, model, host);
     });
 
+    // §14.2: filter changes apply immediately (no Apply button) through the
+    // same apply pathway as updateFilters.
+    rootEl.addEventListener('change', function (e) {
+      var t = e.target;
+      if (!t || typeof t.closest !== 'function') return;
+      var sel = t.closest('.ma-filter-select');
+      if (!sel) return;
+      var bar = sel.getAttribute('data-bar');
+      var key = sel.getAttribute('data-filter');
+      var val = typeof sel.value === 'string' ? sel.value : '__all__';
+      if (bar === 'spatial' && key) {
+        // A disabled control never changes (§14.5; defense-in-depth — the
+        // select is disabled, so user changes cannot originate from it).
+        if (key === 'state' && model.spatialView && model.spatialView.stateFilterSuppressed) return;
+        var nextS = copySpatialFilters(model.spatialFilters);
+        nextS[key] = val;
+        applySpatialFilters(rootEl, model, host, nextS);
+      } else if (bar === 'key-events' && key) {
+        var nextL = copyListFilters(model.listFilters);
+        nextL[key] = val;
+        applyListFilters(rootEl, model, nextL);
+      }
+    });
+
     return model;
   }
 
@@ -1427,7 +1787,9 @@
     KEY_EVENT_LABELS: KEY_EVENT_LABELS.slice(),
     DISPLAY_LABELS: DISPLAY_LABELS,
     DEFAULT_SPATIAL_FILTERS: DEFAULT_SPATIAL_FILTERS,
+    DEFAULT_LIST_FILTERS: DEFAULT_LIST_FILTERS,
     buildModel: buildModel,
-    renderAnalysis: renderAnalysis
+    renderAnalysis: renderAnalysis,
+    updateFilters: updateFilters
   };
 });
