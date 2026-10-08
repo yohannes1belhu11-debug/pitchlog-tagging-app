@@ -591,7 +591,10 @@ body.topbar-hidden .topbar-restore { display: flex; }
 .tagpanel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* Workspace declutter (item 2): the TAG EVENTS label + hint sentence
+     were removed; the header now hosts only the functional Undo control,
+     which keeps its familiar right-end position (flex-end). */
+  justify-content: flex-end;
   gap: 12px;
   margin-bottom: 10px;
   flex-shrink: 0;
@@ -599,24 +602,10 @@ body.topbar-hidden .topbar-restore { display: flex; }
   row-gap: 6px;
 }
 
-.tagpanel-header-text {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--text-dim);
-  min-width: 0;
-}
-
-.tagpanel-header-text .hint {
-  font-weight: 400;
-  letter-spacing: normal;
-  font-size: 11px;
-  color: #5f6267;
-}
+/* (Workspace declutter, item 2: the .tagpanel-header-text and
+   .tagpanel-header-text .hint rules were REMOVED together with their
+   now-dead markup — the TAG EVENTS label and the shortcut/•/⏱ hint
+   sentence.) */
 
 .btn-undo {
   flex-shrink: 0;
@@ -787,13 +776,14 @@ body.topbar-hidden .topbar-restore { display: flex; }
   white-space: nowrap;
 }
 
-/* R2-E Phase 3A: the Add-tag button now sits directly under the TAG
-   EVENTS header (always visible, above the scrollable grid) instead of
-   below the grid where an overflowing tag set used to cut it off. */
+/* Workspace declutter (item 4): the Add-tag button MOVED to the top
+   control bar — a small compact control immediately right of the Video
+   Offset "Set" button (btn-sm provides the compact sizing; margin-left
+   gives it a touch of separation from the sync cluster). The old
+   full-width tag-bar styling is gone. flex-shrink: 0 keeps it fully
+   visible in the fixed matchday bar (SCROLL-1g). */
 .btn-add-custom {
-  margin: 0 0 10px;
-  width: 100%;
-  padding: 8px;
+  margin-left: 8px;
   flex-shrink: 0;
 }
 

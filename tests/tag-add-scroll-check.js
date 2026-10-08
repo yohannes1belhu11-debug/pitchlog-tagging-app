@@ -217,7 +217,7 @@ function fillModal(doc, opts) {
       'display=' + decl(tagpanelRule, 'display') + ' flex=' + decl(tagpanelRule, 'flex') + ' min-height=' + decl(tagpanelRule, 'min-height'));
     ok('SCROLL-1f: tag grid container declares min-height: 0 (can shrink below its content — the scroll precondition)',
       decl(gridRules, 'min-height') === '0', 'min-height=' + decl(gridRules, 'min-height'));
-    ok('SCROLL-1g: the TAG EVENTS header and the Add New Tag button are pinned (flex-shrink: 0 — always fully visible)',
+    ok('SCROLL-1g: the TAG EVENTS header (undo control) and the Add New Tag button (now in the matchday bar — declutter) are pinned (flex-shrink: 0 — always fully visible)',
       decl(headerRule, 'flex-shrink') === '0' && decl(addBtnRule, 'flex-shrink') === '0',
       'header=' + decl(headerRule, 'flex-shrink') + ' addBtn=' + decl(addBtnRule, 'flex-shrink'));
 
@@ -266,12 +266,27 @@ function fillModal(doc, opts) {
       !!btn && btn.tagName === 'BUTTON', 'found=' + !!btn);
     ok('ADD-1b: labelled "+ Add New Tag" (visible text, no icon-only mystery button)',
       !!btn && btn.textContent.trim() === '+ Add New Tag', JSON.stringify(btn && btn.textContent.trim()));
-    ok('ADD-1c: lives INSIDE the TAG EVENTS panel, BETWEEN the header and the grid (never scrolled away below the grid)',
-      !!btn && btn.parentElement === header.parentElement &&
-      btn.parentElement.classList.contains('tagpanel') &&
-      btn.nextElementSibling === grid &&
-      !!(header.compareDocumentPosition(btn) & doc.defaultView.Node.DOCUMENT_POSITION_FOLLOWING),
-      'parent=.tagpanel next=#' + (btn && btn.nextElementSibling && btn.nextElementSibling.id));
+    // DECLUTTER (item 4): the control MOVED to the top control bar — a
+    // small compact button immediately right of the Video Offset "Set"
+    // button (the user's annotated arrow). This is a MOVE, not a copy.
+    // The pinned intent of the original R2-E placement (ALWAYS VISIBLE,
+    // never scrolled away below the grid) is preserved — indeed
+    // strengthened: the matchday bar is fixed chrome (flex-shrink: 0,
+    // pinned by SCROLL-1d in workspace-ui-check.js); it cannot scroll at
+    // all. The TAG EVENTS panel keeps its header (the undo control's
+    // home — btnUndo is functional and stays; see the declutter report).
+    const setBtn = doc.getElementById('btnSetOffset');
+    ok('ADD-1c: lives in the TOP control bar immediately RIGHT of the Video Offset Set button (declutter MOVE — no copy left in the tag bar; fixed chrome, never scrolled away)',
+      !!btn && !!setBtn &&
+      btn.parentElement === setBtn.parentElement &&
+      btn.parentElement.classList.contains('video-sync-controls') &&
+      btn.previousElementSibling === setBtn &&
+      !!btn.closest('.matchday-bar') &&
+      btn.closest('.tagpanel') === null &&
+      !!header && header.querySelector('#btnUndo') !== null,
+      'parent=' + (btn && btn.parentElement && btn.parentElement.className) +
+      ' prev=' + (btn && btn.previousElementSibling && btn.previousElementSibling.id) +
+      ' stillInTagpanel=' + (btn ? btn.closest('.tagpanel') !== null : 'n/a'));
     ok('ADD-1d: not hidden (no display:none / hidden attribute; no .btn-add-custom display:none rule in CSS)',
       !!btn && btn.style.display !== 'none' && !btn.hasAttribute('hidden') &&
       !/\.btn-add-custom\s*\{[^}]*display\s*:\s*none/.test(CSS), 'ok');

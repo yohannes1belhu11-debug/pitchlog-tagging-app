@@ -541,6 +541,19 @@ const ROSTER = {
     // self-consistent). The svg stub uses clientHeight because the svg
     // is an SVGElement: offsetHeight is an HTMLElement-only API and
     // reads as undefined in real browsers.
+    //
+    // DECLUTTER (workspace declutter, item 1): the cap is additionally
+    // min'd with the HALF-FRAME SHARE LAW — the dock's total height
+    // (svg + chrome) never exceeds 50% of the video frame's height, so
+    // the bottom-anchored dock hugs the bottom-right corner and its top
+    // edge stays at/below the frame's vertical midline: it can never
+    // cover the centre of the video (the reported defect at short video
+    // regions, e.g. 1366x768 layouts). shareCap = frameH/2 - chrome;
+    // the 60px PITCH_DOCK_MIN_SVG_PX floor still applies (degenerate
+    // sub-200px frames may slightly exceed half — D1 still holds). The
+    // anchor itself is unchanged and pinned above (WS-P0x: right/bottom
+    // 12px) — this law only constrains SIZE, never position, grip, or
+    // the boot widths.
     const pane = B.doc.querySelector('.video-pane');
     const transport = B.doc.querySelector('.video-pane .transport');
     const splitter = id('videoTagSplitter');
@@ -560,10 +573,11 @@ const ROSTER = {
       'cap=' + JSON.stringify(capValue()) + ' width=' + dock.style.width);
 
     // Width path: 420px dock inside the 200px-floor frame (the D1 state).
+    // D1 cap = 134; share cap = 100-52 = 48 -> the 60px floor governs.
     stubCapGeometry(200, 322, 270);
     keydown(grip, { key: 'End' });
-    ok('WS-P13: 420px dock in the 200px-floor frame caps the svg at frame-66px (D1)',
-      capValue() === '134px',
+    ok('WS-P13: 420px dock in the 200px-floor frame caps the svg (D1 never overflows; the half-frame share floors at 60px)',
+      capValue() === '60px',
       'cap=' + JSON.stringify(capValue()));
 
     // Splitter path: maximizing the tag area re-derives the cap through
@@ -573,30 +587,41 @@ const ROSTER = {
     definePx(splitter, 'offsetHeight', 10);
     stubCapGeometry(180, 322, 270);
     keydown(splitter, { key: 'End' });
-    ok('WS-P14: splitter End re-derives the cap from the resized frame',
-      capValue() === '114px',
+    ok('WS-P14: splitter End re-derives the cap from the resized frame (share cap 90-52=38 -> 60px floor)',
+      capValue() === '60px',
       'cap=' + JSON.stringify(capValue()));
 
     // Topbar toggle path: hide grows the frame (cap relaxes), restore
     // shrinks it (cap tightens) — both directions recompute.
     stubCapGeometry(600, 322, 270);
     click(id('btnHideTopbar'));
-    ok('WS-P15: hiding the topbar re-derives the relaxed cap',
-      capValue() === '534px', 'cap=' + JSON.stringify(capValue()));
+    ok('WS-P15: hiding the topbar re-derives the relaxed cap (D1 534 vs share 300-52=248 — the share law governs)',
+      capValue() === '248px', 'cap=' + JSON.stringify(capValue()));
     stubCapGeometry(240, 322, 270);
     click(id('btnShowTopbar'));
-    ok('WS-P16: restoring the topbar re-clamps to the smaller frame',
-      capValue() === '174px', 'cap=' + JSON.stringify(capValue()));
+    ok('WS-P16: restoring the topbar re-clamps to the smaller frame (share 120-52=68)',
+      capValue() === '68px', 'cap=' + JSON.stringify(capValue()));
 
     // Window-resize path (re-clamps via both the splitter and the dock).
     stubCapGeometry(200, 322, 270);
     B.win.dispatchEvent(new B.win.Event('resize'));
-    ok('WS-P17: window resize re-derives the cap',
-      capValue() === '134px', 'cap=' + JSON.stringify(capValue()));
+    ok('WS-P17: window resize re-derives the cap (60px floor via the share law)',
+      capValue() === '60px', 'cap=' + JSON.stringify(capValue()));
+
+    // DECLUTTER share law, pinned on its own: at a 480px frame with a
+    // 420px dock, D1 alone would allow 414px — the share law caps the
+    // svg at 240-52=188, keeping the dock TOTAL (188+52=240) at exactly
+    // half the frame: the top edge sits on the midline, never above it.
+    stubCapGeometry(480, 322, 270);
+    keydown(grip, { key: 'End' });
+    ok('WS-P17b: the half-frame share law — the dock total never exceeds 50% of the video frame (480px frame -> svg cap 188 = 240-52 chrome; dock total 240 = half)',
+      capValue() === '188px',
+      'cap=' + JSON.stringify(capValue()));
 
     // Coordinate exactness under the cap: a capped element box letterboxes
-    // exactly as WS-P10 proves for the general case. At 420x134 the drawn
-    // pitch is 208.4px wide and centered; its center maps to (0.5, 0.5).
+    // exactly as WS-P10 proves for the general case. At a 420x134 stubbed
+    // box the drawn pitch is 208.4px wide and centered; its center maps
+    // to (0.5, 0.5).
     const capped = math(420, 134, 210, 67);
     ok('WS-P18: click mapping stays exact inside a height-capped dock (letterboxed)',
       !!capped && Math.abs(capped.x - 0.5) < 0.01 && Math.abs(capped.y - 0.5) < 0.01,

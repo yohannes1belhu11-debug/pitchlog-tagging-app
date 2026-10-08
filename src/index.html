@@ -108,6 +108,17 @@
       <button id="btnOffsetPlus1" class="btn btn-sm">+1s</button>
       <button id="btnOffsetPlus10" class="btn btn-sm">+10s</button>
       <button id="btnSetOffset" class="btn btn-sm">Set</button>
+      <!-- Workspace declutter (item 4): the Add-tag control MOVED here
+           from the tag bar — a small compact button at the top-right end
+           of the control bar, immediately right of the Video Offset
+           "Set" button (the user's annotated arrow). This is a MOVE,
+           not a copy (nothing left in the tag bar). Same id and handler
+           as the R2-E Phase 3A original: opens the existing Add/Edit
+           Tag modal in CREATE mode; the matchday bar is fixed chrome,
+           so the always-visible / never-scrolled-away intent is
+           preserved (pinned by ADD-1c + SCROLL-1g in
+           tag-add-scroll-check). -->
+      <button id="btnAddCustom" class="btn btn-sm btn-add-custom" title="Add a custom tag">+ Add New Tag</button>
     </div>
   </div>
 
@@ -256,20 +267,15 @@
       <div id="videoTagSplitter" class="workspace-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize video and tag areas (drag, or ArrowUp / ArrowDown; Shift for larger steps)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"></div>
 
       <div class="tagpanel">
+        <!-- Workspace declutter (item 2): the TAG EVENTS label and the
+             shortcut/•/⏱ hint sentence were REMOVED (static helper text —
+             deleted from the DOM, not hidden). The header element stays:
+             it is the home of the functional Undo control (btnUndo —
+             click-to-undo + disabled-state sync; kept per the declutter
+             stop-condition report). -->
         <div class="tagpanel-header">
-          <div class="tagpanel-header-text">
-            <span>TAG EVENTS</span>
-            <span class="hint">Tap a button, or press its shortcut key. Tags with a • open extra detail options. Tags marked ⏱ are start/end — press once to start, again to stop.</span>
-          </div>
           <button id="btnUndo" class="btn btn-ghost btn-undo" disabled>Undo last tag <span class="key-hint">Ctrl+Z</span></button>
         </div>
-        <!-- R2-E Phase 3A: the Add-tag control sits BETWEEN the TAG EVENTS
-             header and the grid — always visible, no hidden interaction and
-             nothing to scroll past (it used to live below the grid, where an
-             overflowing tag set cut it off below the viewport). Same id and
-             handler as before: opens the existing Add/Edit Tag modal in
-             CREATE mode. -->
-        <button id="btnAddCustom" class="btn btn-ghost btn-add-custom">+ Add New Tag</button>
         <div id="tagButtons" class="tag-grid" role="region" aria-label="Tag buttons"></div>
       </div>
 

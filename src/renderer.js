@@ -7255,6 +7255,22 @@
   // shared letterbox-aware pitchPointFromClick keeps coordinates exact.
   const PITCH_DOCK_BOTTOM_OFFSET_PX = 12; // mirrors .pitch-dock { bottom: 12px }
   const PITCH_DOCK_MIN_SVG_PX = 60; // last-resort floor: keeps the cap valid CSS in degenerate frames
+  // DECLUTTER (workspace declutter, item 1): the dock's total height
+  // (svg + chrome) never exceeds this share of the video frame's
+  // height. The dock is bottom-anchored (right: 12px; bottom: 12px —
+  // unchanged, pinned by workspace-ui-check), so a total above ~50%
+  // would reach past the frame's vertical midline and cover the centre
+  // of the video — the reported "floating centre-right over the match
+  // action" at short video regions (e.g. 1366x768 layouts, where the
+  // boot-width dock filled ~2/3 of the frame height). The share term
+  // rides the existing D1 cap pathway (same custom property, same
+  // re-derivation hooks: width changes, splitter, topbar toggle,
+  // window resize) and only ever makes the cap STRICTER — D1 (never
+  // overflow the frame) is untouched. Under the cap the pitch
+  // letterboxes and the shared letterbox-aware click mapping stays
+  // exact (WS-P18). Degenerate sub-200px frames can slightly exceed
+  // half via the 60px floor; D1 still holds there.
+  const PITCH_DOCK_MAX_FRAME_SHARE = 0.5;
 
   function applyPitchDockHeightCap() {
     if (!pitchDockSvgEl) return;
@@ -7274,8 +7290,16 @@
     // Dock chrome = the dock's box minus the svg's box (padding, border,
     // header, readout, flex gaps), measured live so it tracks CSS tweaks;
     // +2px covers offsetHeight rounding so the top edge never bleeds.
-    const reserve = (dockH - svgH) + PITCH_DOCK_BOTTOM_OFFSET_PX + 2;
-    const cap = Math.max(PITCH_DOCK_MIN_SVG_PX, frameH - reserve);
+    const chrome = dockH - svgH;
+    const reserve = chrome + PITCH_DOCK_BOTTOM_OFFSET_PX + 2;
+    // D1: the dock never overflows the frame's top edge.
+    const d1Cap = frameH - reserve;
+    // DECLUTTER share law (item 1): dock total (svg + chrome) stays at or
+    // below half the frame — the top edge never passes the vertical
+    // midline, so the dock hugs the bottom-right corner and cannot cover
+    // the centre of the video.
+    const shareCap = Math.floor(frameH * PITCH_DOCK_MAX_FRAME_SHARE) - chrome;
+    const cap = Math.max(PITCH_DOCK_MIN_SVG_PX, Math.min(d1Cap, shareCap));
     pitchDockSvgEl.style.setProperty('--pitch-dock-max-h', Math.round(cap) + 'px');
   }
 
