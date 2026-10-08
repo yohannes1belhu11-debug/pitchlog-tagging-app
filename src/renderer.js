@@ -5630,15 +5630,18 @@
 
   btnCloseSeasonModal.addEventListener('click', closeSeasonModal);
 
-  // ---------- Match Analysis Dashboard (Stage 4A — wiring only) ----------
+  // ---------- Match Analysis Dashboard (Stage 4A wiring + §14.8 retention) ----------
   //
   // The dashboard module (src/match-analysis.js →
   // window.MatchAnalysisDashboard) is a pure projection of the Analytics
   // Engine; the renderer owns the chrome (spec §9). This block is the ONLY
-  // renderer change for Stage 4A: element refs, snapshot, host API,
-  // open/close, and the two listeners. Nothing here recomputes a metric —
-  // every value on the dashboard comes from computeMatchAnalytics through
-  // the module.
+  // renderer territory for the dashboard: element refs, snapshot, host API,
+  // open/close, the two listeners — and, per spec §14.8 (V2.0), the per-open
+  // RETENTION of the renderAnalysis model: retained for the open's lifetime,
+  // discarded on close (both close paths — Done and both Escape branches —
+  // funnel through closeMatchAnalysisModal). Nothing here recomputes a
+  // metric — every value on the dashboard comes from computeMatchAnalytics
+  // through the module.
 
   const btnMatchAnalysis = document.getElementById('btnMatchAnalysis');
   const matchAnalysisModal = document.getElementById('matchAnalysisModal');
@@ -5677,24 +5680,34 @@
   // Every open recomputes from the CURRENT snapshot (spec §6 — no
   // cross-open caching). A missing module degrades to an explicit notice,
   // same convention as the season view.
+  //
+  // §14.8 (V2.0): the returned model is RETAINED for the open's lifetime —
+  // the module's own change/reset delegation and updateFilters operate on
+  // it; the renderer discards it on every close path.
+  let matchAnalysisModel = null;
+
   function openMatchAnalysisModal() {
     if (!window.MatchAnalysisDashboard ||
         typeof window.MatchAnalysisDashboard.renderAnalysis !== 'function') {
       matchAnalysisContent.innerHTML =
         '<div class="event-empty">Match analysis module not loaded (src/match-analysis.js).</div>';
+      matchAnalysisModel = null;
       matchAnalysisModal.style.display = 'flex';
       return;
     }
-    window.MatchAnalysisDashboard.renderAnalysis(
+    matchAnalysisModel = window.MatchAnalysisDashboard.renderAnalysis(
       matchAnalysisContent,
       matchAnalysisSnapshot(),
       matchAnalysisHost()
-    );
+    ) || null;
     matchAnalysisModal.style.display = 'flex';
   }
 
   function closeMatchAnalysisModal() {
     matchAnalysisModal.style.display = 'none';
+    // §14.8: discard the retained per-open model — both close paths (the
+    // Done listener and both Escape branches) funnel here.
+    matchAnalysisModel = null;
   }
 
   btnMatchAnalysis.addEventListener('click', openMatchAnalysisModal);

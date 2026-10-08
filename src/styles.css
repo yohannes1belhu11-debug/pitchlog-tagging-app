@@ -3424,3 +3424,144 @@ body.topbar-hidden .topbar-restore { display: flex; }
     gap: 4px;
   }
 }
+
+/* ==========================================================================
+   Stage 4B (V2.0) — interactive filtering (spec §14). Pure append: no
+   existing rule is edited or removed (the §9 discipline, U13j sentinels).
+   ========================================================================== */
+
+/* The two §14.1 filter bars (spatial: six selects; key-events: three). */
+.ma-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 4px 0 14px;
+  padding: 8px 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ma-filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.ma-filter-select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  max-width: 170px;
+}
+
+.ma-filter-select:focus {
+  outline: 1px solid var(--accent-bright);
+  outline-offset: 1px;
+}
+
+.ma-filter-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ma-filter-reset {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.ma-filter-reset:hover {
+  color: var(--text);
+  border-color: var(--accent-bright);
+}
+
+/* §5 V2.0 status line — filter-bar UI text, never a card or standalone
+   number, present only while a list filter is active. */
+.ma-filter-status {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* §14.5 suppression explanation — always visible while suppressed,
+   never silent. */
+.ma-filter-suppressed {
+  margin: 6px 0 10px;
+  padding: 7px 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-bright);
+  border-radius: var(--radius);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+/* §14.6 context stating: the active-filter summary, the whole-match banner,
+   and the one static unattributed note. */
+.ma-filter-summary {
+  margin: 6px 0 8px;
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.ma-filter-banner {
+  margin: 6px 0 10px;
+  padding: 7px 10px;
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent-bright);
+  border-radius: var(--radius);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.ma-filter-note {
+  margin: 6px 0 14px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Small screens (§9 820px precedent): the bars stack, selects go full
+   width, Reset loses its auto margin. */
+@media (max-width: 820px) {
+  .ma-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .ma-filter-field {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+  }
+
+  .ma-filter-select {
+    flex: 1;
+    max-width: none;
+    width: 100%;
+  }
+
+  .ma-filter-reset {
+    margin-left: 0;
+    align-self: flex-end;
+  }
+}

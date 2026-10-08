@@ -54,6 +54,20 @@
 //   MA-U13 empty session (no session loaded) renders gracefully; §9 static
 //          law: index.html wiring, styles.css ma-* rules + the three
 //          responsive breakpoints, base-stylesheet sentinels intact
+//   MA-U14 Stage 4B filter controls + interactions (§14.1/§14.2/§14.3 — both
+//          bars at a real boot, only-the-affected-section re-renders, Reset
+//          affordances, fresh-open defaults, bar state persistence; + the
+//          §9-style filter-bar CSS law)
+//   MA-U15 Stage 4B suppression + context stating (§14.5/§14.6 — engine path
+//          with a valid chain: doctored X1 MISMATCH via matchInfo ourScore 2
+//          vs the intact 1–1 chain; disabled control + explanation, the
+//          summary/banner/unattributed-note exact strings, the (filtered
+//          view) suffixes)
+//   MA-U16 Stage 4B purity under filtering + renderer retention (§8/§14.8 —
+//          save payload byte-identical across filter changes, zero autosave
+//          writes; RED-FIRST source pin: renderer.js retains the
+//          renderAnalysis return on open and nulls it in
+//          closeMatchAnalysisModal — both close paths funnel there)
 //
 // Run:  node tests/match-analysis-ui-check.js   (from the project root)
 'use strict';
@@ -708,6 +722,243 @@ function baseSession() {
       html.indexOf('id="matchAnalysisContent"') !== -1 &&
       iSeason !== -1 && iMa !== -1 && iRenderer !== -1 && iSeason < iMa && iMa < iRenderer,
       'chain=' + JSON.stringify(scriptSrcs));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stage 4B (V2.0) — filter controls through the REAL wiring. RED-first
+  // discipline: the U16 retention source pin + the U14 CSS law were run
+  // against the pre-wiring renderer/styles BEFORE commit B landed (their
+  // failures captured then); they must be GREEN now.
+  // ---------------------------------------------------------------------------
+  function uiSelect(content, bar, key) {
+    return content.querySelector('.ma-filter-select[data-bar="' + bar + '"][data-filter="' + key + '"]');
+  }
+  function uiArrEq(a, b) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+      a.every((v, i) => v === b[i]);
+  }
+  function uiSetSelect(B, el, value) {
+    el.value = value;
+    el.dispatchEvent(new B.win.Event('change', { bubbles: true }));
+  }
+  function uiSections(content) {
+    const out = {};
+    Array.from(content.querySelectorAll('section[data-ma-section]')).forEach((s) => {
+      out[s.getAttribute('data-ma-section')] = s.outerHTML;
+    });
+    return out;
+  }
+  function uiChanged(a, b) {
+    return Object.keys(a).filter((k) => a[k] !== b[k]);
+  }
+  function doctoredOracleSession() {
+    const s = oracleSession();
+    s.matchInfo = Object.assign({}, s.matchInfo, { ourScore: 2 });
+    return s;
+  }
+
+  // ---- Scenario C: oracle session + interactive filtering -------------------
+  const C = boot({});
+  const cdoc = C.doc;
+  await sleep(400);
+  C.stub._setLoadSession(oracleSession());
+  clickIn(C, cdoc.getElementById('btnLoadSession'));
+  await sleep(500);
+  // Purity baseline for MA-U16, captured BEFORE any filtering.
+  C.stub._setSaveResult({ canceled: false, filePath: '/tmp/ui-4b-purity-1.json' });
+  clickIn(C, cdoc.getElementById('btnSaveSession'));
+  await sleep(300);
+  C.save1 = lastSave(C.stub);
+  clickIn(C, cdoc.getElementById('btnMatchAnalysis'));
+  const cmodal = cdoc.getElementById('matchAnalysisModal');
+  const ccontent = cdoc.getElementById('matchAnalysisContent');
+
+  // =======================================================================
+  section('MA-U14 — filter controls + interactions (§14.1/§14.2/§14.3)');
+  {
+    const sel = (bar, key) => uiSelect(ccontent, bar, key);
+    const selectValues = (bar) => Array.from(ccontent.querySelectorAll('.ma-filter-select[data-bar="' + bar + '"]')).map((s) => s.value);
+    ok('MA-U14a: both bars render at a real boot — spatial 6 selects + Reset, key-events 3 selects + Reset, all at __all__ (fresh-open defaults), no status/summary/suppressed',
+      cmodal.style.display === 'flex' &&
+      Array.from(ccontent.querySelectorAll('.ma-filter-select[data-bar="spatial"]')).length === 6 &&
+      uiArrEq(Array.from(ccontent.querySelectorAll('.ma-filter-select[data-bar="spatial"]')).map((s) => s.getAttribute('data-filter')),
+        ['scope', 'team', 'period', 'state', 'sequence', 'player']) &&
+      Array.from(ccontent.querySelectorAll('.ma-filter-select[data-bar="key-events"]')).length === 3 &&
+      uiArrEq(Array.from(ccontent.querySelectorAll('.ma-filter-select[data-bar="key-events"]')).map((s) => s.getAttribute('data-filter')),
+        ['label', 'team', 'period']) &&
+      !!ccontent.querySelector('.ma-filter-reset[data-bar="spatial"]') &&
+      !!ccontent.querySelector('.ma-filter-reset[data-bar="key-events"]') &&
+      selectValues('spatial').every((v) => v === '__all__') &&
+      selectValues('key-events').every((v) => v === '__all__') &&
+      !ccontent.querySelector('.ma-filter-status') &&
+      !ccontent.querySelector('.ma-filter-summary') &&
+      !ccontent.querySelector('.ma-filter-suppressed'),
+      'spatial=' + JSON.stringify(selectValues('spatial')));
+
+    const before = uiSections(ccontent);
+    uiSetSelect(C, sel('spatial', 'team'), 'our');
+    const afterTeam = uiSections(ccontent);
+    const changedTeam = uiChanged(before, afterTeam);
+    const wraps = Array.from(ccontent.querySelectorAll('.ma-grid-wrap'));
+    ok('MA-U14b: a spatial change re-renders ONLY the spatial section (team our → 1 grid) and the bar KEEPS the chosen value',
+      changedTeam.length === 1 && changedTeam[0] === 'spatial' &&
+      wraps.length === 1 && wraps[0].getAttribute('data-grid-wrap') === 'grid:scope=all:partition=our' &&
+      sel('spatial', 'team').value === 'our' &&
+      sel('spatial', 'team').querySelector('option[value="our"]').hasAttribute('selected') &&
+      sel('spatial', 'state').disabled === false,
+      'changed=' + JSON.stringify(changedTeam));
+
+    const beforeList = uiSections(ccontent);
+    uiSetSelect(C, sel('key-events', 'period'), '2H');
+    const afterList = uiSections(ccontent);
+    const changedList = uiChanged(beforeList, afterList);
+    const rowsNow = Array.from(ccontent.querySelectorAll('.ma-key-row'));
+    const statusEl = ccontent.querySelector('.ma-filter-status');
+    ok('MA-U14c: a list change re-renders ONLY the key-events section; status "Showing 9 of 17"; cards byte-identical (D2-extension)',
+      changedList.length === 1 && changedList[0] === 'key-events' &&
+      rowsNow.length === 9 &&
+      !!statusEl && statusEl.textContent === 'Showing 9 of 17' &&
+      uiArrEq(rowsNow.map((r) => r.getAttribute('data-event-id')),
+        ['9', '10', '11', '12', '13', '14', '15', '16', '19']) &&
+      afterList.cards === beforeList.cards,
+      'changed=' + JSON.stringify(changedList) + ' status=' + (statusEl ? statusEl.textContent : null));
+
+    clickIn(C, ccontent.querySelector('.ma-filter-reset[data-bar="spatial"]'));
+    clickIn(C, ccontent.querySelector('.ma-filter-reset[data-bar="key-events"]'));
+    const wrapsReset = Array.from(ccontent.querySelectorAll('.ma-grid-wrap'));
+    ok('MA-U14d: Reset restores each bar to defaults and re-renders only that section',
+      wrapsReset.length === 2 &&
+      Array.from(ccontent.querySelectorAll('.ma-filter-select')).every((s) => s.value === '__all__') &&
+      Array.from(ccontent.querySelectorAll('.ma-key-row')).length === 17 &&
+      !ccontent.querySelector('.ma-filter-status') &&
+      !ccontent.querySelector('.ma-filter-summary'),
+      'grids=' + wrapsReset.length);
+
+    clickIn(C, cdoc.getElementById('btnCloseMatchAnalysis'));
+    clickIn(C, cdoc.getElementById('btnMatchAnalysis'));
+    const reopened = Array.from(ccontent.querySelectorAll('.ma-filter-select'));
+    ok('MA-U14e: every fresh open starts at defaults (per-open filter state; close/reopen)',
+      cmodal.style.display === 'flex' &&
+      reopened.length === 9 && reopened.every((s) => s.value === '__all__') &&
+      Array.from(ccontent.querySelectorAll('.ma-key-row')).length === 17 &&
+      Array.from(ccontent.querySelectorAll('.ma-grid-wrap')).length === 2 &&
+      !ccontent.querySelector('.ma-filter-status'),
+      'values=' + JSON.stringify(reopened.map((s) => s.value)));
+
+    uiSetSelect(C, sel('spatial', 'team'), 'our');
+    uiSetSelect(C, sel('spatial', 'period'), '1H');
+    const persistenceGrids = Array.from(ccontent.querySelectorAll('.ma-grid-wrap'));
+    const ourHead = persistenceGrids[0] ? persistenceGrids[0].querySelector('.ma-grid-head') : null;
+    const zoneCell = persistenceGrids[0] ? Array.from(persistenceGrids[0].querySelectorAll('.ma-zcell'))[4] : null;
+    if (zoneCell) clickIn(C, zoneCell);
+    const trace = persistenceGrids[0] ? persistenceGrids[0].querySelector('.ma-trace') : null;
+    ok('MA-U14f: bar state persists across re-renders (two changes) and across a zone activation (trace toggle leaves the bar alone)',
+      sel('spatial', 'team').value === 'our' && sel('spatial', 'period').value === '1H' &&
+      persistenceGrids.length === 1 &&
+      ourHead && ourHead.textContent === 'All events — Us · 5/5 located events (100%)' &&
+      !!trace && trace.getAttribute('data-open-zone') !== null &&
+      sel('spatial', 'team').value === 'our' && sel('spatial', 'period').value === '1H',
+      'head=' + (ourHead ? ourHead.textContent : null));
+
+    const filterSelectors = ['.ma-filter-bar {', '.ma-filter-select {', '.ma-filter-reset {',
+      '.ma-filter-status {', '.ma-filter-summary {', '.ma-filter-banner {',
+      '.ma-filter-note {', '.ma-filter-suppressed {'];
+    const missingFilterSelectors = filterSelectors.filter((s) => stylesCss.indexOf(s) === -1);
+    ok('MA-U14g: the §9-style CSS law — the filter-bar class vocabulary is styled (8 selectors present in styles.css)',
+      missingFilterSelectors.length === 0, 'missing ' + JSON.stringify(missingFilterSelectors));
+  }
+
+  // ---- Scenario D: doctored oracle (X1 MISMATCH) — §14.5/§14.6 --------------
+  // CHOICE STATED: engine path with a valid chain — the oracle's complete
+  // 1–1 goal chain is kept intact and only the manual matchInfo score is
+  // made to disagree (ourScore 2), a genuine engine MISMATCH (probed in the
+  // model suite M13.9); NOT a doctored envelope.
+  const D = boot({});
+  const ddoc = D.doc;
+  await sleep(400);
+  D.stub._setLoadSession(doctoredOracleSession());
+  clickIn(D, ddoc.getElementById('btnLoadSession'));
+  await sleep(500);
+  clickIn(D, ddoc.getElementById('btnMatchAnalysis'));
+  const dcontent = ddoc.getElementById('matchAnalysisContent');
+
+  // =======================================================================
+  section('MA-U15 — suppression + context stating (§14.5/§14.6)');
+  {
+    const dsel = (key) => uiSelect(dcontent, 'spatial', key);
+    const stateSel = dsel('state');
+    const suppressedNote = dcontent.querySelector('.ma-filter-suppressed');
+    ok('MA-U15a: under X1 MISMATCH the state control renders DISABLED with the exact explanation; effective __all__; other controls enabled',
+      !!stateSel && stateSel.disabled === true && stateSel.value === '__all__' &&
+      dsel('team').disabled === false && dsel('scope').disabled === false &&
+      !!suppressedNote &&
+      suppressedNote.textContent === 'Score state filtering unavailable (X1 reconciliation gate): the manual matchInfo score disagrees with the attributed goal chain. The effective score-state filter is All.',
+      'note=' + (suppressedNote ? suppressedNote.textContent : null));
+
+    uiSetSelect(D, dsel('team'), 'our');
+    const sum = dcontent.querySelector('.ma-filter-summary');
+    const ban = dcontent.querySelector('.ma-filter-banner');
+    const unattr = dcontent.querySelector('.ma-filter-note');
+    const dgrids = Array.from(dcontent.querySelectorAll('.ma-grid-wrap'));
+    const maxLine = dgrids[0] ? dgrids[0].querySelector('.ma-grid-max') : null;
+    ok('MA-U15b: context stating under a real filter — summary, banner, unattributed note (exact strings) and the max-line suffix',
+      dgrids.length === 1 &&
+      !!sum && sum.textContent === 'Active filters: Team Us' &&
+      !!ban && ban.textContent === 'Spatial filters active — all other sections remain whole-match.' &&
+      !!unattr && unattr.textContent === 'Unattributed events (no Us/Opponent attribution) are excluded from all spatial grids; there is no option to view them spatially.' &&
+      !!maxLine && maxLine.textContent === 'max = 2 (busiest cell) — colour scale is relative to this grid (filtered view)' &&
+      !!dcontent.querySelector('.ma-filter-suppressed'),
+      'summary=' + (sum ? sum.textContent : null));
+
+    uiSetSelect(D, dsel('period'), '1H');
+    const dgrids2 = Array.from(dcontent.querySelectorAll('.ma-grid-wrap'));
+    const insuf = dgrids2[0] ? dgrids2[0].querySelector('.ma-grid-insufficient') : null;
+    const sum2 = dcontent.querySelector('.ma-filter-summary');
+    ok('MA-U15c: below-gate under filters — the insufficient message carries the exact (filtered view) suffix; the summary updates',
+      dgrids2.length === 1 &&
+      !!insuf && insuf.textContent === 'Insufficient located events for spatial visualization. (5 located events in this view — see the table below) (filtered view)' &&
+      !!sum2 && sum2.textContent === 'Active filters: Team Us · Period 1H' &&
+      !!dcontent.querySelector('.ma-filter-suppressed'),
+      'insufficient=' + (insuf ? insuf.textContent : null));
+    D.dom.window.close();
+  }
+
+  // =======================================================================
+  section('MA-U16 — purity under filtering + renderer retention (§8/§14.8)');
+  {
+    C.stub._setSaveResult({ canceled: false, filePath: '/tmp/ui-4b-purity-2.json' });
+    clickIn(C, cdoc.getElementById('btnSaveSession'));
+    await sleep(300);
+    const s1 = C.save1;
+    const s2 = lastSave(C.stub);
+    let diffKeys = [];
+    if (s1 && s2) {
+      const keys = Array.from(new Set(Object.keys(s1).concat(Object.keys(s2)))).sort();
+      diffKeys = keys.filter((k) => JSON.stringify(s1[k]) !== JSON.stringify(s2[k]));
+    }
+    ok('MA-U16a: save #2 (after the whole filtering battery: 2 spatial changes + 2 list changes + 3 resets + reopen + zone activation) is JSON byte-identical to save #1',
+      !!s1 && Array.isArray(s1.events) && s1.events.length === 19 &&
+      !!s2 && JSON.stringify(s1) === JSON.stringify(s2),
+      'differing keys: ' + JSON.stringify(diffKeys));
+    ok('MA-U16b: ZERO autosave writes across both filtering scenarios (C oracle + D doctored)',
+      C.stub._calls.autosaveWrite.length === 0 && D.stub._calls.autosaveWrite.length === 0,
+      'C=' + C.stub._calls.autosaveWrite.length + ' D=' + D.stub._calls.autosaveWrite.length);
+
+    // RED-FIRST source pin (run against the pre-wiring renderer at commit-B
+    // authoring time): renderer.js RETAINS the renderAnalysis return for the
+    // open's lifetime and DISCARDS it in closeMatchAnalysisModal — both
+    // close paths (Done listener + both Escape branches) funnel there.
+    const openMatch = /(\w+)\s*=\s*window\.MatchAnalysisDashboard\.renderAnalysis\(/.exec(rendererSrc);
+    const retainedId = openMatch ? openMatch[1] : null;
+    const closeIdx = rendererSrc.indexOf('function closeMatchAnalysisModal()');
+    const closeBody = closeIdx === -1 ? '' : rendererSrc.slice(closeIdx, closeIdx + 400);
+    ok('MA-U16c: renderer.js retains the renderAnalysis return on open (assignment in openMatchAnalysisModal)',
+      !!openMatch && !!retainedId,
+      openMatch ? 'retained as: ' + retainedId : 'no assignment of the renderAnalysis return found');
+    ok('MA-U16d: closeMatchAnalysisModal nulls the SAME retained identifier (the discard — both close paths funnel here)',
+      !!retainedId && closeBody.indexOf(retainedId + ' = null') !== -1,
+      'id=' + retainedId + ' closeBody has nulling: ' + (retainedId ? closeBody.indexOf(retainedId + ' = null') !== -1 : false));
+    C.dom.window.close();
   }
 
   // ---------------------------------------------------------------------------
