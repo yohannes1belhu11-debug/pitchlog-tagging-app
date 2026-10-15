@@ -568,13 +568,25 @@
        container is filled by src/match-analysis.js through the renderer's
        host API on every open (recomputed from the current session snapshot —
        no cross-open caching). Closes on Done and on Escape (both Escape
-       branches, like every other modal). -->
+       branches, like every other modal).
+       Stage 4C (§15, V3.0): the header gains the Print / PDF button —
+       window.print() on the OPEN dashboard only, no IPC, no new dialog,
+       no file writes — and the modal carries the print-only header element
+       (§15.3; screen display:none — populated by the renderer at every
+       open, never visible in the app UI). -->
   <div id="matchAnalysisModal" class="modal-overlay" style="display:none;">
     <div class="modal modal-pitchmap ma-modal">
       <div class="pitchmap-header">
         <h3>Match analysis</h3>
-        <button id="btnCloseMatchAnalysis" class="btn btn-ghost detail-panel-close">Done</button>
+        <div style="display: flex; gap: 8px;">
+          <button id="btnPrintMatchAnalysis" class="btn btn-ghost" title="Print or save as PDF exactly the open dashboard (active filters included; aggregates stay whole-match). Uses the system print dialog — PitchLog writes no files.">Print / PDF</button>
+          <button id="btnCloseMatchAnalysis" class="btn btn-ghost detail-panel-close">Done</button>
+        </div>
       </div>
+
+      <!-- Stage 4C §15.3: print-only header — exactly one line, populated
+           by the renderer at every dashboard open; screen display:none. -->
+      <div id="maPrintHeader" class="ma-print-header"></div>
 
       <div id="matchAnalysisContent" class="ma-modal-content"></div>
     </div>

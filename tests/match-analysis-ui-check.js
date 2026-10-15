@@ -68,6 +68,13 @@
 //          writes; RED-FIRST source pin: renderer.js retains the
 //          renderAnalysis return on open and nulls it in
 //          closeMatchAnalysisModal — both close paths funnel there)
+//   MA-U17 Stage 4C print-ready coach report (§15, V3.0): the Print / PDF
+//          button + guarded window.print (spy-stubbed), the shared body
+//          print-mode class toggle (button path + beforeprint/afterprint,
+//          modal-open only), closed-modal non-interception, the @media
+//          print CSS law pins, the §15.3 print header line (whole-match
+//          form at open + the Active filters form after a list change),
+//          and the zero-engine-call proof for the whole print path (§15.4)
 //
 // Run:  node tests/match-analysis-ui-check.js   (from the project root)
 'use strict';
@@ -959,6 +966,135 @@ function baseSession() {
       !!retainedId && closeBody.indexOf(retainedId + ' = null') !== -1,
       'id=' + retainedId + ' closeBody has nulling: ' + (retainedId ? closeBody.indexOf(retainedId + ' = null') !== -1 : false));
     C.dom.window.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stage 4C (V3.0) — the print-ready coach report through the REAL wiring.
+  // RED-first discipline: this section was run against the pre-implementation
+  // tree BEFORE the §15 wiring landed (raw red captured: button absent, no
+  // class toggle, no listeners, header element absent, CSS pins missing).
+  // ---------------------------------------------------------------------------
+  const P = boot({});
+  const pdoc = P.doc;
+  await sleep(400);
+  P.stub._setLoadSession(oracleSession());
+  clickIn(P, pdoc.getElementById('btnLoadSession'));
+  await sleep(500);
+  clickIn(P, pdoc.getElementById('btnMatchAnalysis'));
+  const pmodal = pdoc.getElementById('matchAnalysisModal');
+  const pcontent = pdoc.getElementById('matchAnalysisContent');
+  const pbtnPrint = pdoc.getElementById('btnPrintMatchAnalysis');
+  const pprintHeader = pdoc.getElementById('maPrintHeader');
+  const pbody = pdoc.body;
+  // §15.3 line prefix for the oracle fixture: competition · date · vs
+  // opponent · the same chain score the dashboard header shows (1–1).
+  const P_LINE_HEAD = 'PitchLog coach report — Bahir Dar Premier League · 2026-10-03 · vs Dashen Beer FC · 1–1 · ';
+
+  // =======================================================================
+  section('MA-U17 — Stage 4C print-ready coach report (§15)');
+  {
+    // (1) the button exists, is wired, and calls a GUARDED window.print.
+    let printCalls = 0;
+    const errsBefore17a = jsdomErrors.length;
+    P.win.print = function () { printCalls++; };
+    const pCls = ((pbtnPrint && pbtnPrint.getAttribute('class')) || '').split(/\s+/);
+    const pInHeader = !!pbtnPrint && !!pmodal.querySelector('.pitchmap-header #btnPrintMatchAnalysis');
+    const pTitle = pbtnPrint ? (pbtnPrint.getAttribute('title') || '') : '';
+    const guardSrcPin = rendererSrc.indexOf('typeof window.print') !== -1;
+    let posClick = false;
+    if (pbtnPrint) { clickIn(P, pbtnPrint); posClick = printCalls === 1; }
+    // Negative: a non-function print must NOT crash the handler (§15.6
+    // guard) — a thrown TypeError inside a listener lands in jsdomErrors.
+    P.win.print = 'not-a-function';
+    if (pbtnPrint) clickIn(P, pbtnPrint);
+    P.win.print = function () { printCalls++; };
+    ok('MA-U17a: the Print / PDF button exists in the modal header (btn btn-ghost + contract tooltip) and is wired — its handler calls a GUARDED window.print (spy-stubbed: exactly one call on click, no crash and no extra call when print is not a function)',
+      !!pbtnPrint && pCls.indexOf('btn') !== -1 && pCls.indexOf('btn-ghost') !== -1 &&
+      pInHeader && pTitle.length > 20 && guardSrcPin && posClick &&
+      printCalls === 1 && jsdomErrors.length === errsBefore17a,
+      'btn=' + !!pbtnPrint + ' title.len=' + pTitle.length + ' guardSrc=' + guardSrcPin + ' calls=' + printCalls + ' jsdomErrΔ=' + (jsdomErrors.length - errsBefore17a));
+
+    // (2) beforeprint with the modal open adds the class; afterprint removes.
+    P.win.dispatchEvent(new P.win.Event('beforeprint'));
+    const classWhileOpen = pbody.classList.contains('ma-printing');
+    P.win.dispatchEvent(new P.win.Event('afterprint'));
+    const classAfterAfter = pbody.classList.contains('ma-printing');
+    ok('MA-U17b: a synthetic beforeprint with the modal OPEN adds the body print-mode class (ma-printing) and afterprint removes it (§15.7)',
+      classWhileOpen === true && classAfterAfter === false,
+      'whileOpen=' + classWhileOpen + ' afterAfterprint=' + classAfterAfter);
+
+    // (3) with the modal CLOSED, beforeprint must NOT add the class.
+    clickIn(P, pdoc.getElementById('btnCloseMatchAnalysis'));
+    P.win.dispatchEvent(new P.win.Event('beforeprint'));
+    const classWhileClosed = pbody.classList.contains('ma-printing');
+    P.win.dispatchEvent(new P.win.Event('afterprint'));
+    clickIn(P, pdoc.getElementById('btnMatchAnalysis'));
+    ok('MA-U17c: with the modal CLOSED, beforeprint does NOT add the class (§15.1 — closed-modal printing is never intercepted or restyled); the reopen for the checks below works',
+      classWhileClosed === false && pmodal.style.display === 'flex',
+      'whileClosed=' + classWhileClosed + ' reopened=' + pmodal.style.display);
+
+    // (4) static CSS pins — the @media print law block + the screen rule.
+    // NOTE: the pin uses the exact block opener '@media print {' — the
+    // styles.css §15 header comment deliberately avoids that literal so
+    // comment prose can never shadow the block (the print-media wording).
+    const pIdx = stylesCss.indexOf('@media print {');
+    const pNext = pIdx === -1 ? -1 : stylesCss.indexOf('@media', pIdx + 1);
+    const printBlock = pIdx === -1 ? '' : stylesCss.slice(pIdx, pNext === -1 ? undefined : pNext);
+    const chromeSels = ['body.ma-printing .topbar', 'body.ma-printing .video-pane',
+      'body.ma-printing .transport', 'body.ma-printing .tagpanel',
+      'body.ma-printing .workspace-splitter', 'body.ma-printing .events-pane'];
+    const missingChrome = chromeSels.filter((s) => printBlock.indexOf(s) === -1);
+    const modalReset = printBlock.indexOf('body.ma-printing #matchAnalysisModal') !== -1 &&
+      printBlock.indexOf('position: static') !== -1 &&
+      printBlock.indexOf('background: #fff') !== -1;
+    const pagination = printBlock.indexOf('page-break-before: always') !== -1 &&
+      printBlock.indexOf('break-inside: avoid') !== -1;
+    const printHeaderShown = printBlock.indexOf('body.ma-printing #maPrintHeader') !== -1 &&
+      printBlock.indexOf('display: block') !== -1;
+    const screenHIdx = stylesCss.indexOf('#maPrintHeader {');
+    const screenRule = screenHIdx !== -1 && pIdx !== -1 && screenHIdx < pIdx &&
+      stylesCss.slice(screenHIdx, stylesCss.indexOf('}', screenHIdx)).indexOf('display: none') !== -1;
+    ok('MA-U17d: static CSS pins — the @media print block exists; hides the pinned chrome selectors (6); resets the modal to document flow (position: static) with a white background; carries the §15.5 page-break-before/avoid rules; the print header is screen-hidden (display: none) and print-shown (display: block)',
+      pIdx !== -1 && missingChrome.length === 0 && modalReset && pagination && printHeaderShown && screenRule,
+      'missing=' + JSON.stringify(missingChrome) + ' reset=' + modalReset + ' pages=' + pagination + ' hdrShown=' + printHeaderShown + ' screenRule=' + screenRule);
+
+    // (5) the §15.3 print header line — populated at open, updated by filters.
+    const atOpenLine = pprintHeader ? pprintHeader.textContent : null;
+    const labelSel = pcontent.querySelector('.ma-filter-select[data-bar="key-events"][data-filter="label"]');
+    if (labelSel) {
+      labelSel.value = 'Goal';
+      labelSel.dispatchEvent(new P.win.Event('change', { bubbles: true }));
+    }
+    ok('MA-U17e: the print header is populated at open with the exact §15.3 line (whole-match form) and updates to the Active filters form after a list filter change (Class Goal)',
+      atOpenLine === P_LINE_HEAD + 'Whole-match view' &&
+      !!pprintHeader && pprintHeader.textContent === P_LINE_HEAD + 'Active filters: Class Goal',
+      'atOpen=' + JSON.stringify(atOpenLine) + ' now=' + JSON.stringify(pprintHeader ? pprintHeader.textContent : null));
+
+    // (6) source pin — ONE shared class-toggle implementation for both paths.
+    const fnDef = rendererSrc.indexOf('function setMatchAnalysisPrintMode(');
+    const btnPath = rendererSrc.indexOf('function printMatchAnalysis(');
+    const bpIdx = rendererSrc.indexOf("addEventListener('beforeprint'");
+    ok('MA-U17f: the button path and the beforeprint path share the SAME class toggle — printMatchAnalysis and the beforeprint listener both call setMatchAnalysisPrintMode (§15.7 source pin)',
+      fnDef !== -1 && btnPath !== -1 && bpIdx !== -1 &&
+      rendererSrc.slice(btnPath, btnPath + 700).indexOf('setMatchAnalysisPrintMode(') !== -1 &&
+      rendererSrc.slice(bpIdx, bpIdx + 400).indexOf('setMatchAnalysisPrintMode(') !== -1,
+      'def=' + (fnDef !== -1) + ' btnPath=' + (btnPath !== -1) + ' before=' + (bpIdx !== -1));
+
+    // (7) zero engine calls across a full print invocation (§15.4).
+    const eng = P.win.AnalyticsEngine;
+    let cmaCalls = 0, csvCalls = 0;
+    const origCma = eng.computeMatchAnalytics, origCsv = eng.computeSpatialView;
+    eng.computeMatchAnalytics = function () { cmaCalls++; return origCma.apply(this, arguments); };
+    eng.computeSpatialView = function () { csvCalls++; return origCsv.apply(this, arguments); };
+    P.win.dispatchEvent(new P.win.Event('beforeprint'));
+    if (pbtnPrint) clickIn(P, pbtnPrint);
+    P.win.dispatchEvent(new P.win.Event('afterprint'));
+    eng.computeMatchAnalytics = origCma;
+    eng.computeSpatialView = origCsv;
+    ok('MA-U17g: ZERO engine calls across a full print invocation (beforeprint → button click → afterprint): computeMatchAnalytics 0, computeSpatialView 0 — the print path uses the already-rendered DOM and the retained model (§15.4); the print-mode class is cleaned up afterwards',
+      cmaCalls === 0 && csvCalls === 0 && !pbody.classList.contains('ma-printing'),
+      'cma=' + cmaCalls + ' csv=' + csvCalls);
+    P.dom.window.close();
   }
 
   // ---------------------------------------------------------------------------

@@ -3581,3 +3581,192 @@ body.pitch-dock-dragging {
     align-self: flex-end;
   }
 }
+
+/* ==========================================================================
+   Stage 4C — Print-ready coach report (spec §15, V3.0)
+   --------------------------------------------------------------------------
+   The print header is screen-hidden; the print-media block below restyles
+   the printing of the OPEN dashboard only, gated on the body-level
+   print-mode class (body.ma-printing) that the renderer's shared print
+   path applies (§15.7 — the Print / PDF button and the beforeprint /
+   afterprint listeners both funnel through one toggle). With the dashboard
+   modal CLOSED none of these rules match: the app's printing is not
+   intercepted or restyled (§15.1). Real print/PDF fidelity is manual QA
+   territory (§12.8) — the test battery pins these rules' existence, not
+   computed print layout.
+   ========================================================================== */
+
+/* §15.3: the print-only header — never visible in the app UI. */
+#maPrintHeader {
+  display: none;
+}
+
+@media print {
+  /* §15.2: the printed page carries ONLY the print header + the dashboard
+     content. Hide the app chrome: topbar (+ restore strip), the matchday
+     and match-clock bars, the whole video pane (video frame, transport
+     bar, tag panel, splitter, detail panel, pitch dock) and the events
+     pane. */
+  body.ma-printing .topbar,
+  body.ma-printing .topbar-restore,
+  body.ma-printing .matchday-bar,
+  body.ma-printing .match-clock-bar,
+  body.ma-printing .video-pane,
+  body.ma-printing .transport,
+  body.ma-printing .tagpanel,
+  body.ma-printing .workspace-splitter,
+  body.ma-printing .detail-panel,
+  body.ma-printing .events-pane {
+    display: none !important;
+  }
+
+  /* §15.2: the page is a white document. The app never page-scrolls on
+     screen (html/body height:100% + overflow:hidden) — reset that for
+     printing so the whole dashboard paginates instead of clipping to the
+     first viewport. */
+  html:has(body.ma-printing),
+  html:has(body.ma-printing) body {
+    height: auto;
+    overflow: visible;
+    display: block;
+    background: #fff;
+  }
+
+  /* §15.2: the overlay becomes the page — static document flow, not an
+     overlay — with a WHITE page background. */
+  body.ma-printing #matchAnalysisModal {
+    position: static;
+    display: block;
+    background: #fff;
+    z-index: auto;
+  }
+
+  /* §15.2: the modal shell prints as a plain full-width document with dark
+     ink-friendly text — the dark app theme is screen-only. The light-theme
+     tokens cascade to the whole printed subtree; the crimson accents and
+     the inline rgba density fills are untouched (SP law below). */
+  body.ma-printing .ma-modal {
+    position: static;
+    display: block;
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: #fff;
+    color: #1a1c1f;
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --panel-alt: #ffffff;
+    --border: #9aa0a8;
+    --text: #1a1c1f;
+    --text-dim: #4a4f57;
+  }
+
+  /* §15.2: the modal's own header (title + Done + Print/PDF buttons) never
+     prints — the print header below replaces it. */
+  body.ma-printing #matchAnalysisModal .pitchmap-header {
+    display: none;
+  }
+
+  /* §15.3: the print header prints exactly one line. */
+  body.ma-printing #maPrintHeader {
+    display: block;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #1a1c1f;
+    border-bottom: 1px solid #9aa0a8;
+    padding: 0 0 6px;
+    margin: 0 0 14px;
+  }
+
+  /* §15.2: the dashboard content prints as document flow — no inner scroll
+     panes (scrollbars never print; the content paginates instead). */
+  body.ma-printing .ma-modal-content {
+    overflow: visible;
+    padding-right: 0;
+    flex: none;
+  }
+
+  body.ma-printing .ma-keylist {
+    max-height: none;
+    overflow: visible;
+  }
+
+  body.ma-printing .ma-table-scroll {
+    overflow: visible;
+  }
+
+  /* The ma-* filter bars' interactive chrome never prints. The informative
+     lines DO print (§15.4 honesty — exactly what the open dashboard shows):
+     the §5 'Showing N of M' status line, the §14.6 summary, banner and
+     unattributed note stay visible. */
+  body.ma-printing .ma-filter-field,
+  body.ma-printing .ma-filter-select,
+  body.ma-printing .ma-filter-reset {
+    display: none;
+  }
+
+  /* §15.2: white pitch background with dark ink. The inline crimson rgba
+     density fills print AS-IS (SP law — cell text remains the primary
+     information); the dark-theme white strokes and light text flip to dark
+     so the pitch structure and the cell counts print legibly. */
+  body.ma-printing .ma-grid-svg {
+    background: #fff;
+  }
+
+  body.ma-printing .ma-grid-svg .pitch-line,
+  body.ma-printing .ma-grid-svg .pitch-outline {
+    stroke: rgba(0, 0, 0, 0.55);
+  }
+
+  body.ma-printing .ma-grid-svg .pitch-spot {
+    fill: rgba(0, 0, 0, 0.55);
+  }
+
+  body.ma-printing .ma-grid-svg .an-zoneline {
+    stroke: rgba(0, 0, 0, 0.3);
+  }
+
+  body.ma-printing .ma-grid-svg .ma-zcount {
+    fill: #1a1c1f;
+  }
+
+  body.ma-printing .ma-grid-svg .ma-dot-unattr {
+    fill: #4a4f57;
+  }
+
+  body.ma-printing .ma-grid-svg .ma-grid-insufficient {
+    fill: #4a4f57;
+  }
+
+  /* §15.5: page-break-before between the team, periods, spatial, players
+     and sequences sections (the header, cards and key-events may flow
+     together on page 1). */
+  body.ma-printing .ma-section[data-ma-section="team"],
+  body.ma-printing .ma-section[data-ma-section="periods"],
+  body.ma-printing .ma-section[data-ma-section="spatial"],
+  body.ma-printing .ma-section[data-ma-section="players"],
+  body.ma-printing .ma-section[data-ma-section="sequences"] {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  /* §15.5: cards, rows and grid units never split across pages; the cards
+     strip keeps its wrapping grid. */
+  body.ma-printing .ma-card,
+  body.ma-printing .ma-table tr,
+  body.ma-printing .ma-key-row,
+  body.ma-printing .ma-grid-wrap {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* §15.5: tables print at readable size with full borders. */
+  body.ma-printing .ma-table th,
+  body.ma-printing .ma-table td {
+    border: 1px solid var(--border);
+  }
+}

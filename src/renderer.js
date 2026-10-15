@@ -5642,11 +5642,20 @@
   // funnel through closeMatchAnalysisModal). Nothing here recomputes a
   // metric — every value on the dashboard comes from computeMatchAnalytics
   // through the module.
+  //
+  // Stage 4C (§15, V3.0) adds the print wiring in the SAME territory:
+  // print element refs, the guarded print function, the beforeprint /
+  // afterprint listeners, and print-header population — the whole print
+  // path is renderer-side DOM work with ZERO engine calls (§15.4).
 
   const btnMatchAnalysis = document.getElementById('btnMatchAnalysis');
   const matchAnalysisModal = document.getElementById('matchAnalysisModal');
   const btnCloseMatchAnalysis = document.getElementById('btnCloseMatchAnalysis');
   const matchAnalysisContent = document.getElementById('matchAnalysisContent');
+  // §15: the Stage 4C print chrome — the Print / PDF button in the modal
+  // header and the print-only header element (screen display:none).
+  const btnPrintMatchAnalysis = document.getElementById('btnPrintMatchAnalysis');
+  const maPrintHeader = document.getElementById('maPrintHeader');
 
   // §8 purity: the session handed to the module is a deep COPY of the live
   // tagging state (the same JSON round-trip the save path uses — session
@@ -5686,21 +5695,135 @@
   // it; the renderer discards it on every close path.
   let matchAnalysisModel = null;
 
+  // ---------- Stage 4C print wiring (spec §15, V3.0) ----------
+  //
+  // Print/PDF of the OPEN dashboard only. The whole path is renderer-side
+  // DOM work: window.print() behind a guard (§15.6), a body-level
+  // print-mode class that activates the @media print laws (§15.2/§15.5 —
+  // styles.css), and a print-only header line (§15.3). ZERO engine calls
+  // anywhere in the print path (§15.4) — the printout is the already-
+  // rendered DOM plus reads of the retained per-open model. No IPC, no new
+  // dialogs, no file writes; with the modal closed the app's printing is
+  // not intercepted or restyled (§15.1).
+  let matchAnalysisPrintSnapshot = null;
+  const MA_PRINT_BODY_CLASS = 'ma-printing';
+
+  // §15.3 metadata coercion (the module's textOf law, renderer-side twin:
+  // strings pass, finite numbers stringify, everything else is empty).
+  function maPrintText(v) {
+    if (typeof v === 'string') return v;
+    if (typeof v === 'number' && isFinite(v)) return String(v);
+    return '';
+  }
+
+  // The §14 human-readable display label through the module's exported
+  // DISPLAY_LABELS map — the single source, never a second copy.
+  function maPrintDisplayLabel(label) {
+    const map = (window.MatchAnalysisDashboard && window.MatchAnalysisDashboard.DISPLAY_LABELS) || {};
+    return Object.prototype.hasOwnProperty.call(map, label) ? map[label] : label;
+  }
+
+  // §15.3: the filters note — 'Active filters: <summary>' in the same
+  // human-readable format as §14 (bar order, non-default values only,
+  // ' · ' joined; the spatial bar first, then the key-events bar) or
+  // 'Whole-match view' when no filter is active. Pure reads of the
+  // retained model — zero engine calls.
+  function maPrintFiltersNote(model) {
+    const f = model && model.spatialFilters;
+    const L = model && model.listFilters;
+    if (!f || !L) return 'Whole-match view';
+    const parts = [];
+    if (f.scope !== '__all__') parts.push('Scope ' + maPrintDisplayLabel(f.scope));
+    if (f.team !== '__all__') parts.push('Team ' + (f.team === 'our' ? 'Us' : 'Opponent'));
+    if (f.period !== '__all__') parts.push('Period ' + f.period);
+    if (f.state !== '__all__') parts.push('Score state ' + f.state);
+    if (f.sequence !== '__all__') parts.push('Sequence ' + f.sequence);
+    if (f.player !== '__all__') {
+      let label = 'Unknown player';
+      const rows = model.players && model.players.rows;
+      if (Array.isArray(rows)) {
+        for (let i = 0; i < rows.length; i++) {
+          if (rows[i] && rows[i].playerId === f.player) { label = rows[i].label; break; }
+        }
+      }
+      parts.push('Player ' + label);
+    }
+    if (L.label !== '__all__') parts.push('Class ' + maPrintDisplayLabel(L.label));
+    if (L.team !== '__all__') parts.push('Team ' + (L.team === 'our' ? 'Us' : 'Opponent'));
+    if (L.period !== '__all__') parts.push('Period ' + L.period);
+    if (!parts.length) return 'Whole-match view';
+    return 'Active filters: ' + parts.join(' · ');
+  }
+
+  // §15.3: rebuild the print header line from the per-open snapshot + the
+  // retained model. The metadata resolution mirrors the dashboard header
+  // (§13.1: matchInfo first, engine matchSummary as fallback — a read of
+  // retained data, never a recomputation) and <score> is the SAME chain
+  // score the dashboard header shows (model.header.scoreText).
+  function refreshMatchAnalysisPrintHeader() {
+    if (!maPrintHeader) return;
+    const model = matchAnalysisModel;
+    if (!model) { maPrintHeader.textContent = ''; return; }
+    const mi = (matchAnalysisPrintSnapshot && typeof matchAnalysisPrintSnapshot.matchInfo === 'object'
+      && matchAnalysisPrintSnapshot.matchInfo) || {};
+    const S = (model.analytics && model.analytics.matchSummary) || {};
+    const competition = maPrintText(mi.competition) || maPrintText(S.competition);
+    const date = maPrintText(mi.date) || maPrintText(S.date);
+    const opponent = maPrintText(mi.opponent) || maPrintText(S.opponent);
+    const score = (model.header && typeof model.header.scoreText === 'string')
+      ? model.header.scoreText : '';
+    maPrintHeader.textContent = 'PitchLog coach report — '
+      + (competition || '—') + ' · ' + (date || '—')
+      + ' · vs ' + (opponent || '—')
+      + ' · ' + (score || '—')
+      + ' · ' + maPrintFiltersNote(model);
+  }
+
+  // §15.7: the ONE shared print-mode toggle — the button path and the
+  // beforeprint/afterprint path both funnel here (pinned by MA-U17f).
+  function setMatchAnalysisPrintMode(on) {
+    document.body.classList.toggle(MA_PRINT_BODY_CLASS, !!on);
+  }
+
+  function matchAnalysisModalIsOpen() {
+    return matchAnalysisModal.style.display === 'flex';
+  }
+
+  // §15.1/§15.6/§15.7: the button path — guarded window.print() with the
+  // print-mode class applied synchronously around it (removed in finally
+  // so an unexpected throw can never strand the class on <body>).
+  function printMatchAnalysis() {
+    if (!matchAnalysisModalIsOpen()) return;
+    if (typeof window.print !== 'function') return; // §15.6 guard (jsdom etc.)
+    refreshMatchAnalysisPrintHeader();
+    setMatchAnalysisPrintMode(true);
+    try {
+      window.print();
+    } finally {
+      setMatchAnalysisPrintMode(false);
+    }
+  }
+
   function openMatchAnalysisModal() {
     if (!window.MatchAnalysisDashboard ||
         typeof window.MatchAnalysisDashboard.renderAnalysis !== 'function') {
       matchAnalysisContent.innerHTML =
         '<div class="event-empty">Match analysis module not loaded (src/match-analysis.js).</div>';
       matchAnalysisModel = null;
+      matchAnalysisPrintSnapshot = null;
       matchAnalysisModal.style.display = 'flex';
+      refreshMatchAnalysisPrintHeader();
       return;
     }
+    matchAnalysisPrintSnapshot = matchAnalysisSnapshot();
     matchAnalysisModel = window.MatchAnalysisDashboard.renderAnalysis(
       matchAnalysisContent,
-      matchAnalysisSnapshot(),
+      matchAnalysisPrintSnapshot,
       matchAnalysisHost()
     ) || null;
     matchAnalysisModal.style.display = 'flex';
+    // §15.3: the print header is populated at EVERY dashboard open.
+    refreshMatchAnalysisPrintHeader();
   }
 
   function closeMatchAnalysisModal() {
@@ -5708,10 +5831,43 @@
     // §14.8: discard the retained per-open model — both close paths (the
     // Done listener and both Escape branches) funnel here.
     matchAnalysisModel = null;
+    matchAnalysisPrintSnapshot = null;
   }
 
   btnMatchAnalysis.addEventListener('click', openMatchAnalysisModal);
   btnCloseMatchAnalysis.addEventListener('click', closeMatchAnalysisModal);
+  btnPrintMatchAnalysis.addEventListener('click', printMatchAnalysis);
+
+  // §15.7: the browser/Electron Ctrl+P path gets the same treatment while
+  // the dashboard modal is open — beforeprint adds the print-mode class
+  // (open modal only) and refreshes the print header; afterprint always
+  // removes the class (removing an absent class is a no-op). With the
+  // modal closed neither listener does anything: the app's printing is
+  // never intercepted or restyled (§15.1).
+  window.addEventListener('beforeprint', function () {
+    if (!matchAnalysisModalIsOpen()) return;
+    refreshMatchAnalysisPrintHeader();
+    setMatchAnalysisPrintMode(true);
+  });
+  window.addEventListener('afterprint', function () {
+    setMatchAnalysisPrintMode(false);
+  });
+
+  // §15.3: keep the print header current after every module filter
+  // change/reset. The module re-renders sections through its own
+  // root-element delegation (§14.8) — the renderer has no updateFilters
+  // call sites of its own, so the content container's bubbled change/click
+  // events are the renderer-side point of knowledge: by the time they
+  // reach the container, the module's listener on .ma-root has already
+  // applied the new filters to the retained model. Reads only — zero
+  // engine calls (§15.4).
+  matchAnalysisContent.addEventListener('change', refreshMatchAnalysisPrintHeader);
+  matchAnalysisContent.addEventListener('click', function (e) {
+    const t = e.target;
+    if (t && typeof t.closest === 'function' && t.closest('.ma-filter-reset')) {
+      refreshMatchAnalysisPrintHeader();
+    }
+  });
 
   btnAddSeasonMatches.addEventListener('click', async () => {
     const loaded = await window.matchtag.loadMultipleSessions();
