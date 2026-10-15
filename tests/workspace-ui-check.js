@@ -104,11 +104,17 @@ function makeStub(initial) {
   return stub;
 }
 
-function boot(initial) {
+function boot(initial, opts) {
+  opts = opts || {};
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { jsdomErrors.push(String(e.message || e)); });
   vc.on('error', (msg) => { jsdomErrors.push('console.error: ' + String(msg)); });
-  const dom = new JSDOM(html, { runScripts: 'dangerously', url: 'file://' + path.join(srcDir, 'index.html'), virtualConsole: vc });
+  // FLOATING DOCK: opts.url overrides the default file:// origin (jsdom
+  // localStorage needs a non-opaque origin — file:// throws there; the
+  // app guards it), and opts.preEval(win) runs BEFORE the renderer source
+  // is evaluated (seed localStorage / stub boot-time geometry or window
+  // size for the restore-pathway pins).
+  const dom = new JSDOM(html, { runScripts: 'dangerously', url: opts.url || ('file://' + path.join(srcDir, 'index.html')), virtualConsole: vc });
   const win = dom.window;
   win.Date.now = () => fakeNow;
   const RECT = { left: 0, top: 0, right: 700, bottom: 450, width: 700, height: 450, x: 0, y: 0 };
@@ -116,6 +122,7 @@ function boot(initial) {
   else win.Element.prototype.getBoundingClientRect = function () { return { ...RECT }; };
   const stub = makeStub(initial);
   win.matchtag = stub;
+  if (opts.preEval) opts.preEval(win);
   win.eval(integritySrc);
   win.eval(rosterSrc);
   win.eval(rendererSrc);
@@ -204,7 +211,11 @@ const ROSTER = {
     ok('WS-A11: splitter is fixed chrome (flex-shrink: 0) with a row-resize cursor',
       /\.workspace-splitter\s*\{[^}]*cursor:\s*row-resize/s.test(css) &&
       /\.workspace-splitter[\s\S]{0,300}flex-shrink:\s*0/.test(css));
-    ok('WS-A12: pitch dock CSS anchors it absolute lower-right of the video frame',
+    // FLOATING DOCK: this CSS rule is the DEFAULT anchor — an un-dragged
+    // dock boots bottom-right via right/bottom 12px; dragging overrides
+    // with inline left/top (+right/bottom auto) and the double-click reset
+    // clears the overrides so this anchor governs again (pinned in WS-F).
+    ok('WS-A12: pitch dock CSS anchors it absolute lower-right of the video frame (the DEFAULT anchor; drag overrides are inline)',
       /\.pitch-dock\s*\{[^}]*position:\s*absolute;[^}]*right:\s*12px;[^}]*bottom:\s*12px;/s.test(css));
     ok('WS-A13: pitch dock sits BELOW the detail panel in stacking order (z-index 10 < 20)',
       /\.pitch-dock\s*\{[^}]*z-index:\s*10;/s.test(css) && /\.detail-panel\s*\{[^}]*z-index:\s*20;/s.test(css));
@@ -480,21 +491,26 @@ const ROSTER = {
     ok('WS-P5: undo clears the located subject without errors (readout back to no-location)',
       txt('pitchDockReadout') === 'No location set');
 
-    // Resize: pointer drag on the grip, clamped [180, 420].
+    // Resize: pointer drag on the grip. FLOATING DOCK: the bounds are
+    // containment-relative now — [140, frame width - 24]; the old absolute
+    // [180, 420] clamp is gone (the max/min are pinned on their own in
+    // WS-F4). jsdom boots at the default width (180 at the harness's
+    // 1024px window): 180 + 500 = 680 lands inside [140, 876] with no cap
+    // bite — free resize.
     definePx(frame, 'clientWidth', 900);
     grip.dispatchEvent(new B.win.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 500 }));
     B.win.dispatchEvent(new B.win.MouseEvent('pointermove', { bubbles: true, cancelable: true, clientX: 1000 }));
     B.win.dispatchEvent(new B.win.MouseEvent('pointerup', { bubbles: true, cancelable: true }));
-    ok('WS-P6: grip drag widens the dock within the clamp (caps at 420)',
-      dock.style.width === '420px', 'width=' + dock.style.width);
+    ok('WS-P6: grip drag widens the dock freely within containment (680px, no 420 ceiling)',
+      dock.style.width === '680px', 'width=' + dock.style.width);
     grip.dispatchEvent(new B.win.MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 500 }));
     B.win.dispatchEvent(new B.win.MouseEvent('pointermove', { bubbles: true, cancelable: true, clientX: -4000 }));
     B.win.dispatchEvent(new B.win.MouseEvent('pointerup', { bubbles: true, cancelable: true }));
-    ok('WS-P7: grip drag clamps at the minimum width (180)',
-      dock.style.width === '180px', 'width=' + dock.style.width);
+    ok('WS-P7: grip drag clamps at the relaxed minimum width (140)',
+      dock.style.width === '140px', 'width=' + dock.style.width);
     keydown(grip, { key: 'ArrowRight' });
     ok('WS-P8: ArrowRight grows the dock by the keyboard step; aria-valuenow tracks width',
-      dock.style.width === '200px' && grip.getAttribute('aria-valuenow') === '200',
+      dock.style.width === '160px' && grip.getAttribute('aria-valuenow') === '160',
       'width=' + dock.style.width + ' aria=' + grip.getAttribute('aria-valuenow'));
 
     // ---- F6 coordinate invariance + letterbox math (pure geometry) ----
@@ -568,16 +584,18 @@ const ROSTER = {
     // and the pure viewport CSS caps keep governing.
     definePx(frame, 'clientHeight', 0);
     keydown(grip, { key: 'End' });
-    ok('WS-P12: without layout the frame cap stays unset (viewport CSS caps govern)',
-      capValue() === '' && dock.style.width === '420px',
+    ok('WS-P12: without layout the frame cap stays unset (viewport CSS caps govern); End now means the containment max (900-24=876)',
+      capValue() === '' && dock.style.width === '876px',
       'cap=' + JSON.stringify(capValue()) + ' width=' + dock.style.width);
 
-    // Width path: 420px dock inside the 200px-floor frame (the D1 state).
-    // D1 cap = 134; share cap = 100-52 = 48 -> the 60px floor governs.
+    // Width path: a USER-resized dock (grip End = manual size) inside the
+    // 200px-floor frame (the D1 state). FLOATING DOCK: the half-frame
+    // share law is a BOOT/DEFAULT law now — manual sizes are exempt
+    // within D1, so the cap is the pure D1 value: 200-66 = 134.
     stubCapGeometry(200, 322, 270);
     keydown(grip, { key: 'End' });
-    ok('WS-P13: 420px dock in the 200px-floor frame caps the svg (D1 never overflows; the half-frame share floors at 60px)',
-      capValue() === '60px',
+    ok('WS-P13: a manually-resized dock in the 200px-floor frame caps at pure D1 (134 = frame-66; manual sizes are exempt from the share law)',
+      capValue() === '134px',
       'cap=' + JSON.stringify(capValue()));
 
     // Splitter path: maximizing the tag area re-derives the cap through
@@ -587,36 +605,43 @@ const ROSTER = {
     definePx(splitter, 'offsetHeight', 10);
     stubCapGeometry(180, 322, 270);
     keydown(splitter, { key: 'End' });
-    ok('WS-P14: splitter End re-derives the cap from the resized frame (share cap 90-52=38 -> 60px floor)',
-      capValue() === '60px',
+    ok('WS-P14: splitter End re-derives the cap from the resized frame (manual width still active -> pure D1 114 = 180-66)',
+      capValue() === '114px',
       'cap=' + JSON.stringify(capValue()));
 
     // Topbar toggle path: hide grows the frame (cap relaxes), restore
     // shrinks it (cap tightens) — both directions recompute.
     stubCapGeometry(600, 322, 270);
     click(id('btnHideTopbar'));
-    ok('WS-P15: hiding the topbar re-derives the relaxed cap (D1 534 vs share 300-52=248 — the share law governs)',
-      capValue() === '248px', 'cap=' + JSON.stringify(capValue()));
+    ok('WS-P15: hiding the topbar re-derives the relaxed cap (manual width -> pure D1 534 = 600-66)',
+      capValue() === '534px', 'cap=' + JSON.stringify(capValue()));
     stubCapGeometry(240, 322, 270);
     click(id('btnShowTopbar'));
-    ok('WS-P16: restoring the topbar re-clamps to the smaller frame (share 120-52=68)',
-      capValue() === '68px', 'cap=' + JSON.stringify(capValue()));
+    ok('WS-P16: restoring the topbar re-clamps to the smaller frame (pure D1 174 = 240-66)',
+      capValue() === '174px', 'cap=' + JSON.stringify(capValue()));
 
     // Window-resize path (re-clamps via both the splitter and the dock).
     stubCapGeometry(200, 322, 270);
     B.win.dispatchEvent(new B.win.Event('resize'));
-    ok('WS-P17: window resize re-derives the cap (60px floor via the share law)',
-      capValue() === '60px', 'cap=' + JSON.stringify(capValue()));
+    ok('WS-P17: window resize re-derives the cap (manual width -> pure D1 134 = 200-66)',
+      capValue() === '134px', 'cap=' + JSON.stringify(capValue()));
 
-    // DECLUTTER share law, pinned on its own: at a 480px frame with a
-    // 420px dock, D1 alone would allow 414px — the share law caps the
-    // svg at 240-52=188, keeping the dock TOTAL (188+52=240) at exactly
-    // half the frame: the top edge sits on the midline, never above it.
+    // DECLUTTER share law — FLOATING DOCK re-anchor: the share law is a
+    // BOOT/DEFAULT law now (a user-resized dock may exceed half the frame
+    // within D1 — pinned in WS-F4c). The original P17b drove grip End (a
+    // MANUAL resize), which the floating-dock law exempts; the law is
+    // therefore pinned here in its true domain: after a double-click
+    // RESET (defaults restored: width 180 at this harness's 1024px
+    // window), D1 alone would allow 414px — the share law caps the svg at
+    // 240-52=188, keeping the default dock TOTAL (188+52=240) at exactly
+    // half the 480px frame: the top edge sits on the midline, never above.
+    const dockHeader = B.doc.querySelector('.pitch-dock-header');
+    dockHeader.dispatchEvent(new B.win.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
     stubCapGeometry(480, 322, 270);
-    keydown(grip, { key: 'End' });
-    ok('WS-P17b: the half-frame share law — the dock total never exceeds 50% of the video frame (480px frame -> svg cap 188 = 240-52 chrome; dock total 240 = half)',
-      capValue() === '188px',
-      'cap=' + JSON.stringify(capValue()));
+    B.win.dispatchEvent(new B.win.Event('resize'));
+    ok('WS-P17b: the half-frame share law for DEFAULT sizes — after a reset (width 180) the dock total never exceeds 50% of the video frame (480px frame -> svg cap 188 = 240-52; dock total 240 = half)',
+      capValue() === '188px' && dock.style.width === '180px',
+      'cap=' + JSON.stringify(capValue()) + ' width=' + dock.style.width);
 
     // Coordinate exactness under the cap: a capped element box letterboxes
     // exactly as WS-P10 proves for the general case. At a 420x134 stubbed
@@ -632,6 +657,268 @@ const ROSTER = {
       /max-height:\s*min\(40vh,\s*var\(--pitch-dock-max-h,\s*40vh\)\)/.test(css) &&
       /max-height:\s*min\(30vh,\s*var\(--pitch-dock-max-h,\s*30vh\)\)/.test(css));
 
+    B.dom.window.close();
+  }
+
+  // =====================================================================
+  section('WS-F — floating pitch dock (header drag, free resize, persistence)');
+  // =====================================================================
+  {
+    // ---- Part 1: drag + clamping (default file:// boot; storage inert) ----
+    B = boot({ squad: SQUAD });
+    await sleep(250);
+    const dock = id('pitchDock');
+    const dockSvg = id('pitchDockSvg');
+    const grip = id('pitchDockGrip');
+    const dockHeader = B.doc.querySelector('.pitch-dock-header');
+    const frame = B.doc.querySelector('.video-frame');
+    const md = (el, x, y) => el.dispatchEvent(new B.win.MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+    const mm = (x, y) => B.win.dispatchEvent(new B.win.MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    const mu = () => B.win.dispatchEvent(new B.win.MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    const dblClick = (el) => el.dispatchEvent(new B.win.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+
+    // (g) boot defaults: anchored bottom-right (no inline overrides — the
+    // WS-A12 CSS anchor governs) at the default size for this window.
+    ok('WS-F0: boots anchored (no inline position) at the default width (180 at the 1024px harness window)',
+      dock.style.left === '' && dock.style.top === '' && dock.style.right === '' && dock.style.bottom === '' &&
+      dock.style.width === '180px',
+      'left=' + dock.style.left + ' width=' + dock.style.width);
+
+    // Geometry stubs for the drag math (jsdom has no layout).
+    definePx(frame, 'clientWidth', 800);
+    definePx(frame, 'clientHeight', 450);
+    definePx(dock, 'offsetLeft', 100);
+    definePx(dock, 'offsetTop', 80);
+    definePx(dock, 'offsetWidth', 240);
+    definePx(dock, 'offsetHeight', 160);
+
+    // (a) drag by header moves the dock by the pointer delta.
+    md(dockHeader, 500, 300);
+    ok('WS-F1a: mousedown on the header starts the drag (is-dragging affordance classes on dock + body)',
+      dock.classList.contains('is-dragging') && B.doc.body.classList.contains('pitch-dock-dragging'));
+    mm(540, 330);
+    ok('WS-F1b: header drag moves the dock by the pointer delta (100+40, 80+30) and switches to the explicit anchor',
+      dock.style.left === '140px' && dock.style.top === '110px' &&
+      dock.style.right === 'auto' && dock.style.bottom === 'auto',
+      'left=' + dock.style.left + ' top=' + dock.style.top + ' right=' + dock.style.right + ' bottom=' + dock.style.bottom);
+    mu();
+    ok('WS-F1c: mouseup ends the drag (affordance classes cleared)',
+      !dock.classList.contains('is-dragging') && !B.doc.body.classList.contains('pitch-dock-dragging'));
+
+    // (b) a drag gesture from a pitch zone cell never moves the dock, and
+    // the zone click keeps locating events (interactivity preserved).
+    // PRESERVATION PINS: green by design pre-implementation (no drag
+    // exists to mis-capture) — they guard the drag wiring against
+    // capturing zone-cell/grip gestures.
+    click(tagBtn('Pass'));
+    detailDone();
+    const zoneCell = dockSvg.querySelector('.pitch-outline');
+    const beforeDrag = dock.style.left;
+    md(zoneCell, 500, 300);
+    ok('WS-F2a: mousedown on a pitch zone cell does NOT start a drag (no affordance)',
+      !dock.classList.contains('is-dragging'));
+    mm(540, 330);
+    mu();
+    ok('WS-F2b: a full drag gesture from a zone cell leaves the dock unmoved',
+      dock.style.left === beforeDrag,
+      'left=' + dock.style.left + ' before=' + beforeDrag);
+    click(dockSvg, { clientX: Math.round(0.8 * 700), clientY: Math.round(0.7 * 450) });
+    const zm = dockMarker();
+    ok('WS-F2c: zone activation preserved — clicking the pitch still locates the latest event (0.8, 0.7)',
+      !!zm && Math.abs(zm.x - 0.8) < 0.01 && Math.abs(zm.y - 0.7) < 0.01,
+      JSON.stringify(zm));
+    // The resize grip is INSIDE the header but owns its own gesture.
+    md(grip, 500, 300);
+    mm(540, 330);
+    mu();
+    ok('WS-F2d: a drag gesture from the resize grip does not move the dock (grip owns resizing)',
+      dock.style.left === beforeDrag,
+      'left=' + dock.style.left);
+
+    // (c) real-time clamping during the drag: all four edges stay inside
+    // the video frame (4px margin).
+    md(dockHeader, 500, 300);
+    mm(10500, 10030);
+    ok('WS-F3a: dragging past the bottom-right clamps inside the frame (800-240-4 / 450-160-4)',
+      dock.style.left === '556px' && dock.style.top === '286px',
+      'left=' + dock.style.left + ' top=' + dock.style.top);
+    mu();
+    md(dockHeader, 500, 300);
+    mm(-9500, -9970);
+    ok('WS-F3b: dragging past the top-left clamps at the margin (4px)',
+      dock.style.left === '4px' && dock.style.top === '4px',
+      'left=' + dock.style.left + ' top=' + dock.style.top);
+    mu();
+    // A window resize re-clamps the dock into view (never stranded).
+    md(dockHeader, 500, 300);
+    mm(10500, 10030); // park at the far bottom-right corner
+    mu();
+    definePx(frame, 'clientWidth', 600);
+    definePx(frame, 'clientHeight', 300);
+    B.win.dispatchEvent(new B.win.Event('resize'));
+    ok('WS-F3c: window resize re-clamps the dragged dock into the shrunk frame (600-240-4 / 300-160-4)',
+      dock.style.left === '356px' && dock.style.top === '136px',
+      'left=' + dock.style.left + ' top=' + dock.style.top);
+
+    // (f) free resize bounds: min 140, max = frame width - margins.
+    definePx(frame, 'clientWidth', 900);
+    keydown(grip, { key: 'End' });
+    ok('WS-F4a: grip End resizes to the containment max (900-24=876 — the 420 ceiling is gone) and aria-valuemax tracks it',
+      dock.style.width === '876px' && grip.getAttribute('aria-valuemax') === '876',
+      'width=' + dock.style.width + ' aria-max=' + grip.getAttribute('aria-valuemax'));
+    keydown(grip, { key: 'Home' });
+    ok('WS-F4b: grip Home clamps at the relaxed minimum (140)',
+      dock.style.width === '140px', 'width=' + dock.style.width);
+    // A user-sized dock may exceed the half-frame law within D1.
+    definePx(frame, 'clientHeight', 480);
+    definePx(dock, 'offsetHeight', 322);
+    definePx(dockSvg, 'clientHeight', 270);
+    keydown(grip, { key: 'End' });
+    ok('WS-F4c: a manually-resized dock may exceed half the frame within D1 (480px frame -> cap 414 = pure D1, not the 188 share value)',
+      dockSvg.style.getPropertyValue('--pitch-dock-max-h') === '414px',
+      'cap=' + JSON.stringify(dockSvg.style.getPropertyValue('--pitch-dock-max-h')));
+    B.dom.window.close();
+
+    // ---- Part 2: persistence + reset (http://localhost boots: jsdom's
+    // file:// origin is opaque and localStorage throws there — the app
+    // guards it; these boots exercise the real storage pathway). ----
+    B = boot({ squad: SQUAD }, { url: 'http://localhost/' });
+    await sleep(250);
+    {
+      const dock2 = id('pitchDock');
+      const grip2 = id('pitchDockGrip');
+      const header2 = B.doc.querySelector('.pitch-dock-header');
+      const frame2 = B.doc.querySelector('.video-frame');
+      definePx(frame2, 'clientWidth', 800);
+      definePx(frame2, 'clientHeight', 450);
+      definePx(dock2, 'offsetLeft', 100);
+      definePx(dock2, 'offsetTop', 80);
+      definePx(dock2, 'offsetWidth', 240);
+      definePx(dock2, 'offsetHeight', 160);
+      md(header2, 500, 300);
+      mm(540, 330);
+      mu();
+      keydown(grip2, { key: 'End' });
+      const raw = B.win.localStorage.getItem('pitchlog.pitchDock');
+      let parsed = null;
+      try { parsed = JSON.parse(raw); } catch (e) { /* pinned below */ }
+      ok('WS-F5a: drag + manual resize persist to localStorage under the single key pitchlog.pitchDock ({left, top, width})',
+        !!raw && !!parsed && parsed.left === 140 && parsed.top === 110 && parsed.width === 776,
+        'raw=' + JSON.stringify(raw));
+
+      // (d) round-trip: a fresh boot seeded with the exact stored value.
+      const seed = raw;
+      B = boot({ squad: SQUAD }, {
+        url: 'http://localhost/',
+        preEval: (win) => {
+          win.localStorage.setItem('pitchlog.pitchDock', seed);
+          const f = win.document.querySelector('.video-frame');
+          const d = win.document.getElementById('pitchDock');
+          Object.defineProperty(f, 'clientWidth', { get: () => 800, configurable: true });
+          Object.defineProperty(f, 'clientHeight', { get: () => 450, configurable: true });
+          Object.defineProperty(d, 'offsetWidth', { get: () => 240, configurable: true });
+          Object.defineProperty(d, 'offsetHeight', { get: () => 160, configurable: true });
+        }
+      });
+      await sleep(50);
+      ok('WS-F5b: fresh boot restores the stored position AND size exactly',
+        id('pitchDock').style.left === '140px' && id('pitchDock').style.top === '110px' &&
+        id('pitchDock').style.width === '776px',
+        'left=' + id('pitchDock').style.left + ' top=' + id('pitchDock').style.top + ' width=' + id('pitchDock').style.width);
+      B.dom.window.close();
+
+      // (d) out-of-bounds stored values are re-clamped to the current frame.
+      B = boot({ squad: SQUAD }, {
+        url: 'http://localhost/',
+        preEval: (win) => {
+          win.localStorage.setItem('pitchlog.pitchDock', JSON.stringify({ left: 5000, top: 4000, width: 5000 }));
+          const f = win.document.querySelector('.video-frame');
+          const d = win.document.getElementById('pitchDock');
+          Object.defineProperty(f, 'clientWidth', { get: () => 800, configurable: true });
+          Object.defineProperty(f, 'clientHeight', { get: () => 450, configurable: true });
+          Object.defineProperty(d, 'offsetWidth', { get: () => 240, configurable: true });
+          Object.defineProperty(d, 'offsetHeight', { get: () => 160, configurable: true });
+        }
+      });
+      await sleep(50);
+      ok('WS-F5c: out-of-bounds stored values restore RE-CLAMPED into the current frame (width 5000->776, left 5000->556, top 4000->286)',
+        id('pitchDock').style.width === '776px' && id('pitchDock').style.left === '556px' && id('pitchDock').style.top === '286px',
+        'width=' + id('pitchDock').style.width + ' left=' + id('pitchDock').style.left + ' top=' + id('pitchDock').style.top);
+      B.dom.window.close();
+
+      // (d) corrupt storage falls back to the defaults.
+      B = boot({ squad: SQUAD }, {
+        url: 'http://localhost/',
+        preEval: (win) => { win.localStorage.setItem('pitchlog.pitchDock', '{{{not json'); }
+      });
+      await sleep(50);
+      ok('WS-F5d: a corrupt stored value falls back to the defaults (anchored bottom-right, boot width 180)',
+        id('pitchDock').style.left === '' && id('pitchDock').style.top === '' && id('pitchDock').style.width === '180px',
+        'left=' + id('pitchDock').style.left + ' width=' + id('pitchDock').style.width);
+      B.dom.window.close();
+
+      // Partial override: size only — the position stays anchored.
+      B = boot({ squad: SQUAD }, {
+        url: 'http://localhost/',
+        preEval: (win) => { win.localStorage.setItem('pitchlog.pitchDock', JSON.stringify({ width: 300 })); }
+      });
+      await sleep(50);
+      ok('WS-F5e: a size-only override restores the width and keeps the default anchor',
+        id('pitchDock').style.left === '' && id('pitchDock').style.width === '300px',
+        'left=' + id('pitchDock').style.left + ' width=' + id('pitchDock').style.width);
+      B.dom.window.close();
+
+      // (e) double-click reset — needs a boot WITH a stored override (and
+      // the frame geometry pre-stubbed, exactly like the F5b/F5c restore
+      // boots: a 776px width only restores when the clamp can see the
+      // frame; without layout the inert jsdom fallback (420) would bite).
+      B = boot({ squad: SQUAD }, {
+        url: 'http://localhost/',
+        preEval: (win) => {
+          win.localStorage.setItem('pitchlog.pitchDock', JSON.stringify({ left: 140, top: 110, width: 776 }));
+          const f = win.document.querySelector('.video-frame');
+          const d = win.document.getElementById('pitchDock');
+          Object.defineProperty(f, 'clientWidth', { get: () => 800, configurable: true });
+          Object.defineProperty(f, 'clientHeight', { get: () => 450, configurable: true });
+          Object.defineProperty(d, 'offsetWidth', { get: () => 240, configurable: true });
+          Object.defineProperty(d, 'offsetHeight', { get: () => 160, configurable: true });
+        }
+      });
+      await sleep(50);
+      ok('WS-F6-pre: the seeded override restored (sanity for the reset pin)',
+        id('pitchDock').style.left === '140px' && id('pitchDock').style.width === '776px',
+        'left=' + id('pitchDock').style.left + ' width=' + id('pitchDock').style.width);
+      dblClick(B.doc.querySelector('.pitch-dock-header'));
+      ok('WS-F6: double-click on the header resets to the default corner + boot size and CLEARS the stored override',
+        id('pitchDock').style.left === '' && id('pitchDock').style.top === '' &&
+        id('pitchDock').style.right === '' && id('pitchDock').style.bottom === '' &&
+        id('pitchDock').style.width === '180px' &&
+        B.win.localStorage.getItem('pitchlog.pitchDock') === null,
+        'left=' + id('pitchDock').style.left + ' width=' + id('pitchDock').style.width + ' stored=' + JSON.stringify(B.win.localStorage.getItem('pitchlog.pitchDock')));
+      B.dom.window.close();
+    }
+
+    // (g) the boot width tiers stay EXACTLY as today (240/200/180).
+    B = boot({ squad: SQUAD }, {
+      url: 'http://localhost/',
+      preEval: (win) => {
+        Object.defineProperty(win, 'innerWidth', { get: () => 1600, configurable: true });
+        Object.defineProperty(win, 'innerHeight', { get: () => 900, configurable: true });
+      }
+    });
+    await sleep(50);
+    ok('WS-F7a: large-window boot tier unchanged (1600x900 -> 240px default dock)',
+      id('pitchDock').style.width === '240px', 'width=' + id('pitchDock').style.width);
+    B.dom.window.close();
+    B = boot({ squad: SQUAD }, {
+      url: 'http://localhost/',
+      preEval: (win) => {
+        Object.defineProperty(win, 'innerWidth', { get: () => 1300, configurable: true });
+      }
+    });
+    await sleep(50);
+    ok('WS-F7b: mid-window boot tier unchanged (1300px -> 200px default dock; 180 pinned by WS-F0/WS-F6)',
+      id('pitchDock').style.width === '200px', 'width=' + id('pitchDock').style.width);
     B.dom.window.close();
   }
 

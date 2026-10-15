@@ -421,6 +421,24 @@ body.topbar-hidden .topbar-restore { display: flex; }
   background: var(--accent-soft);
 }
 
+/* FLOATING PITCH DOCK: header-drag affordance (cursor + selection only —
+   the drag logic lives in the renderer). grab/grabbing feedback while
+   dragging; no text selection anywhere during the gesture. The grip keeps
+   its own ew-resize cursor (the element-level rule wins inside the
+   header). */
+.pitch-dock-header {
+  cursor: grab;
+}
+
+.pitch-dock.is-dragging,
+.pitch-dock.is-dragging .pitch-dock-header {
+  cursor: grabbing;
+}
+
+body.pitch-dock-dragging {
+  user-select: none;
+}
+
 /* width comes from the renderer (clamped px); the 700x450 viewBox keeps
    the DRAWN pitch at its aspect ratio at every size. height:auto makes the
    element match that aspect too; the max-height caps (viewport-relative,

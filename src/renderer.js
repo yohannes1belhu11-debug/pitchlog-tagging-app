@@ -7103,6 +7103,7 @@
     if (btnHideTopbar) btnHideTopbar.setAttribute('aria-expanded', String(!hidden));
     if (btnShowTopbar) btnShowTopbar.setAttribute('aria-expanded', String(!hidden));
     applyPitchDockHeightCap(); // D1: hiding/restoring the topbar resizes the video frame
+    clampPitchDockIntoFrame(); // FLOATING DOCK: re-clamp the dragged position into the resized frame
   }
 
   function toggleTopbar() { setTopbarHidden(!topbarHidden); }
@@ -7155,6 +7156,7 @@
     tagpanelEl.style.flex = '0 0 ' + clamped + 'px';
     updateSplitterAria();
     applyPitchDockHeightCap(); // D1: the video frame resized under the splitter
+    clampPitchDockIntoFrame(); // FLOATING DOCK: re-clamp the dragged position into the resized frame
     return true;
   }
 
@@ -7193,12 +7195,21 @@
 
   // ----- F5/F6: pitch dock -----
 
-  const PITCH_DOCK_MIN_W = 180;
-  const PITCH_DOCK_MAX_W = 420;
+  const PITCH_DOCK_MIN_W = 140; // FLOATING DOCK: manual-resize floor (was 180)
+  const PITCH_DOCK_BOOT_SMALL_W = 180; // boot/default small-window tier (F5/F6 law, unchanged)
+  const PITCH_DOCK_FALLBACK_MAX_W = 420; // no-layout fallback only (jsdom boots); the app always has layout
   let pitchDockWidth = 240; // refined at boot from the window size (init)
+  let pitchDockManualWidth = false; // FLOATING DOCK: true once the USER sets a width (grip or a restored override)
   let pitchDockResizing = false;
   let pitchDockResizeStartX = 0;
   let pitchDockResizeStartW = 0;
+  let pitchDockResizedByPointer = false;
+  // FLOATING DOCK: header-drag state + the containment margin law + the
+  // double-click-reset guard (a real drag suppresses the next dblclick).
+  const PITCH_DOCK_DRAG_MARGIN_PX = 4;
+  const PITCH_DOCK_STORAGE_KEY = 'pitchlog.pitchDock';
+  let pitchDockDrag = null; // { startX, startY, origLeft, origTop, moved, distance }
+  let pitchDockDragLastDistance = 0;
 
   function latestLocatedEvent() {
     for (let i = events.length - 1; i >= 0; i--) {
@@ -7226,19 +7237,37 @@
     }
   }
 
-  function clampPitchDockWidth(w) {
-    let max = PITCH_DOCK_MAX_W;
+  // FLOATING DOCK: the resize max is containment-bounded — the video
+  // frame's width minus both side margins (the old absolute 420px ceiling
+  // is gone). Without layout (jsdom boot, clientWidth 0) the frame term
+  // is skipped entirely so the boot defaults are untouched; the fallback
+  // constant is only an inert jsdom value (the app always has layout).
+  function pitchDockMaxWidth() {
     if (videoFrameEl) {
-      const avail = (videoFrameEl.clientWidth || 0) - 24; // dock margins
-      if (avail >= PITCH_DOCK_MIN_W) max = Math.min(max, avail);
+      const cw = videoFrameEl.clientWidth || 0;
+      if (cw > 0) {
+        const avail = cw - 24; // dock side margins
+        return avail >= PITCH_DOCK_MIN_W ? avail : PITCH_DOCK_MIN_W; // degenerate narrow frame: floor
+      }
     }
-    return Math.round(Math.min(max, Math.max(PITCH_DOCK_MIN_W, w)));
+    return PITCH_DOCK_FALLBACK_MAX_W;
+  }
+
+  function clampPitchDockWidth(w) {
+    return Math.round(Math.min(pitchDockMaxWidth(), Math.max(PITCH_DOCK_MIN_W, w)));
   }
 
   function applyPitchDockWidth(w) {
     pitchDockWidth = clampPitchDockWidth(w);
     if (pitchDockEl) pitchDockEl.style.width = pitchDockWidth + 'px';
-    if (pitchDockGripEl) pitchDockGripEl.setAttribute('aria-valuenow', String(pitchDockWidth));
+    if (pitchDockGripEl) {
+      pitchDockGripEl.setAttribute('aria-valuenow', String(pitchDockWidth));
+      // FLOATING DOCK: keep the grip's aria bounds truthful now that the
+      // min is 140 and the max is frame-relative (the HTML attributes are
+      // the no-JS fallback; index.html itself stays untouched).
+      pitchDockGripEl.setAttribute('aria-valuemin', String(PITCH_DOCK_MIN_W));
+      pitchDockGripEl.setAttribute('aria-valuemax', String(Math.round(pitchDockMaxWidth())));
+    }
     applyPitchDockHeightCap(); // D1: re-derive the height cap at every size change
   }
 
@@ -7299,8 +7328,113 @@
     // midline, so the dock hugs the bottom-right corner and cannot cover
     // the centre of the video.
     const shareCap = Math.floor(frameH * PITCH_DOCK_MAX_FRAME_SHARE) - chrome;
-    const cap = Math.max(PITCH_DOCK_MIN_SVG_PX, Math.min(d1Cap, shareCap));
+    // FLOATING DOCK: the share law is a BOOT/DEFAULT law — a user-sized
+    // dock (grip or a restored width override) may exceed half the frame
+    // within D1 containment; default-sized docks stay share-capped.
+    let cap = d1Cap;
+    if (!pitchDockManualWidth) cap = Math.min(cap, shareCap);
+    cap = Math.max(PITCH_DOCK_MIN_SVG_PX, cap);
     pitchDockSvgEl.style.setProperty('--pitch-dock-max-h', Math.round(cap) + 'px');
+  }
+
+  // ----- FLOATING DOCK: position (drag), containment clamp, persistence -----
+  // Renderer-local persistence only: one JSON key, no IPC, no main/preload
+  // involvement, no session/autosave coupling. jsdom's file:// windows have
+  // an opaque origin (localStorage THROWS there) — every access is guarded
+  // so all harness boots keep working; the Electron app persists normally.
+  function pitchDockStorage() {
+    try { return window.localStorage; } catch (err) { return null; }
+  }
+
+  function applyPitchDockPosition(left, top) {
+    if (!pitchDockEl) return;
+    let x = Math.round(left);
+    let y = Math.round(top);
+    const fw = videoFrameEl ? (videoFrameEl.clientWidth || 0) : 0;
+    const fh = videoFrameEl ? (videoFrameEl.clientHeight || 0) : 0;
+    const dw = (pitchDockEl.offsetWidth || 0) || pitchDockWidth; // offsetWidth incl. borders; managed width as the no-layout fallback
+    const dh = pitchDockEl.offsetHeight || 0;
+    // Real-time containment: all four dock edges stay inside the video
+    // frame (small fixed margin). Skipped per-axis when layout is
+    // unavailable (jsdom without stubs) so nothing is pinned to a
+    // degenerate 0px frame.
+    if (fw > 0 && dw > 0) x = Math.max(PITCH_DOCK_DRAG_MARGIN_PX, Math.min(x, fw - dw - PITCH_DOCK_DRAG_MARGIN_PX));
+    if (fh > 0 && dh > 0) y = Math.max(PITCH_DOCK_DRAG_MARGIN_PX, Math.min(y, fh - dh - PITCH_DOCK_DRAG_MARGIN_PX));
+    pitchDockEl.style.left = x + 'px';
+    pitchDockEl.style.top = y + 'px';
+    pitchDockEl.style.right = 'auto'; // the CSS right/bottom anchor yields to the explicit position
+    pitchDockEl.style.bottom = 'auto';
+  }
+
+  function clampPitchDockIntoFrame() {
+    if (!pitchDockEl) return;
+    // CSS-anchored docks (never dragged / reset) are kept inside by the
+    // right/bottom anchor itself; only explicitly positioned docks need
+    // the re-clamp (window resize, splitter, topbar toggle).
+    if (pitchDockEl.style.left === '' || pitchDockEl.style.top === '') return;
+    applyPitchDockPosition(parseFloat(pitchDockEl.style.left) || 0, parseFloat(pitchDockEl.style.top) || 0);
+  }
+
+  function pitchDockBootWidth() {
+    return window.innerWidth >= 1500 && window.innerHeight >= 800 ? 240 :
+      window.innerWidth >= 1200 ? 200 : PITCH_DOCK_BOOT_SMALL_W;
+  }
+
+  // Stored shape: { left?: number, top?: number, width?: number } — only
+  // the overridden aspects are stored. Validation: JSON parse guarded;
+  // structurally invalid values (wrong type, non-finite, absurd ranges)
+  // fall back to defaults; structurally VALID values are applied and
+  // re-clamped to the CURRENT frame geometry.
+  function readPitchDockState() {
+    const ls = pitchDockStorage();
+    if (!ls) return null;
+    let raw = null;
+    try { raw = ls.getItem(PITCH_DOCK_STORAGE_KEY); } catch (err) { return null; }
+    if (!raw) return null;
+    let data = null;
+    try { data = JSON.parse(raw); } catch (err) { return null; } // corrupt -> defaults
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100000 ? v : null);
+    const out = {};
+    const left = num(data.left);
+    const top = num(data.top);
+    if (left !== null && top !== null) { out.left = left; out.top = top; } // position is a pair
+    const width = num(data.width);
+    if (width !== null) out.width = width;
+    return (out.left !== undefined || out.width !== undefined) ? out : null;
+  }
+
+  function savePitchDockState() {
+    const ls = pitchDockStorage();
+    if (!ls || !pitchDockEl) return;
+    const data = {};
+    if (pitchDockEl.style.left !== '' && pitchDockEl.style.top !== '') {
+      data.left = Math.round(parseFloat(pitchDockEl.style.left) || 0);
+      data.top = Math.round(parseFloat(pitchDockEl.style.top) || 0);
+    }
+    if (pitchDockManualWidth) data.width = pitchDockWidth;
+    if (data.left === undefined && data.width === undefined) return; // nothing overridden
+    try { ls.setItem(PITCH_DOCK_STORAGE_KEY, JSON.stringify(data)); } catch (err) { /* non-fatal */ }
+  }
+
+  function clearPitchDockState() {
+    const ls = pitchDockStorage();
+    if (!ls) return;
+    try { ls.removeItem(PITCH_DOCK_STORAGE_KEY); } catch (err) { /* non-fatal */ }
+  }
+
+  // Double-click on the header: snap back to the default bottom-right
+  // anchor + boot size; the stored override is cleared.
+  function resetPitchDock() {
+    pitchDockManualWidth = false;
+    if (pitchDockEl) {
+      pitchDockEl.style.left = '';
+      pitchDockEl.style.top = '';
+      pitchDockEl.style.right = '';
+      pitchDockEl.style.bottom = ''; // the CSS anchor (right/bottom 12px) governs again
+    }
+    applyPitchDockWidth(pitchDockBootWidth());
+    clearPitchDockState();
   }
 
   if (pitchDockGripEl) {
@@ -7308,6 +7442,7 @@
       pitchDockResizing = true;
       pitchDockResizeStartX = e.clientX;
       pitchDockResizeStartW = pitchDockWidth;
+      pitchDockResizedByPointer = false;
       e.preventDefault();
       try { if (pitchDockGripEl.setPointerCapture) pitchDockGripEl.setPointerCapture(e.pointerId); } catch (err) { /* non-fatal */ }
     });
@@ -7317,10 +7452,12 @@
       if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = pitchDockWidth + step;
       else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = pitchDockWidth - step;
       else if (e.key === 'Home') next = PITCH_DOCK_MIN_W;
-      else if (e.key === 'End') next = PITCH_DOCK_MAX_W;
+      else if (e.key === 'End') next = pitchDockMaxWidth(); // FLOATING DOCK: containment max (was the absolute 420)
       if (next !== null) {
         e.preventDefault();
+        pitchDockManualWidth = true; // keyboard resize is a manual size choice
         applyPitchDockWidth(next);
+        savePitchDockState(); // FLOATING DOCK: manual sizes persist
       }
     });
   }
@@ -7329,10 +7466,63 @@
     if (!pitchDockResizing) return;
     // Dragging right widens the dock; aspect ratio is preserved by the
     // SVG viewBox regardless of width.
+    pitchDockManualWidth = true; // grip drag is a manual size choice
+    pitchDockResizedByPointer = true;
     applyPitchDockWidth(pitchDockResizeStartW + (e.clientX - pitchDockResizeStartX));
   });
-  window.addEventListener('pointerup', () => { pitchDockResizing = false; });
+  window.addEventListener('pointerup', () => {
+    if (pitchDockResizing && pitchDockResizedByPointer) savePitchDockState(); // FLOATING DOCK
+    pitchDockResizing = false;
+  });
   window.addEventListener('pointercancel', () => { pitchDockResizing = false; });
+
+  // ----- FLOATING DOCK: header drag (mousedown -> window mousemove/up) -----
+  // The header is the drag handle; the pitch SVG/zone cells (interactive
+  // tagging targets) and the resize grip are NOT — the grip lives inside
+  // the header but owns its own gesture, so its mousedown (and any other
+  // interactive control's) is excluded via closest().
+  const pitchDockHeaderEl = document.querySelector('.pitch-dock-header');
+  const PITCH_DOCK_HEADER_INTERACTIVE = '.pitch-dock-grip, button, [role="separator"], a, input, select, textarea';
+  if (pitchDockHeaderEl && pitchDockEl) {
+    pitchDockHeaderEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // left button only
+      if (e.target && e.target.closest && e.target.closest(PITCH_DOCK_HEADER_INTERACTIVE)) return;
+      pitchDockDrag = {
+        startX: e.clientX,
+        startY: e.clientY,
+        origLeft: pitchDockEl.offsetLeft, // layout-true in the app; stubbed in jsdom
+        origTop: pitchDockEl.offsetTop,
+        moved: false,
+        distance: 0
+      };
+      pitchDockEl.classList.add('is-dragging');
+      document.body.classList.add('pitch-dock-dragging'); // cursor + no-selection affordance
+      e.preventDefault(); // no text selection during the drag
+    });
+    pitchDockHeaderEl.addEventListener('dblclick', (e) => {
+      if (e.target && e.target.closest && e.target.closest(PITCH_DOCK_HEADER_INTERACTIVE)) return;
+      // A drag that just ended with real movement is not a reset gesture.
+      if (pitchDockDrag || pitchDockDragLastDistance > 3) return;
+      resetPitchDock();
+    });
+  }
+  window.addEventListener('mousemove', (e) => {
+    if (!pitchDockDrag || !pitchDockEl) return;
+    const dx = e.clientX - pitchDockDrag.startX;
+    const dy = e.clientY - pitchDockDrag.startY;
+    pitchDockDrag.moved = true;
+    pitchDockDrag.distance = Math.abs(dx) + Math.abs(dy);
+    applyPitchDockPosition(pitchDockDrag.origLeft + dx, pitchDockDrag.origTop + dy); // clamps in real time
+  });
+  window.addEventListener('mouseup', () => {
+    if (!pitchDockDrag || !pitchDockEl) return;
+    const d = pitchDockDrag;
+    pitchDockDrag = null;
+    pitchDockDragLastDistance = d.distance;
+    pitchDockEl.classList.remove('is-dragging');
+    document.body.classList.remove('pitch-dock-dragging');
+    if (d.moved) savePitchDockState(); // FLOATING DOCK: the dragged position persists
+  });
 
   if (pitchDockSvgEl) {
     pitchDockSvgEl.addEventListener('click', (e) => {
@@ -7358,6 +7548,7 @@
       applyTagpanelHeight(parseFloat(tagpanelEl.style.height));
     }
     applyPitchDockWidth(pitchDockWidth);
+    clampPitchDockIntoFrame(); // FLOATING DOCK: never stranded off-frame after a shrink
   });
 
   // ---------- Wire up match clock buttons ----------
@@ -7924,13 +8115,21 @@
   // ---------- Init ----------
 
   video.style.display = 'none';
-  // Stage 3 F5/F6/F7: give the pitch dock its responsive default width
-  // for the current window (smaller windows get a smaller dock), then
-  // render it (renderEventList below also keeps it synchronized).
-  applyPitchDockWidth(
-    window.innerWidth >= 1500 && window.innerHeight >= 800 ? 240 :
-    window.innerWidth >= 1200 ? 200 : PITCH_DOCK_MIN_W
-  );
+  // Stage 3 F5/F6/F7 + FLOATING DOCK: boot at the responsive default width
+  // for the current window (smaller windows get a smaller dock), unless a
+  // validated width override was restored from localStorage — a restored
+  // width is a manual size (D1-only cap). A restored position (if any) is
+  // applied AFTER the size so the containment clamp sees the final width.
+  const pitchDockRestored = readPitchDockState();
+  if (pitchDockRestored && Number.isFinite(pitchDockRestored.width)) {
+    pitchDockManualWidth = true;
+    applyPitchDockWidth(pitchDockRestored.width);
+  } else {
+    applyPitchDockWidth(pitchDockBootWidth());
+  }
+  if (pitchDockRestored && Number.isFinite(pitchDockRestored.left) && Number.isFinite(pitchDockRestored.top)) {
+    applyPitchDockPosition(pitchDockRestored.left, pitchDockRestored.top);
+  }
   renderPitchDock();
   renderTagButtons();
   populateEventTypeFilter();
