@@ -357,11 +357,19 @@ body.topbar-hidden .topbar-restore { display: flex; }
 
 /* ---------- Stage 3 F5/F6: persistent pitch dock ---------- */
 
-/* Anchored inside .video-frame (lower-right): it can never cover the
-   transport bar or the tag controls — those are outside the video frame.
-   z-index 10 keeps it under the detail panel (z-index 20). */
+/* FLOATING WINDOW: the dock is a viewport-level floating widget — it may
+   sit anywhere in the app window, over the tag bar, transport bar and
+   events panel. The renderer computes the DEFAULT home (the video frame's
+   bottom-right corner — the familiar Stage 3 position) as explicit
+   window-coordinate left/top at boot/reset; the right/bottom 12px values
+   below are only the NO-LAYOUT fallback anchor (window lower-right).
+   z-index 40: above workspace panel content (detach button 10, detail
+   panel 20) and below EVERY overlay (modal 50, touchline 200, touchline
+   detail sheet 300, autosave toast 1000) — a modal can never be blocked
+   by the dock. No ancestor carries transform/filter/perspective, so
+   position:fixed is true viewport positioning. */
 .pitch-dock {
-  position: absolute;
+  position: fixed;
   right: 12px;
   bottom: 12px;
   width: 240px;
@@ -369,7 +377,7 @@ body.topbar-hidden .topbar-restore { display: flex; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 6px;
-  z-index: 10;
+  z-index: 40;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
