@@ -1,6 +1,6 @@
-# PitchLog — Match Analysis Dashboard Specification (V2)
+# PitchLog — Match Analysis Dashboard Specification (V3)
 
-**Status:** AUTHORITATIVE — V2.0. This document is the single build recipe for
+**Status:** AUTHORITATIVE — V3.0. This document is the single build recipe for
 Stage 4A (Match Analysis Dashboard) of the tagging app. It consolidates the
 surviving architecture audit (worklog `STAGE4A-ARCHAUDIT-1`), the engine and
 renderer contracts verified at this HEAD, and the corrective round that defined
@@ -12,6 +12,11 @@ V1.1 amendment (review round): §13 dashboard section inventory added;
 V2.0 amendment: Stage 4B interactive filtering specified (§14); stage
 boundary, §5, §6, §12, §13.3, §13.6, §10 updated. Covers Stage 4A
 (implemented, closed) and Stage 4B (specified, pending implementation).
+
+V3.0 amendment: Stage 4C print-ready coach report specified (§15); §1, §9,
+§10, §12 updated; §13.3 cross-reference corrected. Covers Stage 4A
+(implemented, closed), Stage 4B (implemented, closed), Stage 4C (specified,
+pending implementation).
 
 **Authority rule:** where any historical worklog note, review remark, or earlier
 plan conflicts with this document, **this document wins**. Two known
@@ -50,7 +55,14 @@ event-taxonomy changes, no migration, no storage changes of any kind.
 - **Interactive filtering (Stage 4B) — IN SCOPE as of V2.0: view filtering
   only, per §14. Recomputation of aggregate metrics over filtered slices is
   NOT in scope (candidate for a later stage; requires engine work).**
-- **Stage 4C coach export** — nothing in Stage 4A exports, prints, or formats
+- **Coach-ready print report (Stage 4C) — IN SCOPE as of V3.0: printing /
+  PDF export of the open dashboard per §15. Explicitly OUT of scope: file
+  bundles or new save channels (require protected-file IPC changes),
+  self-contained HTML/email report files (would duplicate the dashboard's
+  presentation layer), AI-generated narrative, and video/clip inclusion
+  (served by the existing clip-playlist export).**
+- **Stage 4C coach export — out of scope for 4A/4B; IN SCOPE as of V3.0
+  limited to §15** — nothing in Stage 4A exports, prints, or formats
   for delivery.
 - Tactical sequence DIAGRAMS and NARRATIVES (Stage 5) — out of scope.
   Rendering the engine's existing sequences data (A.sequences) as the
@@ -387,6 +399,17 @@ other engine modules (`analytics.js`, `player-season.js`, `recent-form.js`,
 - **nothing weakened or removed** — every other assertion in the suite stands
   unchanged, and the suite remains 86/86.
 
+**Stage 4C (V3.0):** three files change, all renderer-side; no protected
+file, no new file. `src/index.html`: the match-analysis modal header gains
+the **Print / PDF** button (`btnPrintMatchAnalysis`, `btn btn-ghost`
+styling, a `title` tooltip stating the contract) and the print-only header
+element (`maPrintHeader`, §15.3). `src/renderer.js`: the print wiring
+block — element refs, the guarded print function (§15.6), the
+beforeprint/afterprint listeners (§15.7), print-header population at open
+(§15.3) — lives in the Stage 4A wiring territory. `src/styles.css`: one
+`@media print` block (§15.2/§15.5) plus the screen-only print-header rule.
+No other file changes.
+
 ---
 
 ## 10. Test expectations
@@ -542,6 +565,23 @@ restore, sha pair verified; B — the renderer discarding the renderAnalysis
 return immediately (statement call, never retained) → exactly MA-U16c+U16d
 red (89/91), byte-exact restore, sha pair verified.
 
+**Stage 4C (V3.0):** UI suite gains section MA-U17 (7 assertions): (1) the
+print button exists, is wired, and its handler calls a guarded
+`window.print` (spy-stubbed in jsdom); (2) a synthetic beforeprint event
+with the modal open adds the body print-mode class, and afterprint removes
+it; (3) with the modal CLOSED, beforeprint does NOT add the class; (4)
+static CSS pins: the `@media print` block exists, hides the pinned chrome
+selectors, resets the modal to document flow with a white background, and
+carries the §15.5 page-break/avoid rules; (5) the print header element
+exists, is screen-hidden, is populated at open with the exact §15.3 line
+for the fixture session (whole-match), and updates to the Active filters
+form after a list filter change; (6) the button path and beforeprint path
+share the same class toggle (source pin); (7) zero engine-call proof for
+the print path (engine spies unchanged across a print invocation). Model
+suite: NO changes. Battery remains 39 suites. Any 4A/4B assertion
+mechanically invalidated (e.g., modal-header child counts) may be updated
+ONLY to preserve pinned intent — listed at completion; nothing weakened.
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
@@ -611,6 +651,16 @@ UI must surface this (disabled control + explanation), never filter silently.
 12.7 Filtering never recomputes aggregate metrics — cards, team tables,
 period tables, players, sequences remain whole-match under any filter; a
 filtered spatial view must never be readable as recomputed statistics.
+
+12.8 Print/PDF fidelity is manual-QA territory (jsdom cannot compute print
+layout); the printed result is verified by the analyst printing from the
+real app.
+
+12.9 The PDF is produced by the operating system's print dialog (Save as
+PDF destination) — PitchLog does not write PDF files itself.
+
+12.10 Video/clips are never part of the printed report; the clip reel is a
+separate existing export.
 
 ---
 
@@ -742,6 +792,72 @@ mutation of session or A — filter changes included in purity tests), no
 .click(), delegation-only keyboard access, no seek from spatial views, no
 new dependencies, no engine changes, protected files untouched.
 Determinism: with unchanged filters and data, a re-render is byte-identical.
+
+---
+
+## 15. Stage 4C — Print-ready coach report (V3.0)
+
+The M1 export-surface audit established the ground truth this section is
+built on: the renderer is sandboxed behind the matchtag IPC allowlist; the
+only multi-file write precedent writes exactly two fixed names; any N-file
+bundle or new save channel requires modifying `src/main.js` /
+`src/preload.js` — protected files; no zip/ffmpeg capability exists; every
+summary source is already exposed by the frozen engine; the dashboard model
+is retained per-open. Reviewer ruling: Stage 4C is a **print-ready coach
+report** — print/PDF of the OPEN dashboard — NOT a file bundle.
+
+15.1 TRIGGERS. A "Print / PDF" button is added to the match-analysis modal
+header (id `btnPrintMatchAnalysis`). Clicking it invokes `window.print()` —
+nothing else: no IPC, no main/preload involvement, no new dialog. While the
+dashboard modal is OPEN, the browser/Electron Ctrl+P path receives the same
+treatment via beforeprint/afterprint listeners (15.7). When the modal is
+closed, printing behavior of the app is NOT intercepted or restyled.
+
+15.2 PRINT DOCUMENT LAW. When the dashboard modal is open and printing
+occurs, the printed page contains ONLY: the print header (15.3) and the
+dashboard content (the `#matchAnalysisContent` subtree, all nine §13
+sections in their authoritative order). Hidden in print: the app chrome
+(topbar, video pane and transport bar, tag panel, events panel, splitter,
+scrollbars) and the modal's own buttons (Done, Print/PDF). The modal must
+print as a normal document flow (not an overlay): static position, full
+page width, WHITE page background with dark ink-friendly text (the dark app
+theme is screen-only). The spatial density fills (inline crimson rgba
+styles) print as-is — cell text remains the primary information per SP law.
+
+15.3 PRINT HEADER. A print-only element inside the modal (id
+`maPrintHeader`, screen `display:none`) carries exactly one line, populated
+at every dashboard open by the renderer from the session snapshot:
+'PitchLog coach report — <competition> · <date> · vs <opponent> · <score> ·
+<filters note>' where <score> is the same chain score the dashboard header
+shows and <filters note> is 'Active filters: <summary>' when any spatial or
+list filter is active (the same human-readable summary format as §14) or
+'Whole-match view' otherwise. The header is never visible in the app UI.
+
+15.4 HONESTY. The printout is exactly what the open dashboard shows:
+filtered list rows and the active-filter banner print as displayed;
+aggregates remain whole-match per §12.7; ZERO engine calls are made by any
+print path (the print uses the already-rendered DOM; no recomputation, no
+rebuild).
+
+15.5 PAGINATION. @media print laws: page-break-before between the team,
+periods, spatial, players, and sequences sections (the header, cards, and
+key-events may flow together on page 1); table rows and cards must not
+split across pages (break-inside: avoid); the cards strip wraps; tables
+print at readable size with borders.
+
+15.6 CONSTRAINTS. No IPC. No new dependencies. No changes to
+`src/main.js` / `src/preload.js` (protected). No changes to
+`src/match-analysis.js` (sha frozen). No new on-disk format — the export
+data dictionary is untouched (a printout is not a file PitchLog writes).
+`window.print()` is invoked through a guard so jsdom harnesses (where print
+may warn) never crash: the UI suite stubs it.
+
+15.7 BEFOREPRINT/AFTERPRINT. The renderer adds window beforeprint /
+afterprint listeners: on beforeprint, if the dashboard modal is open, a
+body-level print-mode class is added (activating 15.2/15.5 CSS) and the
+print header is refreshed; on afterprint the class is removed. The button
+path applies the same class synchronously around `window.print()`. Both
+paths share one implementation.
 
 ---
 
