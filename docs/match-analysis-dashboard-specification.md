@@ -609,6 +609,47 @@ remains 39 suites. Any 4A/4B/4C assertion mechanically invalidated may be
 updated ONLY to preserve pinned intent — listed at completion; nothing
 weakened.
 
+**Stage 5 COMPLETION RECORD (M3 round — module, styles, suites).**
+Implemented per §16 in three commits; verified at completion.
+`src/match-analysis.js` grows from 1795 lines (sha d55bae95…) to 2084
+lines — NEW ANCHOR sha
+8b9db18215ac3fbe88d200a25ad40b1ba3f5b90f9a092b9aff3142e92f23063c (commit
+689948c, with the model suite); `src/styles.css` pure-append +194 lines
+(detail + path screen rules, responsive mirrors of the §9 key-row
+treatments, §15.8 print rules) (commit 8fd931b, with the UI suite).
+`src/index.html` and `src/renderer.js` UNCHANGED — the §16.9 module-only
+finding held. Model suite **151/151** (139 + 12 new: MA-M16 — derivation
+exactness by exact sequenceId equality incl. the Possession interval and
+unsequenced exclusions, with an engine eventCount cross-check; canonical
+order with the t-tie id tiebreak; open-badge truth from
+matchClock.activeSequenceId; path model — located-only, 1-based play-order
+numbering (the unlocated interval keeps list position 2), normalized
+x*700/y*450; degenerate 1-event all-unlocated path; determinism; purity
+across build + expand/collapse; byte-identical Stage 4A render with no
+detail open; zero added engine calls; hostile inputs). UI suite **108/108**
+(98 + 10 new: MA-U18 — expand/close/switch directly beneath the row
+through the REAL wiring; detail rows seek the REAL video element incl. the
+ID-space case (an event id absent from the key-events list) and the
+videoTime-null fallback; path SVG pins (shared 700×450 viewBox, polyline
+points, numbered dots 1/3/4); the 'Still open' badge on the detail AND its
+table row only while the open sequence's detail is open; mixed-team
+per-event teams with the engine first-event team on the table row; §15.8
+print-rule static pins; zero engine calls across expansion; purity —
+save payload byte-identical, zero autosave writes). FIXTURE LAW satisfied:
+the sequence-rich SEQ session covers a 1-event sequence, an open sequence
+(via matchClock.activeSequenceId, preserved verbatim by the load pathway),
+a mixed-team sequence, a sequence containing a Possession interval, and
+unsequenced events outside all sequences. Sensitivity demo: the
+sequenceId match perturbed from exact equality to prefix matching (first 5
+chars) → exactly the six derivation-exactness pins FAIL (M16.1/2/3/5/6/7
+— foreign events leak in); byte-exact restore, sha pair verified; 151/151
+green again. 4A/4B/4C assertions updated: NONE (the sequences table
+renders byte-identical with no detail open — M16.10 pins the byte-exact
+restore). Battery **39/39 at every commit**. §13.8 harmonized in this
+same docs commit: the stale V3-era 'no diagrams' clause reconciled with
+§16.4's in-scope static path diagram (a module-side display, never engine
+data).
+
 ---
 
 ## 11. Engine anchors (verified at `2c0748d6`)
@@ -744,10 +785,11 @@ Content: per-player counts and ratios as the engine exposes them. Framing is
 counts + ratios — no per-90, no physical or derived metrics. Shirt-number
 display limitation per §12.2.
 
-13.8 Sequences — source: A.sequences, rendered as the engine's sequence list.
-This is the existing engine data surface, NOT Stage 5: no diagrams, no
-narratives, no sequence editing (§1). Expandable per-sequence detail (event
-list, pitch path, open badge) per §16.
+13.8 Sequences — source: A.sequences, rendered as the engine's sequence
+list. The table is the engine data surface; the expandable per-sequence
+detail (event list, pitch path with its static diagram, open badge) per
+§16 is Stage 5 module-side display, never engine data. No narratives, no
+sequence editing (§1, §16.9).
 
 13.9 Protocol notes — source: A.protocol.notes, rendered read-only.
 
