@@ -1,7 +1,8 @@
-// PitchLog / MatchTag — MATCH ANALYSIS DASHBOARD (Stage 4A + Stage 4B filtering)
+// PitchLog / MatchTag — MATCH ANALYSIS DASHBOARD (Stage 4A + 4B filtering +
+// Stage 5 sequence exploration)
 // =====================================================================
 // File: src/match-analysis.js
-// Spec: docs/match-analysis-dashboard-specification.md (V2.0 — AUTHORITATIVE).
+// Spec: docs/match-analysis-dashboard-specification.md (V4.0 — AUTHORITATIVE).
 //
 // A dedicated, full-view, READ-ONLY analytical projection of the tagged
 // match data of one session. The dashboard is a PURE CONSUMER of the
@@ -68,6 +69,31 @@
 //       suffix on the insufficient/max lines, active-filter summary, banner,
 //       one static unattributed note. updateFilters is the exported pathway
 //       (same one the module's own change delegation drives).
+//   §16 (V4.0) Stage 5 sequence exploration. Clicking a sequences-table row
+//       (tr[data-sequence-id]) toggles an in-section detail directly beneath
+//       that row (the §8 zone-trace precedent: exactly one open at a time,
+//       re-click closes, another row switches — the open id lives in the
+//       DOM, the re-render rides the §14.8 reRenderSection pathway, and the
+//       §8 root delegation is never re-attached). Per-sequence event lists
+//       are derived module-side in buildModel from raw session.events (the
+//       §5 sanctioned pathway) by EXACT sequenceId equality, canonical
+//       (time asc, id asc) order, ALL labels (including Possession
+//       intervals — never the nine-label filter); zero added engine calls.
+//       Detail event rows reuse the key-row seek contract (videoTime ??
+//       time) but resolve against the sequence's OWN list — the id spaces
+//       of the key-events list and the detail rows OVERLAP, and detail rows
+//       carry a DISTINCT class (.ma-seq-event-row, never .ma-key-row) so
+//       the key-row delegation can never catch them. The path SVG (one per
+//       open detail, shared 700×450 viewBox, x*700/y*450) is DISPLAY ONLY:
+//       numbered dots (1-based play order) + polyline, no click/seek, no
+//       density fills, and the §3 minimum-sample gate does NOT apply (it
+//       governs the spatial section's density claims only) — events without
+//       pitch location stay in the list and the detail states the honest
+//       count. The 'Still open' badge is UI truth from
+//       session.matchClock.activeSequenceId (the engine has no open/closed
+//       concept) and shows on the detail AND its table row while that
+//       detail is open; with no detail open the sequences section renders
+//       byte-identical to Stage 4A. Purity and determinism per §16.7.
 //
 // UMD: window.MatchAnalysisDashboard in the renderer (loaded AFTER the
 // engine family, BEFORE renderer.js), module.exports in Node (tests).
@@ -865,6 +891,101 @@
     };
   }
 
+  // §16.2/§16.4/§16.6 (V4.0): the Stage 5 per-sequence exploration model —
+  // derived module-side from raw session.events (the §5 sanctioned pathway),
+  // NOT from the engine (A.sequences stays the source of the §13.8 table
+  // rows). Exact sequenceId equality; canonical (time asc, id asc) order;
+  // ALL labels including Possession intervals; the open-badge truth from
+  // session.matchClock.activeSequenceId (UI truth only — the engine ignores
+  // it); the path model with normalized coordinates (x*700 / y*450) and
+  // 1-based play-order numbering (the number IS the list position, so an
+  // unlocated event keeps its number hole). ZERO engine calls (§16.2); the
+  // session is read, never mutated (§16.7).
+  function buildSequenceDetailsModel(session, host) {
+    var src = Array.isArray(session && session.events) ? session.events : [];
+    var mc = isPlainObject(session && session.matchClock) ? session.matchClock : null;
+    var active = mc && typeof mc.activeSequenceId === 'string' && mc.activeSequenceId
+      ? mc.activeSequenceId
+      : null;
+
+    // Group by EXACT sequenceId equality (a non-empty string). Events with
+    // no sequenceId belong to NO list (§16.2 — unsequenced exclusions).
+    var groups = {};
+    var ids = [];
+    for (var i = 0; i < src.length; i++) {
+      var ev = src[i];
+      if (!isPlainObject(ev)) continue;
+      var sid = typeof ev.sequenceId === 'string' && ev.sequenceId ? ev.sequenceId : null;
+      if (!sid) continue;
+      if (!Object.prototype.hasOwnProperty.call(groups, sid)) { groups[sid] = []; ids.push(sid); }
+      groups[sid].push({ ev: ev, srcIndex: i });
+    }
+
+    var byId = {};
+    for (var g = 0; g < ids.length; g++) {
+      var id = ids[g];
+      var entries = groups[id];
+      var rows = [];
+      for (var j = 0; j < entries.length; j++) {
+        var ev2 = entries[j].ev;
+        var label = (typeof ev2.label === 'string' && ev2.label) ? ev2.label : '(unknown)';
+        var t = isFinNum(ev2.time) ? ev2.time : (isFinNum(ev2.matchTime) ? ev2.matchTime : 0);
+        var eid = isFinNum(ev2.id) ? ev2.id : entries[j].srcIndex;
+        var loc = (isPlainObject(ev2.location) && isFinNum(ev2.location.x) && isFinNum(ev2.location.y))
+          ? { x: ev2.location.x, y: ev2.location.y }
+          : null;
+        rows.push({
+          event: ev2,
+          eventId: eid,
+          time: t,
+          videoTime: (ev2.videoTime !== null && ev2.videoTime !== undefined) ? ev2.videoTime : null,
+          label: label,
+          displayLabel: displayLabelOf(label),
+          team: (ev2.team === 'our' || ev2.team === 'opponent') ? ev2.team : null,
+          playerText: keyPlayerText(ev2, host),
+          location: loc
+        });
+      }
+      // rows is a derived copy (new objects) — the session's own array is
+      // never touched (§16.7 purity). Canonical order (time asc, id asc).
+      rows.sort(function (a, b) {
+        if (a.time !== b.time) return a.time - b.time;
+        return a.eventId - b.eventId;
+      });
+
+      // §16.4 path model: located events only, numbered by PLAY ORDER (the
+      // 1-based position in the full canonical list above — the number IS
+      // the play's order, so an unlocated event's number is simply absent
+      // from the path, never renumbered).
+      var points = [];
+      var noLocationCount = 0;
+      for (var k = 0; k < rows.length; k++) {
+        var r = rows[k];
+        if (!r.location) { noLocationCount++; continue; }
+        points.push({
+          n: k + 1,
+          x: r.location.x,
+          y: r.location.y,
+          px: r.location.x * VIEWBOX_W,
+          py: r.location.y * VIEWBOX_H,
+          team: r.team,
+          isGoal: r.label === 'Goal' || r.label === 'GOAL',
+          label: r.label
+        });
+      }
+
+      byId[id] = {
+        sequenceId: id,
+        open: id === active,
+        rows: rows,
+        points: points,
+        noLocationCount: noLocationCount
+      };
+    }
+
+    return { activeSequenceId: active, ids: ids, byId: byId };
+  }
+
   // §6: buildModel(session, host, precomputed?). The precomputed engine
   // results are supplied by renderAnalysis in every full render; the
   // fallback computations below exist ONLY for direct/test callers (spec
@@ -910,6 +1031,7 @@
       },
       players: buildPlayersModel(A, host),
       sequences: buildSequencesModel(A),
+      sequenceDetails: buildSequenceDetailsModel(session, host),
       protocol: {
         notes: (A && A.protocol && Array.isArray(A.protocol.notes))
           ? A.protocol.notes.slice()
@@ -1522,28 +1644,39 @@
     return html;
   }
 
-  // §13.8: sequences — the engine's list, no diagrams, no narratives.
-  function buildSequencesHtml(model) {
+  // §13.8 + §16 (V4.0): sequences — the engine's list (unchanged table) plus
+  // the expandable per-sequence detail. With NO detail open this inner
+  // builder emits exactly the Stage 4A bytes (§16.7 determinism law); the
+  // open id is carried in the DOM (data-open-sequence on the sequences
+  // table — the zone-trace data-open-zone pattern), and the open row gains
+  // the 'Still open' badge ONLY while its detail is open AND the sequence
+  // is the active one (§16.6).
+  function buildSequencesInner(model, host, openSeqId) {
     var s = model.sequences;
-    var html = sectionOpen('sequences') + sectionTitle('Sequences');
     if (s.total === 0 && !s.rows.length) {
-      html += '<div class="ma-note">No sequences tagged.</div>';
-      html += '</section>';
-      return html;
+      return '<div class="ma-note">No sequences tagged.</div>';
     }
-    html += '<table class="ma-table"><tbody>';
+    var html = '<table class="ma-table"><tbody>';
     html += teamRow('Sequences', s.total, s.withTransition + ' contain a transition marker');
     html += teamRow('Mean events / duration', s.meanEventCount,
       s.meanDurationSeconds + ' (' + s.spanningCount + ' span periods, excluded from mean)');
     html += '</tbody></table>';
     if (s.note) html += '<div class="ma-note">' + escapeHtml(s.note) + '</div>';
-    html += '<div class="ma-table-scroll"><table class="ma-table" data-ma-table="sequences">';
+    html += '<div class="ma-table-scroll"><table class="ma-table" data-ma-table="sequences"'
+      + (openSeqId ? ' data-open-sequence="' + escapeHtml(openSeqId) + '"' : '')
+      + '>';
     html += '<thead><tr><th>Sequence</th><th>Team</th><th>Events</th><th>First</th><th>Last</th>'
       + '<th>Duration</th><th>Transition</th><th>Spans periods</th></tr></thead><tbody>';
     for (var i = 0; i < s.rows.length; i++) {
       var r = s.rows[i];
-      html += '<tr data-sequence-id="' + escapeHtml(r.sequenceId) + '">'
-        + '<td>' + escapeHtml(r.sequenceId) + '</td>'
+      var isOpenDetail = !!openSeqId && r.sequenceId === openSeqId;
+      var showBadge = isOpenDetail && model.sequenceDetails
+        && model.sequenceDetails.activeSequenceId === r.sequenceId;
+      html += '<tr data-sequence-id="' + escapeHtml(r.sequenceId) + '"'
+        + (isOpenDetail ? ' class="ma-seq-open"' : '') + '>'
+        + '<td>' + escapeHtml(r.sequenceId)
+        + (showBadge ? ' <span class="ma-seq-open-badge">Still open</span>' : '')
+        + '</td>'
         + '<td>' + escapeHtml(teamLabelOf(r.team)) + '</td>'
         + '<td>' + countText(r.eventCount) + '</td>'
         + '<td>' + (r.firstTime === null ? RATIO_NA : escapeHtml(String(r.firstTime) + 's')) + '</td>'
@@ -1552,10 +1685,108 @@
         + '<td>' + (r.containsTransition ? 'Yes' : 'No') + '</td>'
         + '<td>' + (r.spansPeriods ? 'Yes' : 'No') + '</td>'
         + '</tr>';
+      if (isOpenDetail) html += sequenceDetailMarkup(model, host, r.sequenceId);
     }
     html += '</tbody></table></div>';
-    html += '</section>';
     return html;
+  }
+
+  function buildSequencesHtml(model, host) {
+    return sectionOpen('sequences') + sectionTitle('Sequences')
+      + buildSequencesInner(model, host, null) + '</section>';
+  }
+
+  // §16.3/§16.5/§16.6 (V4.0): the expandable detail, rendered as a full-width
+  // row directly beneath its sequence's table row. The detail row carries NO
+  // data-sequence-id of its own (the id lives on the inner
+  // .ma-seq-detail-box) so the tr[data-sequence-id] toggle route can never
+  // catch clicks inside an open detail. Event rows are key-row-STYLE buttons
+  // with a DISTINCT class (.ma-seq-event-row — never .ma-key-row) and lead
+  // with the 1-based order number; per-event team is shown per row (§16.5
+  // mixed-team law; the table row's team stays the engine's first-event
+  // team).
+  function sequenceDetailMarkup(model, host, seqId) {
+    var d = model.sequenceDetails && model.sequenceDetails.byId
+      ? model.sequenceDetails.byId[seqId]
+      : null;
+    var openBadge = model.sequenceDetails
+      && model.sequenceDetails.activeSequenceId === seqId;
+    var html = '<tr class="ma-seq-detail"><td colspan="8">'
+      + '<div class="ma-seq-detail-box" data-sequence-id="' + escapeHtml(seqId) + '">';
+    if (!d || !d.rows.length) {
+      html += '<div class="ma-seq-detail-head"><span class="ma-seq-detail-title">'
+        + escapeHtml(seqId) + '</span></div>'
+        + '<div class="ma-note">No events carry this sequence id.</div>'
+        + '</div></td></tr>';
+      return html;
+    }
+    html += '<div class="ma-seq-detail-head"><span class="ma-seq-detail-title">'
+      + escapeHtml(seqId) + ' — ' + d.rows.length + ' event' + (d.rows.length === 1 ? '' : 's')
+      + '</span>'
+      + (openBadge ? '<span class="ma-seq-open-badge">Still open</span>' : '')
+      + '</div>';
+    html += '<div class="ma-seq-event-list">';
+    for (var i = 0; i < d.rows.length; i++) {
+      var r = d.rows[i];
+      html += '<button type="button" class="ma-seq-event-row"'
+        + ' data-event-id="' + countText(r.eventId) + '"'
+        + ' data-videotime="' + (isFinNum(r.videoTime) ? escapeHtml(String(r.videoTime)) : '') + '"'
+        + ' data-time="' + (isFinNum(r.time) ? escapeHtml(String(roundHalfUp1(r.time))) : '') + '">'
+        + '<span class="ma-seq-ord">' + (i + 1) + '</span>'
+        + '<span class="ma-key-time">' + escapeHtml(String(roundHalfUp1(r.time)) + 's') + '</span>'
+        + '<span class="ma-key-label">' + escapeHtml(r.displayLabel) + '</span>'
+        + '<span class="ma-key-team">' + escapeHtml(teamLabelOf(r.team)) + '</span>'
+        + '<span class="ma-key-player">' + escapeHtml(r.playerText || '—') + '</span>'
+        + '</button>';
+    }
+    html += '</div>';
+    if (d.noLocationCount > 0) {
+      html += '<div class="ma-seq-path-note">' + d.noLocationCount + ' of ' + d.rows.length
+        + ' events had no pitch location.</div>';
+    }
+    html += '<div class="ma-seq-path-wrap">' + buildSequencePathSvg(d, host) + '</div>';
+    html += '</div></td></tr>';
+    return html;
+  }
+
+  // §16.4 (V4.0): the path SVG — DISPLAY ONLY. One SVG per open detail on
+  // the shared 700×450 viewBox, normalized coordinates (x*700 / y*450),
+  // located events as numbered dots (1-based play order) joined by a
+  // polyline in order. Dot classes reuse the existing team dot conventions
+  // (ma-dot-our / ma-dot-opponent / ma-dot-unattr / ma-dot-goal). Shared
+  // visuals (zone lines, pitch markings) come from the host ONLY (§3) —
+  // never a second copy. NO interactivity: no tabindex, no data-zone, no
+  // click targets — and the §3 minimum-sample gate does NOT apply (dots are
+  // a map of where play went, not a density claim; §12.12).
+  function buildSequencePathSvg(d, host) {
+    var pts = d.points;
+    var s = '<svg class="ma-seq-path-svg" viewBox="0 0 ' + VIEWBOX_W + ' ' + VIEWBOX_H
+      + '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Sequence '
+      + escapeHtml(d.sequenceId) + ' — event path">';
+    s += hostZoneLines(host);
+    s += hostMarkings(host);
+    if (pts.length >= 2) {
+      var coords = [];
+      for (var i = 0; i < pts.length; i++) {
+        coords.push(pts[i].px.toFixed(1) + ',' + pts[i].py.toFixed(1));
+      }
+      s += '<polyline class="ma-seq-path-line" points="' + coords.join(' ') + '"/>';
+    }
+    for (var j = 0; j < pts.length; j++) {
+      var p = pts[j];
+      var cls = 'ma-dot ma-seq-path-dot';
+      if (p.isGoal) cls += ' ma-dot-goal';
+      if (p.team === 'our') cls += ' ma-dot-our';
+      else if (p.team === 'opponent') cls += ' ma-dot-opponent';
+      else cls += ' ma-dot-unattr';
+      s += '<circle class="' + cls + '" cx="' + p.px.toFixed(1) + '" cy="' + p.py.toFixed(1)
+        + '" r="' + DOT_RADIUS + '"><title>' + escapeHtml(p.n + '. ' + p.label)
+        + (p.team ? ' · ' + teamLabelOf(p.team) : '') + '</title></circle>';
+      s += '<text class="ma-seq-path-num" x="' + p.px.toFixed(1) + '" y="'
+        + (p.py - DOT_RADIUS - 4).toFixed(1) + '" text-anchor="middle">' + p.n + '</text>';
+    }
+    s += '</svg>';
+    return s;
   }
 
   // §13.9: protocol notes — read-only.
@@ -1584,7 +1815,7 @@
       + buildPeriodsHtml(model)
       + buildSpatialHtml(model, host)
       + buildPlayersHtml(model)
-      + buildSequencesHtml(model)
+      + buildSequencesHtml(model, host)
       + buildProtocolHtml(model);
   }
 
@@ -1606,6 +1837,50 @@
     var rec = findKeyEventRow(model, idAttr);
     if (!rec || !rec.event) return;
     host.seekTo(rec.event.videoTime ?? rec.event.time);
+  }
+
+  // §16.1 (V4.0): toggling a sequences-table row. The open id lives in the
+  // DOM (data-open-sequence on the sequences table — the zone-trace
+  // data-open-zone pattern); the re-render swaps the section's innerHTML
+  // through the same in-section pathway as §14.8, PRESERVING the section
+  // title (the §16.7 byte-identical law: with no detail open the section
+  // must render exactly the Stage 4A bytes, title included), so the §8
+  // root delegation is never re-attached. Re-click closes; another row
+  // switches (exactly one detail open at a time). ZERO engine calls — a
+  // pure projection of the retained model's §16.2 derivation.
+  function sequenceRowToggle(rowEl, rootEl, model, host) {
+    var seqId = rowEl.getAttribute('data-sequence-id');
+    if (!seqId) return;
+    var table = rootEl ? rootEl.querySelector('table[data-ma-table="sequences"]') : null;
+    if (!table) return;
+    var current = table.getAttribute('data-open-sequence');
+    var next = current === seqId ? null : seqId;
+    var sec = rootEl.querySelector('section[data-ma-section="sequences"]');
+    if (!sec) return;
+    sec.innerHTML = sectionTitle('Sequences') + buildSequencesInner(model, host, next);
+  }
+
+  // §16.3 (V4.0): activating a detail event row seeks through the SAME
+  // contract as key rows (videoTime ?? time, §5) — but resolves against the
+  // sequence's OWN derived list, NEVER model.keyEvents.rows: detail rows
+  // share the event-id space with the key-events list, and only the
+  // sequence's list holds every label (the ID-space law).
+  function sequenceEventRowActivate(rowEl, model, host) {
+    if (!host || typeof host.seekTo !== 'function') return;
+    var box = rowEl.closest ? rowEl.closest('.ma-seq-detail-box') : null;
+    if (!box) return;
+    var sid = box.getAttribute('data-sequence-id');
+    var d = model && model.sequenceDetails && model.sequenceDetails.byId
+      ? model.sequenceDetails.byId[sid]
+      : null;
+    if (!d) return;
+    var idAttr = rowEl.getAttribute('data-event-id');
+    for (var i = 0; i < d.rows.length; i++) {
+      if (String(d.rows[i].eventId) === idAttr) {
+        host.seekTo(d.rows[i].event.videoTime ?? d.rows[i].event.time);
+        return;
+      }
+    }
   }
 
   // §8: the ONE shared zone-cell activation function — both the pointer
@@ -1735,6 +2010,20 @@
       var zoneCell = t.closest('.ma-zcell');
       if (zoneCell) {
         zoneCellActivate(zoneCell, rootEl, model, host);
+        return;
+      }
+      // §16.1 (V4.0): the sequence routes — detail event rows FIRST (they
+      // live inside the sequences table; the tr[data-sequence-id] check
+      // must never catch them — their detail row deliberately carries no
+      // data-sequence-id), then the sequence table rows themselves.
+      var seqEventRow = t.closest('.ma-seq-event-row');
+      if (seqEventRow) {
+        sequenceEventRowActivate(seqEventRow, model, host);
+        return;
+      }
+      var seqRow = t.closest('tr[data-sequence-id]');
+      if (seqRow) {
+        sequenceRowToggle(seqRow, rootEl, model, host);
         return;
       }
       var keyRow = t.closest('.ma-key-row');

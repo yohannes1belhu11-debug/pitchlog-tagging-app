@@ -19,6 +19,12 @@
 //            5-located (below min-sample) grids.
 //   RATIO  — 3 our passes (2 successful + 1 unsuccessful) by one player:
 //            the exact-string RATIO pin fixture ("66.7%", review rider).
+//   SEQ    — the §10 Stage 5 FIXTURE-LAW session: SEQ-101 mixed-team (all
+//            located, scrambled array order), SEQ-102 a 1-event UNLOCATED
+//            sequence, SEQ-103 with a Possession interval + a t=700 id
+//            tiebreak + an unlocated interval (play-order dot numbering),
+//            SEQ-104 the OPEN sequence (matchClock.activeSequenceId, with
+//            a Goal), events 11/12 unsequenced.
 //
 // Sections:
 //   MA-M1  module contract, vocabularies, fixture sanity, hostile inputs
@@ -50,6 +56,13 @@
 //   MA-M15 spatial re-filter re-render (§14.8/§14.5/§14.6 — updateFilters,
 //          one engine call per change, suppression UI, context stating,
 //          determinism, delegation preservation)
+//   MA-M16 Stage 5 sequence exploration (§16.2/§16.4/§16.6/§16.7 — per-
+//          sequence derivation by exact sequenceId equality in canonical
+//          order incl. Possession intervals; open-badge truth from
+//          matchClock.activeSequenceId; path model — normalized coordinates,
+//          1-based play-order numbering, located-only, honest no-location
+//          count; determinism; purity across build + expand/collapse; zero
+//          added engine calls)
 //
 // The stub host mirrors the renderer's real markup/constants (renderer.js
 // ZONE_LINES_SVG an-zoneline lines, pitchMarkingsSvg, DENSITY_FILLS crimson
@@ -223,6 +236,50 @@ function ratioSession() {
     matchInfo: { competition: 'Ratio Fixture League', homeAway: 'away', opponent: 'Pct United', date: '2026-10-05' },
     matchClock: null,
     squad: [{ id: 'player_1', name: 'Ratio Tester', number: '8' }],
+    events: events
+  };
+}
+
+// §10 Stage 5 FIXTURE LAW — the sequence-rich session. Design notes:
+//   SEQ-101 mixed-team (our Pass → opponent Interception → our Shot), all
+//     located, DELIBERATELY scrambled array order [3,1,2] (the canonical
+//     time sort must fix it) — pins per-event team display + the engine's
+//     first-event team ('our');
+//   SEQ-102 a 1-event sequence whose single event is UNLOCATED — pins the
+//     honest no-location count and the empty path;
+//   SEQ-103 contains a Possession interval (all-labels law, §16.2); ids 6/7
+//     tie at t=700 with 7 BEFORE 6 in the array (id tiebreak pinned); the
+//     interval is unlocated (list position 2) so the path dots number
+//     1,3,4 — the play-order numbering law (§16.4);
+//   SEQ-104 the OPEN sequence (matchClock.activeSequenceId === 'SEQ-104'),
+//     including a Goal (the path dot goal convention, engine isGoal);
+//   events 11/12 carry NO sequenceId — they must appear in NO derived list.
+// The single Goal chain (1–0) matches the manual score (X1 MATCH).
+function sequenceSession() {
+  const events = [
+    E(3, { time: 160, period: '1H', matchSeconds: 160, label: 'Shot', team: 'our', playerId: 'player_2', subtype: 'On target', location: { x: 0.75, y: 0.5 }, videoTime: 160, sequenceId: 'SEQ-101' }),
+    E(1, { time: 100, period: '1H', matchSeconds: 100, label: 'Pass', team: 'our', playerId: 'player_1', subtype: 'Progressive', qualifiers: { Outcome: 'Successful', Pressure: 'Free' }, location: { x: 0.2, y: 0.5 }, videoTime: 100, sequenceId: 'SEQ-101' }),
+    E(2, { time: 130, period: '1H', matchSeconds: 130, label: 'Interception', team: 'opponent', location: { x: 0.4, y: 0.5 }, sequenceId: 'SEQ-101' }),
+    E(4, { time: 400, period: '1H', matchSeconds: 400, label: 'Foul', team: 'opponent', videoTime: 400, sequenceId: 'SEQ-102' }),
+    E(5, { time: 600, period: '2H', matchSeconds: 600, label: 'Recovery', team: 'our', playerId: 'player_1', location: { x: 0.3, y: 0.3 }, sequenceId: 'SEQ-103' }),
+    E(7, { time: 700, period: '2H', matchSeconds: 700, label: 'Pass', team: 'our', playerId: 'player_3', subtype: 'Lateral', qualifiers: { Outcome: 'Successful', Pressure: 'Free' }, location: { x: 0.5, y: 0.6 }, sequenceId: 'SEQ-103' }),
+    E(6, { time: 700, period: '2H', matchSeconds: 700, label: 'Possession', team: 'our', isInterval: true, startTime: 700, endTime: 745, qualifiers: { 'Ended by': 'Pass' }, sequenceId: 'SEQ-103' }),
+    E(8, { time: 760, period: '2H', matchSeconds: 760, label: 'Cross', team: 'our', playerId: 'player_1', location: { x: 0.8, y: 0.25 }, videoTime: 760, sequenceId: 'SEQ-103' }),
+    E(9, { time: 900, period: '2H', matchSeconds: 900, label: 'Positive Transition', team: 'our', location: { x: 0.45, y: 0.55 }, videoTime: 900, sequenceId: 'SEQ-104' }),
+    E(10, { time: 930, period: '2H', matchSeconds: 930, label: 'Goal', team: 'our', playerId: 'player_2', location: { x: 0.85, y: 0.55 }, videoTime: 930, scoreForBefore: 0, scoreAgainstBefore: 0, scoreForAfter: 1, scoreAgainstAfter: 0, sequenceId: 'SEQ-104' }),
+    E(11, { time: 1100, period: '2H', matchSeconds: 1100, label: 'Pass', team: 'our', playerId: 'player_1', location: { x: 0.6, y: 0.4 } }),
+    E(12, { time: 1200, period: '2H', matchSeconds: 1200, label: 'Press', team: 'our', playerId: 'player_2' })
+  ];
+  return {
+    __schemaVersion: 3, __savedAt: '2026-10-06T18:00:00.000Z',
+    videoPath: null, videoUrl: null,
+    matchInfo: { competition: 'Sequence Exploration Cup', homeAway: 'home', opponent: 'Seq Rovers', date: '2026-10-06', formation: '4-2-3-1', ourScore: 1, opponentScore: 0 },
+    matchClock: { period: '2H', scoreFor: 1, scoreAgainst: 0, nextSequenceNumber: 105, activeSequenceId: 'SEQ-104' },
+    squad: [
+      { id: 'player_1', name: 'Seq Tester One', number: '5' },
+      { id: 'player_2', name: 'Seq Tester Two', number: '9' },
+      { id: 'player_3', name: 'Seq Tester Three', number: '11' }
+    ],
     events: events
   };
 }
@@ -2178,6 +2235,201 @@ ok('M15.10 context stating (§14.6): summary, banner, unattributed note, suffixe
       !r.root.querySelector('.ma-filter-banner') &&
       !r.root.querySelector('.ma-filter-note');
   })(), RED_REASON);
+
+// ===========================================================================
+// MA-M16 — Stage 5 sequence exploration (V4.0 §16.2/§16.4/§16.6/§16.7)
+//   per-sequence derivation · open badge · path model · determinism ·
+//   purity · zero added engine calls
+// ===========================================================================
+section('MA-M16');
+
+const M16_SESSION = sequenceSession();
+const M16_BEFORE = JSON.stringify(M16_SESSION);
+
+// The §10 Stage 5 derivation happens at buildModel. The render AND a full
+// expand → switch → collapse cycle run under engine spies: the §6 budget
+// must not grow (§16.2 — the derivation is engine-free).
+let M16_ENG_M = 0; let M16_ENG_S = 0;
+const M16_OM = AE.computeMatchAnalytics; const M16_OS = AE.computeSpatialView;
+AE.computeMatchAnalytics = function (x) { M16_ENG_M++; return M16_OM(x); };
+AE.computeSpatialView = function (a, f) { M16_ENG_S++; return M16_OS(a, f); };
+let M16_R;
+try {
+  M16_R = renderSession(M16_SESSION, stubHost(M16_SESSION.squad));
+  // §16.1 cycle under spies: expand SEQ-101 → switch to SEQ-103 → collapse.
+  M16_R.root.querySelector('tr[data-sequence-id="SEQ-101"]')
+    .dispatchEvent(new M16_R.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+  M16_R.root.querySelector('tr[data-sequence-id="SEQ-103"]')
+    .dispatchEvent(new M16_R.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+  M16_R.root.querySelector('tr[data-sequence-id="SEQ-103"]')
+    .dispatchEvent(new M16_R.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+} finally {
+  AE.computeMatchAnalytics = M16_OM; AE.computeSpatialView = M16_OS;
+}
+
+// Captured BEFORE any click: the initial (no-detail-open) sequences inner
+// HTML — the §16.7 byte-identical-to-Stage-4A baseline.
+const M16_INITIAL_SEQ_HTML = (function () {
+  const r2 = renderSession(sequenceSession(), stubHost(M16_SESSION.squad));
+  const sec = r2.root.querySelector('section[data-ma-section="sequences"]');
+  return sec ? sec.innerHTML : '';
+})();
+
+ok('M16.1 derivation exactness: exact sequenceId equality — each sequence owns exactly its own events; unsequenced events (11, 12) in NO list; engine eventCount agrees',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId) return false;
+    if (!arrEq(sd.ids, ['SEQ-101', 'SEQ-102', 'SEQ-103', 'SEQ-104'])) return false;
+    const expect = { 'SEQ-101': [1, 2, 3], 'SEQ-102': [4], 'SEQ-103': [5, 6, 7, 8], 'SEQ-104': [9, 10] };
+    const union = [];
+    for (let i = 0; i < sd.ids.length; i++) {
+      const id = sd.ids[i];
+      const d = sd.byId[id];
+      if (!d) return false;
+      const got = d.rows.map((r) => r.eventId).slice().sort((a, b) => a - b);
+      if (!arrEq(got, expect[id])) return false;
+      d.rows.forEach((r) => union.push(r.eventId));
+    }
+    union.sort((a, b) => a - b);
+    if (!arrEq(union, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])) return false;
+    if (union.indexOf(11) !== -1 || union.indexOf(12) !== -1) return false;
+    // Cross-check against the ENGINE's own rows (A.sequences): the derived
+    // list length equals the engine's eventCount for every sequence.
+    const eng = M16_R.model.sequences.rows;
+    return eng.every((r) => r.eventCount === sd.byId[r.sequenceId].rows.length);
+  })(), '');
+
+ok('M16.2 canonical order (time asc, id asc): the scrambled array is fixed; the t=700 tie breaks by id (interval 6 before pass 7, despite array order 7,6)',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId) return false;
+    const d101 = sd.byId['SEQ-101']; const d103 = sd.byId['SEQ-103']; const d104 = sd.byId['SEQ-104'];
+    if (!d101 || !d103 || !d104) return false;
+    return arrEq(d101.rows.map((r) => r.eventId), [1, 2, 3]) &&
+      arrEq(d103.rows.map((r) => r.eventId), [5, 6, 7, 8]) &&
+      arrEq(d104.rows.map((r) => r.eventId), [9, 10]);
+  })(), '');
+
+ok('M16.3 all-labels inclusion (§16.2): the Possession interval is IN its sequence list; non-key labels are listed too (NOT the nine-label filter)',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId || !sd.byId['SEQ-103']) return false;
+    const rows = sd.byId['SEQ-103'].rows;
+    return arrEq(rows.map((r) => r.label), ['Recovery', 'Possession', 'Pass', 'Cross']) &&
+      ['Recovery', 'Possession', 'Pass'].every((l) => MAD.KEY_EVENT_LABELS.indexOf(l) === -1) &&
+      rows[1].event.isInterval === true;
+  })(), '');
+
+ok('M16.4 open-badge truth from session.matchClock.activeSequenceId (§16.6 — UI truth only; closed sequences carry none; sessions without an active id carry null)',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId) return false;
+    const oracle = renderSession(oracleSession(), stubHost(oracleSession().squad));
+    const base = renderSession(baseSession(), stubHost(baseSession().squad));
+    if (!oracle.model.sequenceDetails || !base.model.sequenceDetails) return false;
+    return sd.activeSequenceId === 'SEQ-104' &&
+      sd.byId['SEQ-104'].open === true &&
+      sd.byId['SEQ-101'].open === false &&
+      sd.byId['SEQ-102'].open === false &&
+      sd.byId['SEQ-103'].open === false &&
+      oracle.model.sequenceDetails.activeSequenceId === null &&
+      base.model.sequenceDetails.activeSequenceId === null;
+  })(), '');
+
+ok('M16.5 path model (§16.4): located-only, play-order numbering (the unlocated interval keeps list position 2 → dots number 1,3,4), normalized x*700 / y*450 coordinates',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId || !sd.byId['SEQ-103']) return false;
+    const d = sd.byId['SEQ-103'];
+    const pts = d.points;
+    if (d.rows.length !== 4 || pts.length !== 3 || d.noLocationCount !== 1) return false;
+    if (!arrEq(pts.map((p) => p.n), [1, 3, 4])) return false;
+    return pts[0].px.toFixed(1) === '210.0' && pts[0].py.toFixed(1) === '135.0' &&   // 0.3*700, 0.3*450
+      pts[1].px.toFixed(1) === '350.0' && pts[1].py.toFixed(1) === '270.0' &&        // 0.5*700, 0.6*450
+      pts[2].px.toFixed(1) === '560.0' && pts[2].py.toFixed(1) === '112.5';          // 0.8*700, 0.25*450
+  })(), '');
+
+ok('M16.6 path dot conventions: per-point team (the mixed-team sequence) and the engine isGoal convention (label Goal → goal dot)',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId) return false;
+    const d101 = sd.byId['SEQ-101']; const d104 = sd.byId['SEQ-104'];
+    if (!d101 || !d104) return false;
+    return arrEq(d101.points.map((p) => p.team), ['our', 'opponent', 'our']) &&
+      d101.points.every((p) => p.isGoal === false) &&
+      d104.points.length === 2 &&
+      d104.points[1].isGoal === true &&
+      d104.points[1].label === 'Goal';
+  })(), '');
+
+ok('M16.7 degenerate paths: the 1-event all-unlocated sequence (SEQ-102) — zero points, honest count 1 of 1; fully-located sequences count 0',
+  (() => {
+    const sd = M16_R.model.sequenceDetails;
+    if (!sd || !sd.byId) return false;
+    const d102 = sd.byId['SEQ-102']; const d101 = sd.byId['SEQ-101']; const d104 = sd.byId['SEQ-104'];
+    if (!d102 || !d101 || !d104) return false;
+    return d102.rows.length === 1 && d102.points.length === 0 && d102.noLocationCount === 1 &&
+      d101.noLocationCount === 0 && d104.noLocationCount === 0;
+  })(), '');
+
+ok('M16.8 determinism (§16.7): an identical session produces an identical derivation (double render, byte-equal JSON)',
+  (() => {
+    const r2 = renderSession(sequenceSession(), stubHost(M16_SESSION.squad));
+    return !!M16_R.model.sequenceDetails &&
+      JSON.stringify(M16_R.model.sequenceDetails) === JSON.stringify(r2.model.sequenceDetails);
+  })(), '');
+
+ok('M16.9 purity across build + expand/switch/collapse (§16.7): the session snapshot is byte-identical; the cycle works — exactly one detail at a time, re-click closes, another row switches',
+  (() => {
+    if (JSON.stringify(M16_SESSION) !== M16_BEFORE) return false;
+    const root = M16_R.root;
+    const table = () => root.querySelector('table[data-ma-table="sequences"]');
+    const details = () => Array.from(root.querySelectorAll('tr.ma-seq-detail'));
+    // The spied setup cycle left the section collapsed.
+    if (details().length !== 0) return false;
+    if (table().getAttribute('data-open-sequence') !== null) return false;
+    // Expand SEQ-103: exactly one detail, under the right sequence.
+    root.querySelector('tr[data-sequence-id="SEQ-103"]')
+      .dispatchEvent(new M16_R.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+    if (details().length !== 1) return false;
+    const box = root.querySelector('.ma-seq-detail-box');
+    if (!box || box.getAttribute('data-sequence-id') !== 'SEQ-103') return false;
+    if (table().getAttribute('data-open-sequence') !== 'SEQ-103') return false;
+    // Switch to SEQ-104: still exactly one detail.
+    root.querySelector('tr[data-sequence-id="SEQ-104"]')
+      .dispatchEvent(new M16_R.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+    if (details().length !== 1) return false;
+    if (root.querySelector('.ma-seq-detail-box').getAttribute('data-sequence-id') !== 'SEQ-104') return false;
+    return JSON.stringify(M16_SESSION) === M16_BEFORE;
+  })(), '');
+
+ok('M16.10 with no detail open the sequences section renders byte-identical to Stage 4A (§16.7): no detail rows, no open attribute, no badges; collapse restores the initial bytes exactly',
+  (() => {
+    const root = M16_R.root;
+    const sec = () => root.querySelector('section[data-ma-section="sequences"]');
+    // M16.9 left SEQ-104 open — collapse it via re-click.
+    root.querySelector('tr[data-sequence-id="SEQ-104"]')
+      .dispatchEvent(new M16_R.win.MouseEvent('click', { bubbles: true, cancelable: true }));
+    if (root.querySelectorAll('tr.ma-seq-detail').length !== 0) return false;
+    if (sec().innerHTML !== M16_INITIAL_SEQ_HTML) return false;
+    // The initial render itself carried no Stage 5 artifacts:
+    return M16_INITIAL_SEQ_HTML.indexOf('ma-seq-detail') === -1 &&
+      M16_INITIAL_SEQ_HTML.indexOf('data-open-sequence') === -1 &&
+      M16_INITIAL_SEQ_HTML.indexOf('ma-seq-open') === -1;
+  })(), '');
+
+ok('M16.11 zero added engine calls (§16.2): the render + expand/switch/collapse cycle stays at the §6 budget — computeMatchAnalytics exactly 1, computeSpatialView exactly 1',
+  M16_ENG_M === 1 && M16_ENG_S === 1,
+  'cma=' + M16_ENG_M + ' csv=' + M16_ENG_S);
+
+ok('M16.12 hostile inputs: no matchClock / empty events / empty host — no crash, null active id, empty derivation',
+  (() => {
+    const a = MAD.buildModel({ events: [] }, stubHost([]));
+    const b = MAD.buildModel({}, {});
+    if (!a.sequenceDetails || !b.sequenceDetails) return false;
+    return a.sequenceDetails.activeSequenceId === null && a.sequenceDetails.ids.length === 0 &&
+      b.sequenceDetails.activeSequenceId === null && b.sequenceDetails.ids.length === 0;
+  })(), '');
 
 // ---------------------------------------------------------------------------
 // Epilogue — suite structural law (spec §10)
