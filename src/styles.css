@@ -3770,3 +3770,197 @@ body.pitch-dock-dragging {
     border: 1px solid var(--border);
   }
 }
+
+/* ==========================================================================
+   Stage 5 (V4.0) — Sequence exploration (spec §16; §15.8 print rules)
+   Pure append: the expandable per-sequence detail (event list, pitch path,
+   open badge). With no detail open the sequences section markup is
+   byte-identical to Stage 4A — these rules style only the Stage 5 surfaces.
+   ========================================================================== */
+
+/* The expanded detail row: one full-width cell directly beneath its
+   sequence's table row (§16.1). */
+.ma-seq-detail > td {
+  padding: 10px 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ma-seq-detail-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ma-seq-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* §16.6: the open badge — UI truth from the saved clock state; shows on
+   the detail and on its table row while that detail is open. */
+.ma-seq-open-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--accent-bright);
+  border-radius: 999px;
+  color: var(--accent-bright);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* §16.3: detail event rows — the key-row style, plus the leading 1-based
+   order number. DISTINCT class (.ma-seq-event-row, never .ma-key-row). */
+.ma-seq-event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ma-seq-event-row {
+  display: grid;
+  grid-template-columns: 28px 64px 130px 1fr 130px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ma-seq-event-row:hover {
+  border-color: var(--accent-bright);
+}
+
+.ma-seq-ord {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-bright);
+  text-align: center;
+}
+
+/* §16.4: the honest no-location count (displayed only when > 0). */
+.ma-seq-path-note {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* §16.4: the path SVG — DISPLAY ONLY. Same shared pitch canvas as the
+   spatial grids (#14301b), same width behavior. */
+.ma-seq-path-wrap {
+  margin-top: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #14301b;
+  padding: 6px;
+}
+
+.ma-seq-path-svg {
+  width: 100%;
+  max-width: 340px;
+  height: auto;
+  display: block;
+  background: #14301b;
+}
+
+.ma-seq-path-line {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.ma-seq-path-num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  fill: #d5d9dd;
+  pointer-events: none;
+}
+
+/* Stage 5 responsive mirrors of the §9 key-row/trace-row treatments. */
+@media (max-width: 1180px) {
+  .ma-seq-event-row {
+    grid-template-columns: 28px 64px 120px 1fr 110px;
+  }
+}
+
+@media (max-width: 820px) {
+  .ma-seq-event-row {
+    grid-template-columns: 24px 56px 1fr;
+  }
+
+  .ma-seq-event-row .ma-key-team {
+    grid-column: 2;
+    text-align: left;
+  }
+}
+
+/* §15.8 PATH PRINT RULES (V4.0). The sequence path SVG prints
+   ink-friendly: white background, dark polyline and order numbers, team
+   dot colors adapted per the existing ma-grid-svg print pattern
+   (dark-theme strokes flip, crimson-family fills untouched), and
+   break-inside: avoid on the path wrap. §16.8: the §15.5 break-inside
+   laws extend to the detail rows and event rows. Real print fidelity
+   remains §12.8 manual-QA territory. */
+@media print {
+  body.ma-printing .ma-seq-detail > td {
+    background: #fff;
+    border-color: #9aa0a8;
+  }
+
+  body.ma-printing .ma-seq-path-wrap {
+    background: #fff;
+    border-color: #9aa0a8;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* White pitch background with dark ink — same pattern as
+     body.ma-printing .ma-grid-svg. */
+  body.ma-printing .ma-seq-path-svg {
+    background: #fff;
+  }
+
+  body.ma-printing .ma-seq-path-svg .pitch-line,
+  body.ma-printing .ma-seq-path-svg .pitch-outline {
+    stroke: rgba(0, 0, 0, 0.55);
+  }
+
+  body.ma-printing .ma-seq-path-svg .an-zoneline {
+    stroke: rgba(0, 0, 0, 0.3);
+  }
+
+  /* The dark polyline and order numbers flip to dark ink. */
+  body.ma-printing .ma-seq-path-svg .ma-seq-path-line {
+    stroke: rgba(0, 0, 0, 0.55);
+  }
+
+  body.ma-printing .ma-seq-path-svg .ma-seq-path-num {
+    fill: #1a1c1f;
+  }
+
+  /* Team dot colors per the ma-grid-svg print pattern: the crimson
+     family (ma-dot-our) and the opponent blue print as-is; only the
+     dim unattributed gray flips. */
+  body.ma-printing .ma-seq-path-svg .ma-dot-unattr {
+    fill: #4a4f57;
+  }
+
+  /* §16.8: detail rows and detail event rows never split across pages
+     (the §15.5 avoid laws extended). */
+  body.ma-printing .ma-seq-detail,
+  body.ma-printing .ma-seq-event-row {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

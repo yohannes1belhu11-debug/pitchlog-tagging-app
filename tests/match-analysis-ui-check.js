@@ -75,6 +75,17 @@
 //          print CSS law pins, the §15.3 print header line (whole-match
 //          form at open + the Active filters form after a list change),
 //          and the zero-engine-call proof for the whole print path (§15.4)
+//   MA-U18 Stage 5 sequence exploration (§16, V4.0): row click expands the
+//          per-sequence detail beneath the row through the REAL wiring
+//          (one open at a time, re-click closes, another row switches);
+//          detail rows seek the REAL video element — including the
+//          ID-space case (an event id absent from the key-events list)
+//          and the videoTime-null fallback; the path SVG (700×450 viewBox,
+//          numbered dots in play order + polyline); the 'Still open'
+//          badge (detail + table row, only while the open sequence's
+//          detail is open); mixed-team per-event teams; the §15.8 print-
+//          rule static pins; zero engine calls across expansion; purity
+//          (save payload byte-identical, zero autosave writes)
 //
 // Run:  node tests/match-analysis-ui-check.js   (from the project root)
 'use strict';
@@ -291,6 +302,50 @@ function baseSession() {
       { id: 'player_1', name: 'Chala Tesfaye', number: '5' },
       { id: 'player_2', name: 'Biniyam Alemu', number: '8' },
       { id: 'player_3', name: 'Fikru Girma', number: '11' }
+    ],
+    events: events
+  };
+}
+
+// §10 Stage 5 FIXTURE LAW — the sequence-rich session (same design as the
+// model suite's sequenceSession, with the app's FULL realistic matchClock
+// shape): SEQ-101 mixed-team (all located, scrambled array order), SEQ-102
+// a 1-event UNLOCATED sequence, SEQ-103 with a Possession interval + a
+// t=700 id tiebreak + an unlocated interval (play-order dot numbering),
+// SEQ-104 the OPEN sequence (matchClock.activeSequenceId, with a Goal),
+// events 11/12 unsequenced. The single Goal chain (1–0) matches the manual
+// score (X1 MATCH). The load pathway preserves matchClock verbatim
+// (renderer.js: {...blankMatchClock(), ...data.matchClock}), so the open
+// badge reaches the dashboard through the REAL wiring.
+function sequenceSession() {
+  const events = [
+    E(3, { time: 160, period: '1H', matchSeconds: 160, label: 'Shot', team: 'our', playerId: 'player_2', subtype: 'On target', location: { x: 0.75, y: 0.5 }, videoTime: 160, sequenceId: 'SEQ-101' }),
+    E(1, { time: 100, period: '1H', matchSeconds: 100, label: 'Pass', team: 'our', playerId: 'player_1', subtype: 'Progressive', qualifiers: { Outcome: 'Successful', Pressure: 'Free' }, location: { x: 0.2, y: 0.5 }, videoTime: 100, sequenceId: 'SEQ-101' }),
+    E(2, { time: 130, period: '1H', matchSeconds: 130, label: 'Interception', team: 'opponent', location: { x: 0.4, y: 0.5 }, sequenceId: 'SEQ-101' }),
+    E(4, { time: 400, period: '1H', matchSeconds: 400, label: 'Foul', team: 'opponent', videoTime: 400, sequenceId: 'SEQ-102' }),
+    E(5, { time: 600, period: '2H', matchSeconds: 600, label: 'Recovery', team: 'our', playerId: 'player_1', location: { x: 0.3, y: 0.3 }, sequenceId: 'SEQ-103' }),
+    E(7, { time: 700, period: '2H', matchSeconds: 700, label: 'Pass', team: 'our', playerId: 'player_3', subtype: 'Lateral', qualifiers: { Outcome: 'Successful', Pressure: 'Free' }, location: { x: 0.5, y: 0.6 }, sequenceId: 'SEQ-103' }),
+    E(6, { time: 700, period: '2H', matchSeconds: 700, label: 'Possession', team: 'our', isInterval: true, startTime: 700, endTime: 745, qualifiers: { 'Ended by': 'Pass' }, sequenceId: 'SEQ-103' }),
+    E(8, { time: 760, period: '2H', matchSeconds: 760, label: 'Cross', team: 'our', playerId: 'player_1', location: { x: 0.8, y: 0.25 }, videoTime: 760, sequenceId: 'SEQ-103' }),
+    E(9, { time: 900, period: '2H', matchSeconds: 900, label: 'Positive Transition', team: 'our', location: { x: 0.45, y: 0.55 }, videoTime: 900, sequenceId: 'SEQ-104' }),
+    E(10, { time: 930, period: '2H', matchSeconds: 930, label: 'Goal', team: 'our', playerId: 'player_2', location: { x: 0.85, y: 0.55 }, videoTime: 930, scoreForBefore: 0, scoreAgainstBefore: 0, scoreForAfter: 1, scoreAgainstAfter: 0, sequenceId: 'SEQ-104' }),
+    E(11, { time: 1100, period: '2H', matchSeconds: 1100, label: 'Pass', team: 'our', playerId: 'player_1', location: { x: 0.6, y: 0.4 } }),
+    E(12, { time: 1200, period: '2H', matchSeconds: 1200, label: 'Press', team: 'our', playerId: 'player_2' })
+  ];
+  return {
+    __schemaVersion: 3, __savedAt: '2026-10-06T18:00:00.000Z',
+    videoPath: null, videoUrl: null,
+    matchInfo: { competition: 'Sequence Exploration Cup', homeAway: 'home', opponent: 'Seq Rovers', date: '2026-10-06', formation: '4-2-3-1', ourScore: 1, opponentScore: 0 },
+    matchClock: {
+      clockStartedAt: null, clockBaseSeconds: 940, clockRunning: false,
+      period: '2H', scoreFor: 1, scoreAgainst: 0, videoSyncOffset: 0,
+      selectedTeam: 'our', selectedPlayerId: null,
+      activeSequenceId: 'SEQ-104', nextSequenceNumber: 105
+    },
+    squad: [
+      { id: 'player_1', name: 'Seq Tester One', number: '5' },
+      { id: 'player_2', name: 'Seq Tester Two', number: '9' },
+      { id: 'player_3', name: 'Seq Tester Three', number: '11' }
     ],
     events: events
   };
@@ -1095,6 +1150,205 @@ function baseSession() {
       cmaCalls === 0 && csvCalls === 0 && !pbody.classList.contains('ma-printing'),
       'cma=' + cmaCalls + ' csv=' + csvCalls);
     P.dom.window.close();
+  }
+
+  // =======================================================================
+  // Scenario Q — Stage 5 sequence exploration (§16, V4.0): the
+  // sequence-rich session through the REAL wiring.
+  // =======================================================================
+  {
+    const Q = boot({});
+    const qdoc = Q.doc;
+    await sleep(400);
+    Q.stub._setLoadSession(sequenceSession());
+    clickIn(Q, qdoc.getElementById('btnLoadSession'));
+    await sleep(500);
+    clickIn(Q, qdoc.getElementById('btnMatchAnalysis'));
+    const qcontent = qdoc.getElementById('matchAnalysisContent');
+    const qvideo = qdoc.getElementById('video');
+    const qtable = () => qcontent.querySelector('table[data-ma-table="sequences"]');
+    const qdetails = () => Array.from(qcontent.querySelectorAll('tr.ma-seq-detail'));
+    const qrow = (id) => qcontent.querySelector('tr[data-sequence-id="' + id + '"]');
+    const qclickRow = (id) => { const el = qrow(id); if (el) clickIn(Q, el); };
+    const qeventRow = (seqId, evId) => qcontent.querySelector(
+      '.ma-seq-detail-box[data-sequence-id="' + seqId + '"] .ma-seq-event-row[data-event-id="' + evId + '"]');
+
+    // Purity baseline: save #1 AFTER open, BEFORE any expansion (MA-U18j).
+    Q.stub._setSaveResult({ canceled: false, filePath: '/tmp/seq-purity-1.json' });
+    clickIn(Q, qdoc.getElementById('btnSaveSession'));
+    await sleep(300);
+    const qsave1 = lastSave(Q.stub);
+    const qautoBefore = Q.stub._calls.autosaveWrite.length;
+
+    section('MA-U18 — Stage 5 sequence exploration (§16)');
+    const errsBefore18 = jsdomErrors.length;
+
+    // (1) row click expands the detail DIRECTLY beneath that row.
+    qclickRow('SEQ-103');
+    const d103 = qdetails()[0] || null;
+    const d103box = d103 ? d103.querySelector('.ma-seq-detail-box') : null;
+    const d103rows = d103 ? Array.from(d103.querySelectorAll('.ma-seq-event-row')) : [];
+    const d103note = d103 ? d103.querySelector('.ma-seq-path-note') : null;
+    ok('MA-U18a: clicking tr[data-sequence-id] expands the detail DIRECTLY beneath that row — 4 event rows in canonical order (Recovery, Possession interval, Pass, Cross) with 1-based order numbers, and the honest no-location note',
+      !!d103 && qdetails().length === 1 &&
+      qrow('SEQ-103').nextElementSibling === d103 &&
+      !!d103box && d103box.getAttribute('data-sequence-id') === 'SEQ-103' &&
+      d103rows.length === 4 &&
+      JSON.stringify(d103rows.map((r) => r.querySelector('.ma-seq-ord').textContent)) === JSON.stringify(['1', '2', '3', '4']) &&
+      JSON.stringify(d103rows.map((r) => r.querySelector('.ma-key-label').textContent)) === JSON.stringify(['Recovery', 'Possession', 'Pass', 'Cross']) &&
+      d103rows.every((r) => r.getAttribute('class').indexOf('ma-seq-event-row') !== -1 &&
+        r.getAttribute('class').indexOf('ma-key-row') === -1) &&
+      !!d103note && d103note.textContent === '1 of 4 events had no pitch location.',
+      'details=' + qdetails().length + ' rows=' + d103rows.length + ' note=' + JSON.stringify(d103note ? d103note.textContent : null));
+
+    // (2) re-click closes; another row switches; exactly one at a time.
+    qclickRow('SEQ-103');
+    const closedNow = qdetails().length === 0 && qtable().getAttribute('data-open-sequence') === null;
+    qclickRow('SEQ-101');
+    const open101 = qdetails().length === 1 &&
+      qcontent.querySelector('.ma-seq-detail-box').getAttribute('data-sequence-id') === 'SEQ-101';
+    qclickRow('SEQ-104');
+    const switched = qdetails().length === 1 &&
+      qcontent.querySelector('.ma-seq-detail-box').getAttribute('data-sequence-id') === 'SEQ-104' &&
+      qtable().getAttribute('data-open-sequence') === 'SEQ-104';
+    ok('MA-U18b: re-click closes the detail; clicking another row switches; exactly ONE detail open at a time (§16.1)',
+      closedNow && open101 && switched,
+      'closed=' + closedNow + ' open101=' + open101 + ' switched=' + switched);
+
+    // (3) detail rows seek the REAL video element (§16.3) — including the
+    // ID-space case (event id 1 exists in NO key-events row of this
+    // session: resolution must come from the sequence's own list) and the
+    // videoTime-null fallback (Interception → time 130).
+    clickIn(Q, qeventRow('SEQ-104', '9'));
+    const s900 = qvideo.currentTime === 900;
+    clickIn(Q, qeventRow('SEQ-104', '10'));
+    const s930 = qvideo.currentTime === 930;
+    qclickRow('SEQ-101');
+    clickIn(Q, qeventRow('SEQ-101', '1'));
+    const s100 = qvideo.currentTime === 100;
+    clickIn(Q, qeventRow('SEQ-101', '2'));
+    const s130 = qvideo.currentTime === 130;
+    qclickRow('SEQ-102');
+    clickIn(Q, qeventRow('SEQ-102', '4'));
+    const s400 = qvideo.currentTime === 400;
+    qclickRow('SEQ-103');
+    clickIn(Q, qeventRow('SEQ-103', '8'));
+    const s760 = qvideo.currentTime === 760;
+    ok('MA-U18c: detail rows seek the REAL video element through the REAL pathway — videoTime cases (900, 930, 760), the ID-space case (Pass id 1 — NOT a key event of this session — seeks to 100), and the videoTime-null fallback (Interception → time 130), plus the 1-event sequence (Foul → 400)',
+      s900 && s930 && s100 && s130 && s400 && s760,
+      '900=' + s900 + ' 930=' + s930 + ' 100=' + s100 + ' 130=' + s130 + ' 400=' + s400 + ' 760=' + s760);
+
+    // (4) the path SVG: shared viewBox, polyline in canonical order,
+    // numbered dots in play order (1, 3, 4 — the unlocated interval keeps
+    // list position 2).
+    const svg103 = qcontent.querySelector('.ma-seq-detail-box[data-sequence-id="SEQ-103"] svg.ma-seq-path-svg');
+    const poly103 = svg103 ? svg103.querySelector('polyline.ma-seq-path-line') : null;
+    const dots103 = svg103 ? qsaClass(svg103, 'ma-seq-path-dot') : [];
+    const nums103 = svg103 ? Array.from(svg103.querySelectorAll('text.ma-seq-path-num')) : [];
+    ok('MA-U18d: the path SVG renders on the shared 700×450 viewBox with the polyline in canonical order and the numbered dots in PLAY order (1, 3, 4 — §16.4)',
+      !!svg103 && svg103.getAttribute('viewBox') === '0 0 700 450' &&
+      !!poly103 && poly103.getAttribute('points') === '210.0,135.0 350.0,270.0 560.0,112.5' &&
+      dots103.length === 3 && nums103.length === 3 &&
+      JSON.stringify(nums103.map((t) => t.textContent)) === JSON.stringify(['1', '3', '4']) &&
+      svg103.querySelectorAll('[tabindex]').length === 0,
+      'svg=' + !!svg103 + ' pts=' + JSON.stringify(poly103 ? poly103.getAttribute('points') : null) +
+      ' dots=' + dots103.length + ' nums=' + nums103.length);
+
+    // (5) dot classes reuse the existing team dot conventions; the Goal
+    // dot carries ma-dot-goal.
+    qclickRow('SEQ-101');
+    const svg101 = qcontent.querySelector('.ma-seq-detail-box[data-sequence-id="SEQ-101"] svg.ma-seq-path-svg');
+    const dots101 = svg101 ? qsaClass(svg101, 'ma-seq-path-dot') : [];
+    const teams101 = dots101.map((d) => {
+      const c = d.getAttribute('class');
+      if (c.indexOf('ma-dot-opponent') !== -1) return 'opponent';
+      if (c.indexOf('ma-dot-our') !== -1) return 'our';
+      return 'unattr';
+    });
+    qclickRow('SEQ-104');
+    const svg104 = qcontent.querySelector('.ma-seq-detail-box[data-sequence-id="SEQ-104"] svg.ma-seq-path-svg');
+    const dots104 = svg104 ? qsaClass(svg104, 'ma-seq-path-dot') : [];
+    ok('MA-U18e: path dots reuse the existing team dot conventions (ma-dot-our / ma-dot-opponent for the mixed-team sequence) and the Goal dot carries ma-dot-goal',
+      JSON.stringify(teams101) === JSON.stringify(['our', 'opponent', 'our']) &&
+      dots104.length === 2 && dots104[1].getAttribute('class').indexOf('ma-dot-goal') !== -1,
+      'teams=' + JSON.stringify(teams101) + ' goalDot=' + (dots104.length === 2 && dots104[1].getAttribute('class').indexOf('ma-dot-goal') !== -1));
+
+    // (6) the 'Still open' badge: on the detail AND its table row, only
+    // while the open sequence's detail is open (§16.6).
+    const badgesOpen = Array.from(qcontent.querySelectorAll('.ma-seq-open-badge'));
+    const badgeOnRow = qrow('SEQ-104').textContent.indexOf('Still open') !== -1;
+    qclickRow('SEQ-103');
+    const badgesClosed = qcontent.querySelectorAll('.ma-seq-open-badge').length;
+    qclickRow('SEQ-101');
+    const badgesOther = qcontent.querySelectorAll('.ma-seq-open-badge').length;
+    ok('MA-U18f: the \'Still open\' badge shows on the detail AND its table row while the OPEN sequence\'s detail is open (SEQ-104 — matchClock.activeSequenceId), and shows NOWHERE for closed sequences (SEQ-103, SEQ-101)',
+      badgesOpen.length === 2 && badgesOpen.every((b) => b.textContent === 'Still open') && badgeOnRow &&
+      badgesClosed === 0 && badgesOther === 0,
+      'open=' + badgesOpen.length + ' onRow=' + badgeOnRow + ' closed=' + badgesClosed + ' other=' + badgesOther);
+
+    // (7) mixed-team: per-event team per row; the table row's team stays
+    // the engine's first-event team (§16.5).
+    const evTeams101 = Array.from(qcontent.querySelectorAll(
+      '.ma-seq-detail-box[data-sequence-id="SEQ-101"] .ma-seq-event-row .ma-key-team')).map((s) => s.textContent);
+    const rowTeam101 = qrow('SEQ-101').cells[1].textContent;
+    ok('MA-U18g: mixed-team sequences show per-event teams in the detail (Us, Opponent, Us) while the table row\'s Team cell stays the engine\'s first-event team (Us)',
+      JSON.stringify(evTeams101) === JSON.stringify(['Us', 'Opponent', 'Us']) && rowTeam101 === 'Us',
+      'evTeams=' + JSON.stringify(evTeams101) + ' rowTeam=' + rowTeam101);
+
+    // (8) §15.8 print-rule static pins.
+    const p58svg = stylesCss.indexOf('body.ma-printing .ma-seq-path-svg {');
+    const p58line = stylesCss.indexOf('body.ma-printing .ma-seq-path-svg .ma-seq-path-line');
+    const p58num = stylesCss.indexOf('body.ma-printing .ma-seq-path-svg .ma-seq-path-num');
+    const p58wrap = stylesCss.indexOf('body.ma-printing .ma-seq-path-wrap');
+    const p58detail = stylesCss.indexOf('body.ma-printing .ma-seq-detail,');
+    const p58unattr = stylesCss.indexOf('body.ma-printing .ma-seq-path-svg .ma-dot-unattr');
+    const ruleBody = (idx, len) => stylesCss.slice(idx, stylesCss.indexOf('}', idx + len));
+    ok('MA-U18h: §15.8 print-rule static pins — the path SVG prints on a white background with a dark polyline and dark order numbers; the path wrap and the detail/event rows carry break-inside: avoid (§16.8); the unattributed dot flips per the ma-grid-svg print pattern (crimson untouched)',
+      p58svg !== -1 && ruleBody(p58svg, 10).indexOf('background: #fff') !== -1 &&
+      p58line !== -1 && ruleBody(p58line, 10).indexOf('stroke:') !== -1 &&
+      p58num !== -1 && ruleBody(p58num, 10).indexOf('fill: #1a1c1f') !== -1 &&
+      p58wrap !== -1 && ruleBody(p58wrap, 10).indexOf('break-inside: avoid') !== -1 &&
+      p58detail !== -1 && ruleBody(p58detail, 10).indexOf('break-inside: avoid') !== -1 &&
+      p58unattr !== -1,
+      'svg=' + (p58svg !== -1) + ' line=' + (p58line !== -1) + ' num=' + (p58num !== -1) +
+      ' wrap=' + (p58wrap !== -1) + ' detail=' + (p58detail !== -1) + ' unattr=' + (p58unattr !== -1));
+
+    // (9) zero engine calls across a full expand/collapse cycle; the
+    // degenerate 1-event all-unlocated sequence renders its empty path +
+    // honest note; no jsdom errors across the whole scenario.
+    const qeng = Q.win.AnalyticsEngine;
+    let qCma = 0; let qCsv = 0;
+    const qOrigCma = qeng.computeMatchAnalytics, qOrigCsv = qeng.computeSpatialView;
+    qeng.computeMatchAnalytics = function () { qCma++; return qOrigCma.apply(this, arguments); };
+    qeng.computeSpatialView = function () { qCsv++; return qOrigCsv.apply(this, arguments); };
+    qclickRow('SEQ-102');
+    const svg102 = qcontent.querySelector('.ma-seq-detail-box[data-sequence-id="SEQ-102"] svg.ma-seq-path-svg');
+    const dots102 = svg102 ? qsaClass(svg102, 'ma-seq-path-dot') : [];
+    const note102 = qcontent.querySelector('.ma-seq-detail-box[data-sequence-id="SEQ-102"] .ma-seq-path-note');
+    qclickRow('SEQ-102');
+    qclickRow('SEQ-104');
+    qclickRow('SEQ-104');
+    qeng.computeMatchAnalytics = qOrigCma;
+    qeng.computeSpatialView = qOrigCsv;
+    ok('MA-U18i: ZERO engine calls across a full expand/collapse cycle (computeMatchAnalytics 0, computeSpatialView 0 — §16.2); the 1-event all-unlocated sequence renders its path with ZERO dots, no polyline, and the honest note; zero jsdom errors across the scenario',
+      qCma === 0 && qCsv === 0 &&
+      !!svg102 && dots102.length === 0 && !svg102.querySelector('polyline') &&
+      !!note102 && note102.textContent === '1 of 1 events had no pitch location.' &&
+      jsdomErrors.length === errsBefore18,
+      'cma=' + qCma + ' csv=' + qCsv + ' dots102=' + dots102.length + ' jsdomErrΔ=' + (jsdomErrors.length - errsBefore18));
+
+    // (10) purity through the REAL app: the save payload is byte-identical
+    // after the whole expansion battery; zero autosave writes.
+    Q.stub._setSaveResult({ canceled: false, filePath: '/tmp/seq-purity-2.json' });
+    clickIn(Q, qdoc.getElementById('btnSaveSession'));
+    await sleep(300);
+    const qsave2 = lastSave(Q.stub);
+    ok('MA-U18j: purity across expansion (§16.7) — save #2 (after the whole expansion battery) is JSON byte-identical to save #1, and ZERO autosave writes occurred (expansion never dirties the session)',
+      !!qsave1 && !!qsave2 && JSON.stringify(qsave1) === JSON.stringify(qsave2) &&
+      Q.stub._calls.autosaveWrite.length === qautoBefore,
+      'same=' + (!!qsave1 && !!qsave2 && JSON.stringify(qsave1) === JSON.stringify(qsave2)) +
+      ' autosaveΔ=' + (Q.stub._calls.autosaveWrite.length - qautoBefore));
+    Q.dom.window.close();
   }
 
   // ---------------------------------------------------------------------------
