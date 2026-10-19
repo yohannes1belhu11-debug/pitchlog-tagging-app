@@ -1,6 +1,6 @@
-# PitchLog — Match Analysis Dashboard Specification (V3)
+# PitchLog — Match Analysis Dashboard Specification (V4)
 
-**Status:** AUTHORITATIVE — V3.0. This document is the single build recipe for
+**Status:** AUTHORITATIVE — V4.0. This document is the single build recipe for
 Stage 4A (Match Analysis Dashboard) of the tagging app. It consolidates the
 surviving architecture audit (worklog `STAGE4A-ARCHAUDIT-1`), the engine and
 renderer contracts verified at this HEAD, and the corrective round that defined
@@ -17,6 +17,11 @@ V3.0 amendment: Stage 4C print-ready coach report specified (§15); §1, §9,
 §10, §12 updated; §13.3 cross-reference corrected. Covers Stage 4A
 (implemented, closed), Stage 4B (implemented, closed), Stage 4C (specified,
 pending implementation).
+
+V4.0 amendment: Stage 5 sequence exploration specified (§16; §15.8 print
+rules); §1, §10, §12, §13.8 updated; one stale §10 cross-reference
+corrected. Covers Stages 4A/4B/4C (implemented, closed) and Stage 5
+(specified, pending implementation).
 
 **Authority rule:** where any historical worklog note, review remark, or earlier
 plan conflicts with this document, **this document wins**. Two known
@@ -64,9 +69,13 @@ event-taxonomy changes, no migration, no storage changes of any kind.
 - **Stage 4C coach export — out of scope for 4A/4B; IN SCOPE as of V3.0
   limited to §15** — nothing in Stage 4A exports, prints, or formats
   for delivery.
-- Tactical sequence DIAGRAMS and NARRATIVES (Stage 5) — out of scope.
-  Rendering the engine's existing sequences data (A.sequences) as the
-  dashboard's sequences section IS in scope (§13.8).
+- **Tactical sequence EXPLORATION (Stage 5) — IN SCOPE as of V4.0: the
+  expandable per-sequence detail (event list, pitch path, open badge) per
+  §16, including the static path diagram. Still OUT of scope: computed
+  narrative text, AI interpretation, auto-derived (untagged) sequences,
+  sequence editing, and per-sequence transition-linkage computation
+  (§12.13 — the engine's withTransition flag remains the only transition
+  truth displayed).**
 - **Season-wide analytics** — one session at a time; no multi-match aggregation
   (this inherits spatial spec SP-H10).
 - **AI** — no models, no predictions, no generated text.
@@ -510,7 +519,7 @@ zero grids + playerGrids [] + locatedShare null; player-filter overrides team
 partition; player filter excludes Sub events and unattributed events; invalid
 team value normalizes to '__all__'; grid id format
 'grid:scope=…:partition=…'; filtered grid.events contain only matching
-records), MA-M14 'key-list filtering' (predicate correctness per §14.8,
+records), MA-M14 'key-list filtering' (predicate correctness per §14.7,
 Showing N of M, both empty-state strings, D2-extension: filtering the list
 leaves the cards byte-identical), MA-M15 'spatial re-filter re-render'
 (single computeSpatialView per change, no computeMatchAnalytics re-run,
@@ -581,6 +590,24 @@ the print path (engine spies unchanged across a print invocation). Model
 suite: NO changes. Battery remains 39 suites. Any 4A/4B assertion
 mechanically invalidated (e.g., modal-header child counts) may be updated
 ONLY to preserve pinned intent — listed at completion; nothing weakened.
+
+**Stage 5 (V4.0):** model suite gains section MA-M16 (per-sequence
+derivation: exact membership incl. a Possession interval and unsequenced
+exclusions; canonical order; all-labels inclusion; open-badge truth from
+matchClock.activeSequenceId; path model — normalized coordinates, 1-based
+numbering in canonical order, located-only with the honest no-location
+count; determinism; zero added engine calls at buildModel). UI suite gains
+section MA-U18 (row click expands/closes the detail under the row; one open
+at a time; detail rows seek through the REAL pathway; path SVG renders
+numbered dots + polyline; 'Still open' badge shows for the open sequence;
+mixed-team rows show per-event teams; §15.8 print-rule static pins; zero
+engine calls across expansion). FIXTURE LAW: a sequence-rich fixture
+covering — a 1-event sequence; an 'open' sequence (via
+matchClock.activeSequenceId); a mixed-team sequence; a sequence containing
+a Possession interval; unsequenced events outside all sequences. Battery
+remains 39 suites. Any 4A/4B/4C assertion mechanically invalidated may be
+updated ONLY to preserve pinned intent — listed at completion; nothing
+weakened.
 
 ---
 
@@ -662,6 +689,18 @@ PDF destination) — PitchLog does not write PDF files itself.
 12.10 Video/clips are never part of the printed report; the clip reel is a
 separate existing export.
 
+12.11 The 'Still open' badge is renderer/UI truth from the saved clock
+state — the engine has no open/closed sequence concept.
+
+12.12 The sequence path is a display of where play went — never a density
+claim; the §3 min-sample gate governs only the spatial section's
+fills/counts.
+
+12.13 Stage 5 computes NO transition linkage inside sequences; the engine's
+withTransition flag remains the only transition truth displayed;
+per-sequence attribution (with the engine's tau declared) is a possible
+future follow-up, not in V4.0.
+
 ---
 
 ## 13. Dashboard section inventory (V1.1)
@@ -707,7 +746,8 @@ display limitation per §12.2.
 
 13.8 Sequences — source: A.sequences, rendered as the engine's sequence list.
 This is the existing engine data surface, NOT Stage 5: no diagrams, no
-narratives, no sequence editing (§1).
+narratives, no sequence editing (§1). Expandable per-sequence detail (event
+list, pitch path, open badge) per §16.
 
 13.9 Protocol notes — source: A.protocol.notes, rendered read-only.
 
@@ -858,6 +898,87 @@ body-level print-mode class is added (activating 15.2/15.5 CSS) and the
 print header is refreshed; on afterprint the class is removed. The button
 path applies the same class synchronously around `window.print()`. Both
 paths share one implementation.
+
+15.8 PATH PRINT RULES. The sequence path SVG prints ink-friendly: white
+background, dark polyline and order numbers, team dot colors adapted per
+the existing ma-grid-svg print pattern (dark-theme strokes flip,
+crimson-family fills untouched), and break-inside: avoid on the path wrap.
+Real print fidelity remains §12.8 manual-QA territory.
+
+---
+
+## 16. Stage 5 — Sequence exploration (V4.0)
+
+The M1 tactical-sequences audit established the ground truth this section
+is built on (all OBSERVED-verified): sequences are analyst-tagged via
+`matchClock.activeSequenceId` (the renderer stamps events with the active
+sequence id at creation — renderer.js:2390); events carry sequenceId
+verbatim everywhere; A.sequences rows are aggregates with NO event lists;
+per-sequence spatial works via the existing §14 filter, and the module
+draws event dots regardless of the minimum-sample gate (dots are display;
+density is the gated claim); `matchClock.activeSequenceId` is present in
+the renderer's per-open snapshot, survives save/load, and is ignored by
+the engine. Reviewer ruling: Stage 5 is **sequence exploration** — the
+expandable per-sequence detail specified below — NOT narratives, AI
+interpretation, auto-derived sequences, or sequence editing.
+
+16.1 SURFACE & TRIGGERS. Clicking a sequences-table row
+(`tr[data-sequence-id]`) toggles an in-section detail directly beneath that
+row — the module's own in-section activation pattern (the §8 zone-trace
+precedent). Exactly one detail open at a time; re-click closes; clicking
+another row switches. No new modal, no renderer changes, no index.html
+changes.
+
+16.2 DERIVATION LAW. Per-sequence event lists are derived module-side in
+`buildModel` from raw `session.events` (the §5 sanctioned pathway), by
+exact sequenceId equality, ordered by the canonical (time asc, id asc).
+The list includes ALL events carrying the sequenceId — every label,
+including Possession intervals — NOT restricted to the nine key-event
+labels. Zero added engine calls; the engine stays frozen; A.sequences
+remains the source of the table rows (§13.8 unchanged there).
+
+16.3 DETAIL CONTENT. (a) Event rows in the existing key-row style: order
+number (1-based), time, display label (via DISPLAY_LABELS), per-event team,
+player text via the host resolver, and seek-on-activation through the
+existing keyRowActivate pathway (`videoTime ?? time`). (b) The pitch path
+per 16.4. (c) The open badge per 16.6.
+
+16.4 PATH LAW. One SVG per open detail on the shared 700×450 viewBox with
+normalized coordinates (`x*700`, `y*450`): located events drawn as numbered
+dots (1-based, canonical order) connected by a polyline in order; dot
+classes reuse the existing team dot conventions. Events without pitch
+location are omitted from the path but remain in the list, and the detail
+states the honest count (e.g. '2 of 5 events had no pitch location'). The
+path is DISPLAY ONLY: no click/seek on dots or the line; no density fills;
+the §3 minimum-sample gate does NOT apply here — the gate governs the
+spatial section's density claims only (this is a map of where play went,
+not a density claim).
+
+16.5 MIXED-TEAM LAW. Per-event team is displayed per row; the
+sequences-table row's team remains the engine's own first-event team
+(unchanged). No new aggregate; no team-switch handling.
+
+16.6 OPEN-SEQUENCE BADGE. Sourced from
+`session.matchClock.activeSequenceId` (already present in the renderer's
+per-open snapshot — a read; the audit verified it survives save/load and
+that the engine ignores it): if the detail's sequenceId equals it, the
+detail and its table row carry a visible 'Still open' marker. UI truth
+only — never an engine field.
+
+16.7 INTERACTION & SAFETY. All new interactivity rides the existing §8
+root delegation (never re-attached); §14 filter behaviors and zone/trace
+behaviors untouched; purity — the derivation never mutates session or A;
+determinism — an identical session produces an identical detail.
+
+16.8 PRINT. An expanded detail prints as part of the sequences section
+(§15.5 break-inside laws extend to detail rows); the path SVG follows the
+new §15.8 print rules.
+
+16.9 CONSTRAINTS. No engine changes; no per-sequence transition-linkage
+computation (§12.13); no sequence editing; no narratives; no AI; no
+auto-derived sequences. `src/index.html` and `src/renderer.js` are
+expected UNCHANGED in the Stage 5 build — if implementation concludes
+otherwise: STOP and report.
 
 ---
 
